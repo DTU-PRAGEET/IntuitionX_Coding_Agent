@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jira-solver-config
+data:
+  LLM_PROVIDER: "anthropic"
+  LANGCHAIN_PROJECT: "sprinklr-jira-solver-prod"
+  REDIS_URL: "redis://redis-service:6379"
+  MONGO_URL: "mongodb://mongo-service:27017"
+  GIT_TARGET_BRANCH: "develop"

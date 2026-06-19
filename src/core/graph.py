@@ -1,0 +1,214 @@
+"""LangGraph graph wiring — 4-route model with HITL gates."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from langgraph.graph import END, StateGraph
+from langgraph.types import interrupt
+
+from src.agents.executor.agent import executor_node
+from src.agents.orchestrator.agent import orchestrator_node
+from src.agents.planner.agent import planner_node
+from src.agents.research.agent import research_node
+from src.core.checkpointing import get_checkpointer
+from src.core.formatters import format_gate1_request, format_gate2_request, format_micro_confirm
+from src.core.state import AgentState, HumanApprovalGate
+from src.tools.base import emit_event
+
+
+def _record_gate(
+    state: AgentState,
+    gate_type: str,
+    decision: dict,
+) -> HumanApprovalGate:
+    status = decision.get("status", "REJECTED").upper()
+    if status == "APPROVE":
+        status = "APPROVED"
+    return HumanApprovalGate(
+        gate_id=f"{gate_type}_{state['session_id']}_{len(state.get('human_gates', []))}",
+        gate_type=gate_type,  # type: ignore
+        status=status,  # type: ignore
+        feedback=decision.get("feedback") or decision.get("notes"),
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def research_hag_node(state: AgentState) -> AgentState:
+    """HITL Gate 1 — post-research approval."""
+    message = format_gate1_request(state)
+    emit_event("gate_pause", {"gate": "GATE_1", "message": message[:500]})
+    decision = interrupt(
+        {
+            "gate": "GATE_1",
+            "message": message,
+            "research_output": state.get("research_output"),
+        }
+    )
+    gate = _record_gate(state, "RESEARCH", decision)
+    gates = list(state.get("human_gates", []))
+    gates.append(gate)
+    return {**state, "human_gates": gates}
+
+
+def planning_hag_node(state: AgentState) -> AgentState:
+    """HITL Gate 2 — post-planning approval."""
+    message = format_gate2_request(state)
+    emit_event("gate_pause", {"gate": "GATE_2", "message": message[:500]})
+    decision = interrupt(
+        {
+            "gate": "GATE_2",
+            "message": message,
+            "plan_output": state.get("plan_output"),
+        }
+    )
+    gate = _record_gate(state, "PLANNING", decision)
+    gates = list(state.get("human_gates", []))
+    gates.append(gate)
+    return {**state, "human_gates": gates}
+
+
+def micro_confirm_node(state: AgentState) -> AgentState:
+    """Quick confirm for MICRO route."""
+    message = format_micro_confirm(state)
+    emit_event("gate_pause", {"gate": "MICRO_CONFIRM", "message": message[:500]})
+    decision = interrupt(
+        {
+            "gate": "MICRO_CONFIRM",
+            "message": message,
+            "plan_output": state.get("plan_output"),
+        }
+    )
+    gate = _record_gate(state, "MICRO_CONFIRM", decision)
+    gates = list(state.get("human_gates", []))
+    gates.append(gate)
+    return {**state, "human_gates": gates}
+
+
+def route_after_orchestrator(state: AgentState) -> str:
+    route = state.get("routing_route", "FULL")
+    if route == "EXIT":
+        return "exit"
+    if route == "FULL":
+        return "research"
+    if route == "SKIP_RESEARCH":
+        return "planner"
+    if route == "MICRO":
+        return "planner"
+    return "research"
+
+
+def route_after_research_hag(state: AgentState) -> str:
+    gates = state.get("human_gates", [])
+    if not gates:
+        return "reject"
+    last = gates[-1]
+    status = last.get("status", "REJECTED")
+    if status == "APPROVED":
+        return "planner"
+    if status == "REVISE":
+        return "research"
+    return "reject"
+
+
+def route_after_planning_hag(state: AgentState) -> str:
+    gates = state.get("human_gates", [])
+    if not gates:
+        return "reject"
+    last = gates[-1]
+    status = last.get("status", "REJECTED")
+    if status == "APPROVED":
+        return "executor"
+    if status == "REVISE":
+        return "planner"
+    return "reject"
+
+
+def route_after_micro_confirm(state: AgentState) -> str:
+    gates = state.get("human_gates", [])
+    if not gates:
+        return "reject"
+    last = gates[-1]
+    status = last.get("status", "REJECTED")
+    if status == "APPROVED":
+        return "executor"
+    if status == "REVISE":
+        return "planner"
+    return "reject"
+
+
+def route_after_planner(state: AgentState) -> str:
+    route = state.get("routing_route", "FULL")
+    if route == "MICRO":
+        return "micro_confirm"
+    return "planning_hag"
+
+
+def build_graph():
+    """Build and compile the LangGraph workflow."""
+    graph = StateGraph(AgentState)
+
+    graph.add_node("orchestrator", orchestrator_node)
+    graph.add_node("research", research_node)
+    graph.add_node("research_hag", research_hag_node)
+    graph.add_node("planner", planner_node)
+    graph.add_node("planning_hag", planning_hag_node)
+    graph.add_node("micro_confirm", micro_confirm_node)
+    graph.add_node("executor", executor_node)
+
+    graph.set_entry_point("orchestrator")
+
+    graph.add_conditional_edges(
+        "orchestrator",
+        route_after_orchestrator,
+        {
+            "research": "research",
+            "planner": "planner",
+            "exit": END,
+        },
+    )
+
+    graph.add_edge("research", "research_hag")
+    graph.add_conditional_edges(
+        "research_hag",
+        route_after_research_hag,
+        {
+            "planner": "planner",
+            "research": "research",
+            "reject": END,
+        },
+    )
+
+    graph.add_conditional_edges(
+        "planner",
+        route_after_planner,
+        {
+            "planning_hag": "planning_hag",
+            "micro_confirm": "micro_confirm",
+        },
+    )
+
+    graph.add_conditional_edges(
+        "planning_hag",
+        route_after_planning_hag,
+        {
+            "executor": "executor",
+            "planner": "planner",
+            "reject": END,
+        },
+    )
+
+    graph.add_conditional_edges(
+        "micro_confirm",
+        route_after_micro_confirm,
+        {
+            "executor": "executor",
+            "planner": "planner",
+            "reject": END,
+        },
+    )
+
+    graph.add_edge("executor", END)
+
+    checkpointer = get_checkpointer()
+    return graph.compile(checkpointer=checkpointer)

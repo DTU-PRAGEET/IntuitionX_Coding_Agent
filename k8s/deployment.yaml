@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jira-solver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jira-solver
+  template:
+    metadata:
+      labels:
+        app: jira-solver
+    spec:
+      containers:
+        - name: jira-solver
+          image: sprinklr/jira-solver:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: jira-solver-config
+            - secretRef:
+                name: jira-solver-secrets

@@ -1,0 +1,17 @@
+orchestrator: []
+research:
+  - read
+  - grep
+  - find
+  - bash
+  - ls
+  - web_search
+  - repo_profile
+planner:
+  - read
+  - grep
+  - find
+executor:
+  - write
+  - edit
+  - bash
