@@ -15,3 +15,5 @@ executor:
   - write
   - edit
   - bash
+  - git_worktree
+  - mr_create

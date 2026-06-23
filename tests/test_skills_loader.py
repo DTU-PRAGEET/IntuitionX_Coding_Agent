@@ -10,26 +10,33 @@ from pathlib import Path
 import pytest
 
 from src.agents.orchestrator.tools.jira import _mock_jira_ticket, mock_security_jira_ticket
-from src.core.skills_loader import load_skill_file, select_research_skill
-
-SECURITY_MD = (
-    Path(__file__).resolve().parents[1]
-    / "src"
-    / "agents"
-    / "research"
-    / "skills"
-    / "security.md"
+from src.core.skills_loader import (
+    load_reference,
+    load_skill_file,
+    load_skill_manifest,
+    select_references,
+    select_research_skill,
 )
-SKILLS_DIR = SECURITY_MD.parent
+
+SKILLS_ROOT = (
+    Path(__file__).resolve().parents[1] / "src" / "agents" / "research" / "skills"
+)
+SKILL_DIR = SKILLS_ROOT / "research"
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SECURITY_REF = SKILL_DIR / "references" / "security_patterns.md"
 
 
-def test_parse_valid_security_md():
-    skill = load_skill_file(SECURITY_MD)
-    assert skill.name == "security_research"
-    assert skill.description
-    assert skill.content.strip()
-    assert "security_enrichment" in skill.content
+def test_load_skill_manifest_research():
+    manifest = load_skill_manifest(SKILL_DIR)
+    assert manifest.name == "research"
+    assert manifest.description
+    assert manifest.tool_budget == 12
+    assert manifest.recursion_limit >= 28
+
+
+def test_load_security_reference():
+    content = load_reference(SKILL_DIR, "security_patterns")
+    assert "security_enrichment" in content
 
 
 def test_malformed_skill_missing_script_name(tmp_path):
@@ -44,15 +51,22 @@ def test_malformed_skill_missing_script_name(tmp_path):
 
 def test_mock_security_ticket_selects_security_skill():
     ticket = mock_security_jira_ticket("SEC-4421")
-    skill, reason = select_research_skill(ticket, SKILLS_DIR)
+    skill, reason = select_research_skill(ticket, SKILLS_ROOT)
     assert skill is not None
     assert skill.name == "security_research"
     assert reason == "label_match"
+    assert SECURITY_REF.exists()
+
+
+def test_select_references_security():
+    ticket = mock_security_jira_ticket("SEC-4421")
+    refs = select_references(ticket, SKILL_DIR, "research")
+    assert any(r.name == "security_patterns.md" for r in refs)
 
 
 def test_mock_bug_ticket_no_skill_match():
     ticket = _mock_jira_ticket("PLAT-9999")
-    skill, reason = select_research_skill(ticket, SKILLS_DIR)
+    skill, reason = select_research_skill(ticket, SKILLS_ROOT)
     assert skill is None
     assert reason == "no_skill_match"
 
@@ -77,5 +91,4 @@ def test_research_dry_run_includes_skill_fields(tmp_path):
     payload = json.loads(result.stdout)
     assert payload["loaded_skill"] == "security_research"
     assert payload["skill_reason"] == "label_match"
-    assert "[skills_loader]" in result.stderr
-    assert "loaded=security" in result.stderr
+    assert payload["skills_mode"] == "deepagents_progressive"

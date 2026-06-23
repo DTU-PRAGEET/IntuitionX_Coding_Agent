@@ -91,7 +91,7 @@ def test_run_research_parses_report(tmp_path):
                 "rank": 1,
                 "hypothesis": "Unparameterized query in searchUsers",
                 "evidence_strength": "strong",
-                "evidence": ["grep match in UserSearchController.java"],
+                "evidence": ["grep match in UserSearchController.py"],
             }
         ],
         affected_files=[],
@@ -103,11 +103,26 @@ def test_run_research_parses_report(tmp_path):
     )
     mock_llm = MagicMock()
     mock_agent = MagicMock()
-    mock_agent.invoke.return_value = {
-        "messages": [AIMessage(content=json.dumps(fake_report.model_dump()))]
-    }
+    mock_agent.invoke.return_value = {"structured_response": fake_report}
 
     with patch("src.agents.research.deep_runner.build_research_agent", return_value=(mock_agent, "test")):
         report = run_research(ticket=ticket, repo_path=str(tmp_path), llm=mock_llm)
     assert report.ticket_id == "SEC-4421"
     assert report.architectural_risk == "high"
+
+
+def test_run_research_mock_security_recursion_fallback(tmp_path):
+    from langgraph.errors import GraphRecursionError
+    from src.agents.research.deep_runner import run_research
+
+    ticket = mock_security_jira_ticket()
+    mock_llm = MagicMock()
+    mock_agent = MagicMock()
+    mock_agent.invoke.side_effect = GraphRecursionError("limit reached")
+
+    with patch("src.agents.research.deep_runner.build_research_agent", return_value=(mock_agent, "test")):
+        report = run_research(ticket=ticket, repo_path=str(tmp_path), llm=mock_llm)
+
+    assert report.ticket_id == "SEC-4421"
+    assert "research_recursion_limit_fallback" in report.flags
+    assert report.affected_files[0].path.endswith("UserSearchController.py")

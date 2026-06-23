@@ -23,13 +23,18 @@ def _record_gate(
     decision: dict,
 ) -> HumanApprovalGate:
     status = decision.get("status", "REJECTED").upper()
+    feedback = decision.get("feedback") or decision.get("notes")
     if status == "APPROVE":
         status = "APPROVED"
+    elif status in ("REJECT", "REVISE") and feedback:
+        status = "REVISE"
+    elif status == "REVISE":
+        status = "REVISE"
     return HumanApprovalGate(
         gate_id=f"{gate_type}_{state['session_id']}_{len(state.get('human_gates', []))}",
         gate_type=gate_type,  # type: ignore
         status=status,  # type: ignore
-        feedback=decision.get("feedback") or decision.get("notes"),
+        feedback=feedback,
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
 
@@ -144,7 +149,7 @@ def route_after_planner(state: AgentState) -> str:
     return "planning_hag"
 
 
-def build_graph():
+def build_graph(checkpointer=None):
     """Build and compile the LangGraph workflow."""
     graph = StateGraph(AgentState)
 
@@ -210,5 +215,6 @@ def build_graph():
 
     graph.add_edge("executor", END)
 
-    checkpointer = get_checkpointer()
+    if checkpointer is None:
+        checkpointer = get_checkpointer()
     return graph.compile(checkpointer=checkpointer)

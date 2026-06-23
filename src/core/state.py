@@ -74,13 +74,14 @@ class ResearchOutput(TypedDict):
 
 class ExecutionStep(TypedDict):
     step_id: int
-    action: Literal["LOCATE", "EDIT", "VERIFY", "SEARCH"]
+    action: Literal["READ", "EDIT", "VERIFY", "RUN_TESTS"]
     file: str
     target: str
     reason: str
     change: Optional[str]
     old_string: Optional[str]
     new_string: Optional[str]
+    intent_marker: Optional[str]
 
 
 class PlanOutput(TypedDict):
@@ -137,6 +138,7 @@ class AgentState(TypedDict):
     user_prompt: str
     context_image: Optional[str]
     repo_path: Optional[str]
+    git_target_branch: Optional[str]
 
     # Jira resolved data
     jira_ticket: Optional[JiraTicket]
@@ -204,6 +206,7 @@ def initial_state(
         user_prompt=user_prompt,
         context_image=None,
         repo_path=repo_path,
+        git_target_branch=None,
         jira_ticket=None,
         repo_profile=None,
         routing_route=None,

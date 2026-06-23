@@ -11,10 +11,11 @@ from src.agents.research.deep_runner import run_research
 from src.agents.research.memory import InMemoryResearchMemory
 from src.agents.research.tools.file_discovery import extract_anchors
 from src.core.config import settings
+from src.core.logging import get_logger
 from src.core.schemas import ResearchReport
 from src.core.state import AgentState, ResearchOutput
 
-SKILLS_PROMPT = Path(__file__).parent / "skills/scripts.md"
+_log = get_logger("research")
 
 
 def _report_to_output(report: ResearchReport) -> ResearchOutput:
@@ -52,6 +53,16 @@ def _negative_finding_report(ticket_id: str, summary: str, error: str, module: s
     )
 
 
+def _latest_gate_feedback(state: AgentState, gate_type: str) -> str | None:
+    gates = state.get("human_gates") or []
+    for gate in reversed(gates):
+        if gate.get("gate_type") == gate_type and gate.get("status") == "REVISE":
+            feedback = gate.get("feedback")
+            if feedback:
+                return feedback
+    return None
+
+
 @traceable(name="Research Agent — Full Analysis")
 def research_node(state: AgentState) -> AgentState:
     """LangGraph node — only exposes ResearchReport artifact, not internal tool loop."""
@@ -73,12 +84,19 @@ def research_node(state: AgentState) -> AgentState:
 
     try:
         memory = InMemoryResearchMemory()
-        anchors = extract_anchors(ticket, state.get("user_prompt", ""))
+        user_prompt = state.get("user_prompt", "") or ""
+        gate_feedback = _latest_gate_feedback(state, "RESEARCH")
+        if gate_feedback:
+            _log.info("rerun", gate="RESEARCH", feedback_preview=gate_feedback[:200])
+            user_prompt = (
+                f"{user_prompt}\n\n[Gate 1 feedback — revise research report]\n{gate_feedback}"
+            ).strip()
+        anchors = extract_anchors(ticket, user_prompt)
         memory.record("anchors", {"anchors": anchors})
         report = run_research(
             ticket=ticket,
             repo_path=repo_path,
-            user_prompt=state.get("user_prompt", ""),
+            user_prompt=user_prompt,
             repo_profile=state.get("repo_profile"),
             anchors=anchors,
             memory=memory,

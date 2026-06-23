@@ -92,6 +92,7 @@ def main(argv: list[str] | None = None) -> int:
                 "plan_steps": len(result.plan.execution_steps) if result.plan else 0,
                 "executor_steps": result.execution.steps_completed if result.execution else 0,
                 "changed_files": result.execution.changed_files if result.execution else [],
+                "token_usage": result.token_usage,
             },
             indent=2,
         )

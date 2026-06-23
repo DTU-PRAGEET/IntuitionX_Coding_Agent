@@ -37,9 +37,11 @@ def test_malformed_plan_fails_loudly(tmp_path):
 def test_executor_tools_write_edit_bash_only(tmp_path):
     registry, names = build_executor_tools(str(tmp_path))
     try:
-        assert names == get_allowed_tools("executor")
+        assert set(names) == set(get_allowed_tools("executor"))
         assert "read" not in names
         assert "grep" not in names
+        assert "git_worktree" in names
+        assert "mr_create" in names
     finally:
         registry.dispose()
 
@@ -315,7 +317,54 @@ def test_edit_applies_full_planned_patch(tmp_path):
     assert "cursor.execute(sql)\n" not in content
 
 
-def test_partial_fallback_edit_fails_when_incomplete(tmp_path):
+def test_fallback_noop_accepted_when_intent_already_satisfied(tmp_path):
+    """When fallback edit is a no-op but file is already fixed, accept by intent."""
+    target = tmp_path / "UserSearchController.py"
+    target.write_text(
+        'def search_users(query: str) -> list[dict[str, Any]]:\n'
+        '    sql = "SELECT * FROM users WHERE name LIKE ?"\n'
+        '    params = (f"%{query}%",)\n'
+        '    return [{"sql": sql, "params": params, "query": query}]\n',
+        encoding="utf-8",
+    )
+    plan = ExecutionPlan(
+        ticket_id="SEC-4421",
+        root_hypothesis="SQLi fix",
+        files_to_change=["UserSearchController.py"],
+        execution_steps=[
+            ExecutionStep(
+                step_id=1,
+                action="EDIT",
+                where="UserSearchController.py",
+                what="Parameterize SQL",
+                why="fix",
+                validate='grep for LIKE ?; !f"SELECT * FROM users WHERE name LIKE \'%{query}%\'"',
+                old_string="truncated-prefix-that-wont-match",
+                new_string='sql = "SELECT * FROM users WHERE name LIKE ?"\nparams = (f"%{query}%",)',
+            ),
+            ExecutionStep(
+                step_id=2,
+                action="VERIFY",
+                where="UserSearchController.py",
+                what="verify",
+                why="verify",
+                validate='grep for LIKE ?; !f"SELECT * FROM users WHERE name LIKE \'%{query}%\'"',
+            ),
+        ],
+        risk_level="high",
+    )
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = AIMessage(
+        content=json.dumps(
+            {
+                "old_string": 'def search_users(query: str) -> list[dict[str, Any]]:\n    sql = "SELECT * FROM users WHERE name LIKE ?"',
+                "new_string": 'def search_users(query: str) -> list[dict[str, Any]]:\n    sql = "SELECT * FROM users WHERE name LIKE ?"',
+            }
+        )
+    )
+    result = run_executor(plan, str(tmp_path), llm=mock_llm)
+    assert result.steps_completed == 2
+
     """LLM fallback that only changes the SQL string must fail completeness check."""
     target = tmp_path / "UserSearchController.py"
     target.write_text(

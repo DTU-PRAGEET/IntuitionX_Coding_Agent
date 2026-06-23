@@ -39,10 +39,83 @@ def test_edit_unique_match(registry: ToolRegistry) -> None:
     registry.execute("write", path="b.txt", content="foo foo foo")
     bad = registry.execute("edit", path="b.txt", old_string="foo", new_string="bar")
     assert bad.is_error
-    assert "appears 3 times" in bad.output
+    assert "occurrences" in bad.output
     registry.execute("write", path="b.txt", content="unique text")
     ok = registry.execute("edit", path="b.txt", old_string="unique text", new_string="patched")
     assert not ok.is_error
+    assert "Successfully replaced 1 block(s)" in ok.output
+
+
+def test_edit_crlf_preserves_line_endings(registry: ToolRegistry, workspace: Path) -> None:
+    registry.execute("write", path="crlf.txt", content="alpha\r\nbeta\r\n")
+    ok = registry.execute("edit", path="crlf.txt", old_string="beta", new_string="BETA")
+    assert not ok.is_error
+    assert (workspace / "crlf.txt").read_bytes() == b"alpha\r\nBETA\r\n"
+
+
+def test_edit_multi_hunk(registry: ToolRegistry, workspace: Path) -> None:
+    registry.execute("write", path="multi.txt", content="one\ntwo\nthree\n")
+    ok = registry.execute(
+        "edit",
+        path="multi.txt",
+        edits=[
+            {"old_string": "one", "new_string": "ONE"},
+            {"old_string": "three", "new_string": "THREE"},
+        ],
+    )
+    assert not ok.is_error
+    assert (workspace / "multi.txt").read_text(encoding="utf-8") == "ONE\ntwo\nTHREE\n"
+
+
+def test_edit_json_string_edits(registry: ToolRegistry, workspace: Path) -> None:
+    registry.execute("write", path="json.txt", content="before\n")
+    ok = registry.execute(
+        "edit",
+        path="json.txt",
+        edits='[{"old_string": "before", "new_string": "after"}]',
+    )
+    assert not ok.is_error
+    assert (workspace / "json.txt").read_text(encoding="utf-8") == "after\n"
+
+
+def test_edit_old_text_alias(registry: ToolRegistry, workspace: Path) -> None:
+    registry.execute("write", path="alias.txt", content="keep\n")
+    ok = registry.execute(
+        "edit",
+        path="alias.txt",
+        edits=[{"oldText": "keep", "newText": "saved"}],
+    )
+    assert not ok.is_error
+    assert (workspace / "alias.txt").read_text(encoding="utf-8") == "saved\n"
+
+
+def test_edit_fixture_regression(registry: ToolRegistry, workspace: Path) -> None:
+    fixture_rel = "src/pipeline/fixtures/user_search_controller_vulnerable.py"
+    source = Path(__file__).resolve().parents[1] / fixture_rel
+    target = workspace / fixture_rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    content = source.read_text(encoding="utf-8")
+    target.write_text(content, encoding="utf-8")
+
+    old_line = '    sql = f"SELECT * FROM users WHERE name LIKE \'%{query}%\'"'
+    new_line = '    sql = "SELECT * FROM users WHERE name LIKE %s"'
+    ok = registry.execute(
+        "edit",
+        path=fixture_rel,
+        old_string=old_line,
+        new_string=new_line,
+    )
+    assert not ok.is_error, ok.output
+    patched = target.read_text(encoding="utf-8")
+    assert new_line in patched
+    assert 'f"SELECT * FROM users' not in patched
+
+
+def test_edit_not_found_returns_actionable_error(registry: ToolRegistry) -> None:
+    registry.execute("write", path="miss.txt", content="actual content\n")
+    bad = registry.execute("edit", path="miss.txt", old_string="wrong guess", new_string="x")
+    assert bad.is_error
+    assert "Copy old_string verbatim" in bad.output
 
 
 def test_read_line_bounds(registry: ToolRegistry) -> None:

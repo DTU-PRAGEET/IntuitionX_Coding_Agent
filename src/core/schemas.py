@@ -39,10 +39,48 @@ class WriteInput(BaseModel):
     content: str = Field(description="Full file content to write")
 
 
+class EditReplacementInput(BaseModel):
+    model_config = {"populate_by_name": True}
+
+    old_string: str = Field(
+        alias="oldText",
+        description="Exact text for one targeted replacement; must be unique in the file",
+    )
+    new_string: str = Field(alias="newText", description="Replacement text for this edit")
+
+
 class EditInput(BaseModel):
+    model_config = {"populate_by_name": True}
+
     path: str = Field(description="Relative path within workspace root")
-    old_string: str = Field(description="Exact string to replace — must appear once")
-    new_string: str = Field(description="Replacement string")
+    edits: list[EditReplacementInput] | None = Field(
+        default=None,
+        description=(
+            "One or more targeted replacements matched against the original file. "
+            "Do not include overlapping edits."
+        ),
+    )
+    old_string: str | None = Field(
+        default=None,
+        description=(
+            "Legacy single-edit: exact text to replace (copy verbatim from read output). "
+            "Must appear exactly once after normalization."
+        ),
+    )
+    new_string: str | None = Field(
+        default=None,
+        description="Legacy single-edit: replacement text",
+    )
+
+    @model_validator(mode="after")
+    def _require_at_least_one_edit(self) -> EditInput:
+        has_edits = bool(self.edits)
+        has_legacy = self.old_string is not None or self.new_string is not None
+        if not has_edits and not has_legacy:
+            raise ValueError("Provide edits[] or both old_string and new_string")
+        if has_legacy and (self.old_string is None or self.new_string is None):
+            raise ValueError("Both old_string and new_string are required for legacy single-edit calls")
+        return self
 
 
 class BashInput(BaseModel):
@@ -80,6 +118,16 @@ class Skill(BaseModel):
     source_path: str = Field(description="Path to the skill file for debugging")
 
 
+class SkillManifest(BaseModel):
+    """Level-1 SKILL.md frontmatter — always cheap to load."""
+
+    name: str
+    description: str
+    tool_budget: int = Field(default=10, ge=1)
+    recursion_limit: int = Field(default=5, ge=1)
+    source_path: str = ""
+
+
 # ── Agent outputs ────────────────────────────────────────────────────────────
 
 
@@ -114,7 +162,7 @@ class ExecutionStep(BaseModel):
     model_config = {"populate_by_name": True}
 
     step_id: int
-    action: Literal["LOCATE", "EDIT", "VERIFY", "SEARCH"]
+    action: Literal["READ", "EDIT", "VERIFY", "RUN_TESTS"]
     file: str = Field(default="", description="Legacy file path — prefer where")
     target: str = Field(default="", description="Legacy target — prefer what")
     reason: str = Field(default="", description="Legacy reason — prefer why")
@@ -126,6 +174,10 @@ class ExecutionStep(BaseModel):
         alias="validate",
         description="How to verify success",
     )
+    intent_marker: Optional[str] = Field(
+        default=None,
+        description="Unique string expected in file after EDIT",
+    )
     change: Optional[str] = Field(
         default=None, description="Human-readable change — executor LLM fallback"
     )
@@ -134,6 +186,12 @@ class ExecutionStep(BaseModel):
     )
     new_string: Optional[str] = Field(
         default=None, description="Planner-produced patch: replacement text"
+    )
+    read_start_line: Optional[int] = Field(
+        default=None, ge=1, description="Optional line range start for READ step"
+    )
+    read_end_line: Optional[int] = Field(
+        default=None, ge=1, description="Optional line range end for READ step"
     )
 
     @model_validator(mode="after")
@@ -164,13 +222,15 @@ class ExecutionStep(BaseModel):
             raise ValueError(f"step {self.step_id}: missing required field 'why'")
         if self.action == "EDIT" and not self.new_string:
             raise ValueError(f"step {self.step_id}: EDIT requires new_string")
+        if self.action == "VERIFY" and not self.intent_marker and not self.step_validate:
+            raise ValueError(f"step {self.step_id}: VERIFY requires intent_marker or validate")
         return self
 
 
 class ExecutionPlan(BaseModel):
     ticket_id: str
     root_hypothesis: str
-    files_to_change: list[str]
+    files_to_change: list[str] = Field(default_factory=list)
     implementation_constraints: list[str] = Field(default_factory=list)
     execution_steps: list[ExecutionStep]
     write_tests: bool = False
@@ -178,6 +238,14 @@ class ExecutionPlan(BaseModel):
     risk_level: Literal["low", "medium", "high"]
     self_healing_notes: list[str] = Field(default_factory=list)
     flags: list[str] = Field(default_factory=list)
+    planner_repo_path: Optional[str] = Field(
+        default=None,
+        description="Absolute path to the repo snapshot the planner used",
+    )
+    planner_snapshot_head: Optional[str] = Field(
+        default=None,
+        description="git rev-parse HEAD at planner time — executor must match before EDIT",
+    )
 
 
 class RoutingDecision(BaseModel):

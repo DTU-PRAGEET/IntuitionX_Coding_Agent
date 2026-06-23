@@ -2,10 +2,41 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
 from src.core.state import JiraTicket, RepoProfile
+
+_SKIP_DIR_NAMES = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".gradle",
+        "build",
+        ".cursor",
+        ".pytest_cache",
+        ".mypy_cache",
+        "dist",
+        "egg-info",
+    }
+)
+
+
+def _iter_repo_files(root: Path):
+    """Yield repo files once, pruning heavy directories during walk."""
+    for current_root, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if name not in _SKIP_DIR_NAMES and not name.startswith(".")
+        ]
+        base = Path(current_root)
+        for filename in filenames:
+            yield base / filename
 
 
 def extract_anchors(ticket: JiraTicket, user_prompt: str) -> list[str]:
@@ -46,29 +77,34 @@ def rank_candidate_files(
         return []
 
     candidates: dict[str, tuple[float, str]] = {}
+    files_scanned = 0
 
-    for anchor in anchors:
-        anchor_lower = anchor.lower()
-        for path in root.rglob("*"):
-            if not path.is_file():
-                continue
-            if any(
-                skip in str(path)
-                for skip in (".git", "node_modules", "__pycache__", ".gradle", "/build/")
-            ):
-                continue
-            rel = str(path.relative_to(root))
-            rel_lower = rel.lower()
+    anchor_lowers = [(a, a.lower()) for a in anchors]
+
+    for path in _iter_repo_files(root):
+        files_scanned += 1
+        if files_scanned > 5000:
+            break
+        rel = str(path.relative_to(root))
+        rel_lower = rel.lower()
+        stem_lower = path.stem.lower()
+
+        for anchor, anchor_lower in anchor_lowers:
             score = 0.0
             reason = ""
 
             if anchor_lower in rel_lower or rel.endswith(anchor):
                 score += 10.0
                 reason = f"path matches anchor '{anchor}'"
-            elif path.stem.lower() == anchor_lower.replace(".java", "").replace(".py", ""):
+            elif stem_lower == anchor_lower.replace(".java", "").replace(".py", ""):
                 score += 8.0
                 reason = f"filename matches '{anchor}'"
+            elif len(anchor) >= 4 and anchor_lower in rel_lower:
+                score += 6.0
+                reason = f"path contains '{anchor}'"
             else:
+                if len(anchor) < 5 or anchor_lower in {"security", "finding", "high", "demo", "repository"}:
+                    continue
                 try:
                     content = path.read_text(encoding="utf-8", errors="replace")
                     if anchor in content:

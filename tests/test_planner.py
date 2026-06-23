@@ -99,7 +99,7 @@ def test_run_planner_parses_plan_with_mock_llm(tmp_path):
         execution_steps=[
             ExecutionStep(
                 step_id=1,
-                action="LOCATE",
+                action="READ",
                 where=str(demo.relative_to(tmp_path)),
                 what="Locate search_users",
                 why="Confirm vulnerable function",
@@ -114,7 +114,17 @@ def test_run_planner_parses_plan_with_mock_llm(tmp_path):
                 validate="No f-string SQL",
                 old_string='sql = f"SELECT * FROM users WHERE name LIKE \'%{query}%\'"',
                 new_string='sql = "SELECT * FROM users WHERE name LIKE ?"',
+                intent_marker="LIKE ?",
                 change="Use parameterized query",
+            ),
+            ExecutionStep(
+                step_id=3,
+                action="VERIFY",
+                where=str(demo.relative_to(tmp_path)),
+                what="Confirm fix",
+                why="Verify parameterized query",
+                validate="grep for LIKE ?",
+                intent_marker="LIKE ?",
             ),
         ],
         risk_level="high",
@@ -137,6 +147,41 @@ def test_run_planner_rejects_invalid_llm_output(tmp_path):
 
     with pytest.raises(ValueError, match="schema validation"):
         run_planner(report, str(tmp_path), llm=mock_llm, verify=False)
+
+
+def test_run_planner_fills_missing_files_to_change_from_research(tmp_path):
+    """LLM often omits files_to_change — coerce from research before validation."""
+    report = load_research_report(FIXTURE_REPORT)
+    demo = tmp_path / "sqli" / "dao" / "user.py"
+    demo.parent.mkdir(parents=True)
+    demo.write_text("SELECT 1\n", encoding="utf-8")
+    rel = str(demo.relative_to(tmp_path))
+    report.affected_files[0].path = rel
+
+    payload = {
+        "ticket_id": "SEC-4421",
+        "root_hypothesis": "verify only",
+        "execution_steps": [
+            {
+                "step_id": 1,
+                "action": "READ",
+                "where": rel,
+                "what": "Read file",
+                "why": "Confirm",
+                "validate": "exists",
+            }
+        ],
+        "write_tests": False,
+        "create_files": False,
+        "risk_level": "low",
+        "flags": [],
+        "implementation_constraints": [],
+    }
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = AIMessage(content=json.dumps(payload))
+
+    plan = run_planner(report, str(tmp_path), llm=mock_llm, verify=False)
+    assert rel in plan.files_to_change
 
 
 def test_planner_dry_run_cli():
@@ -191,7 +236,7 @@ def test_normalize_plan_replaces_dot_where_with_affected_file():
         execution_steps=[
             ExecutionStep(
                 step_id=1,
-                action="LOCATE",
+                action="READ",
                 where=".",
                 what="bad",
                 why="bad",
@@ -229,7 +274,7 @@ def test_validate_plan_rejects_dot_where_without_candidates():
         execution_steps=[
             ExecutionStep(
                 step_id=1,
-                action="LOCATE",
+                action="READ",
                 where=".",
                 what="bad",
                 why="bad",
@@ -256,7 +301,7 @@ def test_run_planner_normalizes_dot_where_from_llm(tmp_path):
         execution_steps=[
             ExecutionStep(
                 step_id=1,
-                action="LOCATE",
+                action="READ",
                 where=".",
                 what="Locate file",
                 why="Confirm",
@@ -274,6 +319,9 @@ def test_run_planner_normalizes_dot_where_from_llm(tmp_path):
 
 
 def test_planner_verification_reads_demo_file():
+    from src.pipeline.runner import _reset_mock_security_fixture
+
+    _reset_mock_security_fixture(str(REPO_ROOT))
     report = load_research_report(FIXTURE_REPORT)
     plan_json = ExecutionPlan(
         ticket_id="SEC-4421",
@@ -282,6 +330,14 @@ def test_planner_verification_reads_demo_file():
         execution_steps=[
             ExecutionStep(
                 step_id=1,
+                action="READ",
+                where="src/agents/planner/fixtures/demo/UserSearchController.py",
+                what="Read vulnerable function",
+                why="Ground patch",
+                validate="read ok",
+            ),
+            ExecutionStep(
+                step_id=2,
                 action="EDIT",
                 where="src/agents/planner/fixtures/demo/UserSearchController.py",
                 what="Fix SQL",
@@ -289,6 +345,16 @@ def test_planner_verification_reads_demo_file():
                 validate="No concat",
                 old_string='sql = f"SELECT * FROM users WHERE name LIKE \'%{query}%\'"',
                 new_string='sql = "SELECT * FROM users WHERE name LIKE ?"',
+                intent_marker="LIKE ?",
+            ),
+            ExecutionStep(
+                step_id=3,
+                action="VERIFY",
+                where="src/agents/planner/fixtures/demo/UserSearchController.py",
+                what="Confirm fix",
+                why="Verify",
+                validate="grep for LIKE ?",
+                intent_marker="LIKE ?",
             ),
         ],
         risk_level="high",

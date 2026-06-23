@@ -11,10 +11,80 @@ from src.agents.orchestrator.tools.jira_client import (
     fetch_ticket_by_key,
 )
 from src.agents.orchestrator.tools.jira_schema import JiraTicketRaw, enrich_security_ticket
+from src.core.github_links import extract_repo_links_from_text, extract_target_branch
 from src.core.logging import get_logger
 from src.core.state import JiraAttachment, JiraComment, JiraDependency, JiraTicket
 
 _log = get_logger("jira")
+
+
+def _raw_fields(issue: Any) -> dict[str, Any]:
+    raw = getattr(issue, "raw", None)
+    if isinstance(raw, dict):
+        fields = raw.get("fields")
+        if isinstance(fields, dict):
+            return fields
+    return {}
+
+
+def _issue_field(issue: Any, name: str, default: Any = None) -> Any:
+    """Read a Jira field from raw JSON first; avoid PropertyHolder AttributeError."""
+    fields = _raw_fields(issue)
+    if name in fields:
+        return fields[name]
+    try:
+        return getattr(issue.fields, name, default)
+    except AttributeError:
+        return default
+
+
+def _field_name(field_obj: Any, default: str = "Unknown") -> str:
+    if not field_obj:
+        return default
+    if isinstance(field_obj, dict):
+        return field_obj.get("name") or default
+    return getattr(field_obj, "name", None) or default
+
+
+def _user_name(user_obj: Any, default: str = "not_specified") -> str:
+    if not user_obj:
+        return default
+    if isinstance(user_obj, dict):
+        return user_obj.get("displayName") or user_obj.get("name") or default
+    return getattr(user_obj, "displayName", None) or getattr(user_obj, "name", None) or default
+
+
+def _issue_key(issue: Any) -> str:
+    if isinstance(issue, dict):
+        return issue.get("key") or issue.get("issue_id") or "UNKNOWN"
+    return getattr(issue, "key", None) or "UNKNOWN"
+
+
+def _link_related_issue(link: Any) -> Any | None:
+    if isinstance(link, dict):
+        return link.get("outwardIssue") or link.get("inwardIssue")
+    return getattr(link, "outwardIssue", None) or getattr(link, "inwardIssue", None)
+
+
+def _link_relationship(link: Any) -> str:
+    if isinstance(link, dict):
+        link_type = link.get("type") or {}
+        if isinstance(link_type, dict):
+            return link_type.get("outward") or link_type.get("inward") or ""
+        return ""
+    link_type = getattr(link, "type", None)
+    if link_type is None:
+        return ""
+    return getattr(link_type, "outward", "") or getattr(link_type, "inward", "") or ""
+
+
+def _field_text(field_obj: Any, default: str = "") -> str:
+    if not field_obj:
+        return default
+    if isinstance(field_obj, str):
+        return field_obj
+    return str(field_obj)
+
 
 AC_KEYWORDS = [
     "acceptance criteria",
@@ -119,50 +189,31 @@ def _compress_comments(comments: list[Any], assignee: str, reporter: str) -> lis
 
 
 def _extract_repo_links(issue: Any) -> list[str]:
-    links: list[str] = []
-    description = getattr(issue.fields, "description", "") or ""
-    # Common patterns in description
-    for match in re.findall(r"[\w-]+/[\w-]+(?:/[\w-]+)?", description):
-        if "http" not in match:
-            links.append(match)
-    # Custom fields — scan all string fields
-    for field_name in dir(issue.fields):
-        if field_name.startswith("_"):
-            continue
-        val = getattr(issue.fields, field_name, None)
-        if isinstance(val, str) and ("repo" in val.lower() or "git" in val.lower()):
-            links.append(val)
+    description = _field_text(_issue_field(issue, "description"))
+    links = extract_repo_links_from_text(description)
+    for _field_name, val in _raw_fields(issue).items():
+        if isinstance(val, str) and "github.com" in val.lower():
+            links.extend(extract_repo_links_from_text(val))
     return list(dict.fromkeys(links))[:5]
 
 
-def fetch_jira_ticket(ticket_id: str) -> JiraTicket:
-    """Fetch and normalize Jira issue — Tier 1 + Tier 2 + security enrichment."""
-    if not credentials_configured():
-        _log.info("using_mock", ticket_id=ticket_id, reason="credentials_not_configured")
-        return _mock_jira_ticket(ticket_id)
+def _issue_to_jira_ticket(issue: Any, client: Any) -> JiraTicket:
+    """Convert a Jira issue object into a normalized JiraTicket."""
+    summary = _field_text(_issue_field(issue, "summary"))
+    description = _field_text(_issue_field(issue, "description"))
+    raw = JiraTicketRaw(key=_issue_key(issue), summary=summary, description=description)
+    enrichment = enrich_security_ticket(raw)
 
-    try:
-        client = create_jira_client()
-        raw = fetch_ticket_by_key(client, ticket_id)
-        enrichment = enrich_security_ticket(raw)
-        issue = client.issue(ticket_id, expand="changelog")
-    except Exception as e:
-        _log.error("fetch_failed", ticket_id=ticket_id, error=str(e))
-        ticket = _mock_jira_ticket(ticket_id)
-        ticket["flags"] = list(ticket.get("flags", [])) + [f"Jira fetch failed: {e}"]
-        return ticket
-
-    status = issue.fields.status.name
-    assignee = (
-        issue.fields.assignee.displayName if issue.fields.assignee else "not_specified"
-    )
-    reporter = (
-        issue.fields.reporter.displayName if issue.fields.reporter else "not_specified"
-    )
-    description = issue.fields.description or ""
-    priority_raw = issue.fields.priority.name if issue.fields.priority else "Medium"
-    labels = list(issue.fields.labels or [])
-    components = [c.name for c in (issue.fields.components or [])]
+    status = _field_name(_issue_field(issue, "status"), "Unknown")
+    assignee = _user_name(_issue_field(issue, "assignee"))
+    reporter = _user_name(_issue_field(issue, "reporter"))
+    priority_raw = _field_name(_issue_field(issue, "priority"), "Medium")
+    labels = list(_issue_field(issue, "labels") or [])
+    components_raw = _issue_field(issue, "components") or []
+    components = [
+        c.get("name") if isinstance(c, dict) else getattr(c, "name", str(c))
+        for c in components_raw
+    ]
     module = components[0] if components else "not_specified"
 
     comments_raw = client.comments(issue)
@@ -175,24 +226,27 @@ def fetch_jira_ticket(ticket_id: str) -> JiraTicket:
         acceptance = list(dict.fromkeys(acceptance))
 
     dependencies: list[JiraDependency] = []
-    for link in issue.fields.issuelinks or []:
-        linked = getattr(link, "outwardIssue", None) or getattr(link, "inwardIssue", None)
-        if linked:
-            rel = getattr(link.type, "outward", "") or getattr(link.type, "inward", "")
-            dependencies.append(
-                JiraDependency(
-                    issue_id=linked.key,
-                    relationship=rel,
-                    status=linked.fields.status.name,
-                    summary=linked.fields.summary,
-                )
+    for link in _issue_field(issue, "issuelinks") or []:
+        linked = _link_related_issue(link)
+        if not linked:
+            continue
+        rel = _link_relationship(link)
+        linked_status = _field_name(_issue_field(linked, "status"), "unknown")
+        linked_summary = _field_text(_issue_field(linked, "summary"), _issue_key(linked))
+        dependencies.append(
+            JiraDependency(
+                issue_id=_issue_key(linked),
+                relationship=rel,
+                status=linked_status,
+                summary=linked_summary,
             )
+        )
 
     attachments: list[JiraAttachment] = []
-    for att in issue.fields.attachment or []:
-        attachments.append(
-            JiraAttachment(name=att.filename, type=getattr(att, "mimeType", "unknown"))
-        )
+    for att in _issue_field(issue, "attachment") or []:
+        filename = att.get("filename") if isinstance(att, dict) else getattr(att, "filename", "unknown")
+        mime = att.get("mimeType") if isinstance(att, dict) else getattr(att, "mimeType", "unknown")
+        attachments.append(JiraAttachment(name=filename, type=mime or "unknown"))
 
     flags: list[str] = []
     if status.lower() in DONE_STATUSES:
@@ -210,15 +264,19 @@ def fetch_jira_ticket(ticket_id: str) -> JiraTicket:
     if enrichment.repository and enrichment.repository not in repo_links:
         repo_links.insert(0, enrichment.repository)
 
+    target_branch = extract_target_branch(description)
+
+    issue_type = _field_name(_issue_field(issue, "issuetype"), "Unknown")
+
     return JiraTicket(
-        issue_id=issue.key,
-        title=issue.fields.summary,
-        issue_type=issue.fields.issuetype.name,
+        issue_id=_issue_key(issue),
+        title=summary or _issue_key(issue),
+        issue_type=issue_type,
         status=status,
         priority_raw=priority_raw,
         priority_normalized=_normalize_priority(priority_raw),  # type: ignore
         module=module,
-        problem_statement=description or issue.fields.summary,
+        problem_statement=description or summary,
         acceptance_criteria=acceptance_str,
         assignee=assignee,
         reporter=reporter,
@@ -227,9 +285,31 @@ def fetch_jira_ticket(ticket_id: str) -> JiraTicket:
         dependencies=dependencies,
         attachments=attachments,
         comments=comments,
-        ticket_history_summary={"fetched": True, "security_enrichment": enrichment.model_dump()},
+        ticket_history_summary={
+            "fetched": True,
+            "security_enrichment": enrichment.model_dump(),
+            "github_repo": repo_links[0] if repo_links else enrichment.repository,
+            "target_branch": target_branch,
+        },
         flags=flags,
     )
+
+
+def fetch_jira_ticket(ticket_id: str) -> JiraTicket:
+    """Fetch and normalize Jira issue — Tier 1 + Tier 2 + security enrichment."""
+    if not credentials_configured():
+        _log.info("using_mock", ticket_id=ticket_id, reason="credentials_not_configured")
+        return _mock_jira_ticket(ticket_id)
+
+    try:
+        client = create_jira_client()
+        issue = client.issue(ticket_id, expand="changelog")
+        return _issue_to_jira_ticket(issue, client)
+    except Exception as e:
+        _log.error("fetch_failed", ticket_id=ticket_id, error=str(e))
+        ticket = _mock_jira_ticket(ticket_id)
+        ticket["flags"] = list(ticket.get("flags", [])) + [f"Jira fetch failed: {e}"]
+        return ticket
 
 
 def mock_security_jira_ticket(ticket_id: str = "SEC-4421") -> JiraTicket:
@@ -239,7 +319,8 @@ SQL injection vulnerability in UserSearchController.searchUsers endpoint.
 
 CVE-2024-12345 (High severity)
 
-Affected component: UserSearchController.java
+Affected component: UserSearchController
+Demo file in this repo: src/agents/planner/fixtures/demo/UserSearchController.py
 Repository: platform/auth-service
 
 The `query` parameter is concatenated directly into SQL without parameterization.

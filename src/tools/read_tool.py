@@ -28,7 +28,15 @@ class ReadTool(ToolDefinition):
         except ValueError as e:
             return self._wrap_output(str(e), exit_code=1, is_error=True)
         if not resolved.exists():
-            return self._wrap_output(f"Error: file not found: {path}", exit_code=1, is_error=True)
+            hint = (
+                f"Use relative paths from file_index (e.g. sqli/routes.py) "
+                f"or {{repo_path}}/sqli/routes.py. repo_path={self.cwd!r}"
+            )
+            return self._wrap_output(
+                f"Error: file not found: {path} (resolved={resolved}). {hint}",
+                exit_code=1,
+                is_error=True,
+            )
         try:
             raw = resolved.read_text(encoding="utf-8", errors="replace")
         except OSError as e:

@@ -7,6 +7,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from src.core.github_links import github_slugs_from_text
+
 
 class JiraTicketRaw(BaseModel):
     """Minimal ticket payload from Jira REST API (mentor jira_client shape)."""
@@ -73,11 +75,8 @@ def enrich_security_ticket(raw: JiraTicketRaw) -> JiraEnrichment:
         component = match
         break
 
-    repo = None
-    for match in re.findall(r"[\w-]+/[\w-]+(?:/[\w-]+)?", text):
-        if "http" not in match and "/" in match:
-            repo = match
-            break
+    slugs = github_slugs_from_text(text)
+    repo = slugs[0] if slugs else None
 
     summary = raw.summary.strip() or raw.description[:300].strip()
     return JiraEnrichment(

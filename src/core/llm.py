@@ -11,6 +11,8 @@ class LLMProvider(str, Enum):
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
     OPENROUTER = "openrouter"
+    GOOGLE = "google"
+    SPRINKLR = "sprinklr"
 
 
 class TaskComplexity(str, Enum):
@@ -36,9 +38,19 @@ _MODEL_MATRIX = {
         TaskComplexity.HIGH: "gpt-4o",
     },
     LLMProvider.OPENROUTER: {
-        TaskComplexity.LOW: "google/gemma-4-31b-it:free",
-        TaskComplexity.MEDIUM: "google/gemma-4-31b-it:free",
-        TaskComplexity.HIGH: "google/gemma-4-31b-it:free",
+        TaskComplexity.LOW: "nvidia/nemotron-3-ultra-550b-a55b:free",
+        TaskComplexity.MEDIUM: "nvidia/nemotron-3-ultra-550b-a55b:free",
+        TaskComplexity.HIGH: "nvidia/nemotron-3-ultra-550b-a55b:free",
+    },
+    LLMProvider.GOOGLE: {
+        TaskComplexity.LOW: "gemini-2.5-flash",
+        TaskComplexity.MEDIUM: "gemini-2.5-flash",
+        TaskComplexity.HIGH: "gemini-2.5-flash",
+    },
+    LLMProvider.SPRINKLR: {
+        TaskComplexity.LOW: "gpt-5.2-2025-12-11",
+        TaskComplexity.MEDIUM: "gpt-5.2-2025-12-11",
+        TaskComplexity.HIGH: "gpt-5.2-2025-12-11",
     },
 }
 
@@ -47,6 +59,10 @@ def get_llm(complexity: TaskComplexity = TaskComplexity.MEDIUM) -> BaseChatModel
     provider = LLMProvider(os.getenv("LLM_PROVIDER", "local"))
     if provider == LLMProvider.OPENROUTER and os.getenv("OPENROUTER_MODEL"):
         model_name = os.getenv("OPENROUTER_MODEL", "")
+    elif provider == LLMProvider.GOOGLE and os.getenv("GOOGLE_MODEL"):
+        model_name = os.getenv("GOOGLE_MODEL", "")
+    elif provider == LLMProvider.SPRINKLR and os.getenv("SPRINKLR_LLM_MODEL"):
+        model_name = os.getenv("SPRINKLR_LLM_MODEL", "")
     else:
         model_name = _MODEL_MATRIX[provider][complexity]
 
@@ -79,4 +95,18 @@ def get_llm(complexity: TaskComplexity = TaskComplexity.MEDIUM) -> BaseChatModel
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
         )
+    if provider == LLMProvider.GOOGLE:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        api_key = os.getenv("GOOGLE_API_KEY", "")
+        if not api_key:
+            raise ValueError("GOOGLE_API_KEY is required when LLM_PROVIDER=google")
+        return ChatGoogleGenerativeAI(
+            model=model_name,
+            google_api_key=api_key,
+        )
+    if provider == LLMProvider.SPRINKLR:
+        from src.integrations.llm.sprinklr_router import create_sprinklr_chat_model
+
+        return create_sprinklr_chat_model(model_name)
     raise ValueError(f"Unknown LLM provider: {provider}")

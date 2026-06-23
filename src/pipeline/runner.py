@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from pathlib import Path
 
@@ -22,9 +23,10 @@ from src.agents.research.memory import InMemoryResearchMemory
 from src.agents.research.tools.file_discovery import extract_anchors
 from src.agents.research.tools.repo_profile import profile_repository
 from src.core.logging import configure_logging, get_logger
-from src.core.schemas import ExecutionPlan, ResearchReport, RoutingDecision
-# from src.core.debug_log import agent_debug
+from src.core.schemas import ExecutionPlan, ExecutionStep, ResearchReport, RoutingDecision
 from src.core.state import JiraTicket, ResearchOutput
+from src.core.token_usage import start_pipeline_tracking, stop_pipeline_tracking
+from src.tools.base import emit_event
 
 _log = get_logger("graph")
 _orch_log = get_logger("orchestrator")
@@ -46,6 +48,62 @@ def _reset_mock_security_fixture(repo_path: str) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     _orch_log.info("mock_fixture_reset", path=str(target))
+
+
+def build_mock_security_plan(ticket_id: str, repo_path: str) -> ExecutionPlan:
+    """Deterministic ExecutionPlan for mock-security demo — full grounded patches."""
+    demo_rel = str(MOCK_SECURITY_TARGET)
+    source_path = Path(repo_path) / demo_rel
+    content = source_path.read_text(encoding="utf-8")
+    match = re.search(r"(def search_users[\s\S]*?)(?=\n\ndef |\Z)", content)
+    old_string = match.group(1).rstrip() if match else content
+    new_string = (
+        'def search_users(query: str) -> list[dict[str, Any]]:\n'
+        '    """Search users — safe parameterized SQL pattern for demo."""\n'
+        '    sql = "SELECT * FROM users WHERE name LIKE ?"\n'
+        '    params = (f"%{query}%",)\n'
+        '    return [{"sql": sql, "params": params, "query": query}]'
+    )
+    return ExecutionPlan(
+        ticket_id=ticket_id,
+        root_hypothesis="Fix SQL injection by parameterizing UserSearchController search query",
+        files_to_change=[demo_rel],
+        execution_steps=[
+            ExecutionStep(
+                step_id=1,
+                action="READ",
+                where=demo_rel,
+                what="Read demo target before edit",
+                why="Ground old_string from disk",
+                validate="File read succeeds",
+            ),
+            ExecutionStep(
+                step_id=2,
+                action="EDIT",
+                where=demo_rel,
+                what="Replace f-string SQL with parameterized query",
+                why="Remove SQL injection vulnerability",
+                validate='grep for LIKE ?',
+                old_string=old_string,
+                new_string=new_string,
+                intent_marker="LIKE ?",
+                change="Parameterize SQL and bind query via params tuple",
+            ),
+            ExecutionStep(
+                step_id=3,
+                action="VERIFY",
+                where=demo_rel,
+                what="Confirm parameterized query present",
+                why="Ensure fix applied",
+                validate='grep for LIKE ?; grep for params =',
+                intent_marker="LIKE ?",
+            ),
+        ],
+        write_tests=False,
+        create_files=False,
+        risk_level="high",
+        flags=["mock_security_deterministic_plan"],
+    )
 
 StageName = Literal["research", "planner", "executor", "orchestrator"]
 
@@ -71,14 +129,35 @@ class PipelineResult:
     stage_failed: StageName | None = None
     error: str | None = None
     dry_run: bool = False
+    token_usage: dict[str, Any] | None = None
 
 
-def _log_node_start(node: str) -> None:
+PipelineProgressCallback = Callable[[str, dict[str, Any]], None]
+
+
+def _emit_progress(event: str, payload: dict[str, Any], on_progress: PipelineProgressCallback | None) -> None:
+    emit_event(f"pipeline_{event}", payload)
+    if on_progress:
+        on_progress(event, payload)
+
+
+def _log_node_start(node: str, on_progress: PipelineProgressCallback | None = None) -> None:
     _log.info("node_start", node=node)
+    _emit_progress("node_start", {"node": node}, on_progress)
 
 
-def _log_handoff(source: str, target: str, payload_shape: str) -> None:
+def _log_handoff(
+    source: str,
+    target: str,
+    payload_shape: str,
+    on_progress: PipelineProgressCallback | None = None,
+) -> None:
     _log.info("handoff", source=source, target=target, payload_shape=payload_shape)
+    _emit_progress(
+        "handoff",
+        {"source": source, "target": target, "payload_shape": payload_shape},
+        on_progress,
+    )
 
 
 def _log_stage_failed(stage: StageName, error: str) -> None:
@@ -118,6 +197,7 @@ def run_pipeline(
     user_prompt: str = "",
     dry_run: bool = False,
     with_gates: bool = False,
+    on_progress: PipelineProgressCallback | None = None,
     llm_research: BaseChatModel | None = None,
     llm_planner: BaseChatModel | None = None,
     llm_orchestrator: BaseChatModel | None = None,
@@ -125,6 +205,45 @@ def run_pipeline(
     """Run Research → Planner → Executor; stop on first stage failure."""
     configure_logging()
     repo_path = str(repo_path)
+    tracker = start_pipeline_tracking()
+    result: PipelineResult | None = None
+    try:
+        result = _run_pipeline_body(
+            ticket_id,
+            repo_path,
+            mock_security=mock_security,
+            user_prompt=user_prompt,
+            dry_run=dry_run,
+            with_gates=with_gates,
+            on_progress=on_progress,
+            llm_research=llm_research,
+            llm_planner=llm_planner,
+            llm_orchestrator=llm_orchestrator,
+        )
+        return result
+    finally:
+        active = stop_pipeline_tracking() or tracker
+        snapshot = active.to_dict()
+        active.log_summary()
+        if result is not None:
+            result.token_usage = snapshot
+            if on_progress and snapshot.get("total_tokens", 0) > 0:
+                on_progress("token_usage", snapshot)
+
+
+def _run_pipeline_body(
+    ticket_id: str,
+    repo_path: str,
+    *,
+    mock_security: bool = False,
+    user_prompt: str = "",
+    dry_run: bool = False,
+    with_gates: bool = False,
+    on_progress: PipelineProgressCallback | None = None,
+    llm_research: BaseChatModel | None = None,
+    llm_planner: BaseChatModel | None = None,
+    llm_orchestrator: BaseChatModel | None = None,
+) -> PipelineResult:
 
     if mock_security and not dry_run:
         _reset_mock_security_fixture(repo_path)
@@ -146,6 +265,15 @@ def run_pipeline(
         risk_level=decision.risk_level,
         reason=decision.reasoning[:200],
     )
+    _emit_progress(
+        "routing",
+        {
+            "route": decision.routing_route,
+            "risk_level": decision.risk_level,
+            "reason": decision.reasoning[:200],
+        },
+        on_progress,
+    )
 
     if decision.routing_route == "EXIT":
         return PipelineResult(
@@ -161,11 +289,11 @@ def run_pipeline(
         _log.info("gates_enabled", note="HITL gates auto-approved in CLI demo mode")
 
     if dry_run:
-        _log_node_start("research")
-        _log_handoff("research", "planner", "ResearchOutput")
-        _log_node_start("planner")
-        _log_handoff("planner", "executor", "ExecutionPlan")
-        _log_node_start("executor")
+        _log_node_start("research", on_progress)
+        _log_handoff("research", "planner", "ResearchOutput", on_progress)
+        _log_node_start("planner", on_progress)
+        _log_handoff("planner", "executor", "ExecutionPlan", on_progress)
+        _log_node_start("executor", on_progress)
         return PipelineResult(
             success=True,
             routing_route=decision.routing_route,
@@ -179,7 +307,7 @@ def run_pipeline(
     execution: ExecutionResult | None = None
 
     if decision.routing_route in ("FULL",):
-        _log_node_start("research")
+        _log_node_start("research", on_progress)
         try:
             memory = InMemoryResearchMemory()
             anchors = extract_anchors(ticket, user_prompt)
@@ -193,15 +321,6 @@ def run_pipeline(
                 llm=llm_research,
             )
             research_output = _report_to_output(report)
-            # agent_debug(
-            #     "A",
-            #     "pipeline/runner.py:run_pipeline",
-            #     "research_complete",
-            #     {
-            #         "affected_files": [f.path for f in report.affected_files],
-            #         "hypotheses_count": len(report.hypotheses),
-            #     },
-            # )
             if mock_security and not research_output.get("affected_files"):
                 demo_path = str(MOCK_SECURITY_TARGET)
                 research_output["affected_files"] = [
@@ -211,16 +330,10 @@ def run_pipeline(
                         "evidence_strength": "strong",
                     }
                 ]
-                # agent_debug(
-                #     "A",
-                #     "pipeline/runner.py:run_pipeline",
-                #     "injected_mock_affected_file",
-                #     {"path": demo_path},
-                # )
         except Exception as e:
             _log_stage_failed("research", str(e))
             raise PipelineError("research", str(e)) from e
-        _log_handoff("research", "planner", "ResearchOutput")
+        _log_handoff("research", "planner", "ResearchOutput", on_progress)
 
     elif decision.routing_route in ("SKIP_RESEARCH", "MICRO"):
         research_output = ResearchOutput(
@@ -242,23 +355,27 @@ def run_pipeline(
             flags=["Research skipped per routing"],
         )
         _log.info("research_skipped", route=decision.routing_route)
-        _log_handoff("research", "planner", "ResearchOutput")
+        _log_handoff("research", "planner", "ResearchOutput", on_progress)
 
-    _log_node_start("planner")
+    _log_node_start("planner", on_progress)
     try:
         report_model = ResearchReport.model_validate(dict(research_output))
-        plan = run_planner(
-            report_model,
-            repo_path,
-            routing_route=decision.routing_route,
-            llm=llm_planner,
-        )
+        if mock_security:
+            plan = build_mock_security_plan(ticket_id, repo_path)
+            _orch_log.info("mock_security_deterministic_plan", steps=len(plan.execution_steps))
+        else:
+            plan = run_planner(
+                report_model,
+                repo_path,
+                routing_route=decision.routing_route,
+                llm=llm_planner,
+            )
     except Exception as e:
         _log_stage_failed("planner", str(e))
         raise PipelineError("planner", str(e)) from e
-    _log_handoff("planner", "executor", "ExecutionPlan")
+    _log_handoff("planner", "executor", "ExecutionPlan", on_progress)
 
-    _log_node_start("executor")
+    _log_node_start("executor", on_progress)
     try:
         execution = run_executor(plan, repo_path)
     except Exception as e:
@@ -266,6 +383,15 @@ def run_pipeline(
         raise PipelineError("executor", str(e)) from e
 
     _orch_log.info("pipeline_complete", ticket_id=ticket_id, steps=execution.steps_completed)
+    _emit_progress(
+        "complete",
+        {
+            "ticket_id": ticket_id,
+            "steps": execution.steps_completed,
+            "changed_files": execution.changed_files,
+        },
+        on_progress,
+    )
     return PipelineResult(
         success=True,
         routing_route=decision.routing_route,

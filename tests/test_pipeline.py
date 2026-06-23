@@ -14,7 +14,7 @@ from src.agents.executor.agent import ExecutionResult
 from src.agents.orchestrator.tools.jira import mock_security_jira_ticket
 from src.core.schemas import ExecutionPlan, ExecutionStep, ResearchReport
 from src.core.tool_permissions import get_allowed_tools
-from src.pipeline.runner import PipelineError, run_pipeline
+from src.pipeline.runner import MOCK_SECURITY_TARGET, PipelineError, run_pipeline
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -28,7 +28,7 @@ def test_get_allowed_tools_research():
 
 def test_get_allowed_tools_planner_executor():
     assert get_allowed_tools("planner") == ["read", "grep", "find"]
-    assert get_allowed_tools("executor") == ["write", "edit", "bash"]
+    assert get_allowed_tools("executor") == ["write", "edit", "bash", "git_worktree", "mr_create"]
     assert get_allowed_tools("orchestrator") == []
 
 
@@ -163,15 +163,19 @@ def test_pipeline_stage_failed_planner(tmp_path):
     with (
         patch("src.pipeline.runner.mock_security_jira_ticket", return_value=ticket),
         patch("src.pipeline.runner.run_research", return_value=fake_report),
-        patch("src.pipeline.runner.run_planner", side_effect=ValueError("bad plan")),
+        patch(
+            "src.pipeline.runner.build_mock_security_plan",
+            side_effect=ValueError("bad plan"),
+        ),
     ):
         with pytest.raises(PipelineError, match="stage_failed=planner"):
             run_pipeline("SEC-4421", str(tmp_path), mock_security=True)
 
 
-def test_mock_security_injects_demo_path_for_planner(tmp_path):
-    """When research omits affected_files, mock-security injects the demo target."""
+def test_mock_security_uses_deterministic_plan(tmp_path):
+    """Mock-security skips LLM planner and uses disk-grounded deterministic plan."""
     ticket = mock_security_jira_ticket("SEC-4421")
+    demo_path = str(MOCK_SECURITY_TARGET)
     fake_report = ResearchReport(
         ticket_id="SEC-4421",
         research_summary="SQLi demo",
@@ -190,44 +194,26 @@ def test_mock_security_injects_demo_path_for_planner(tmp_path):
         issue_type_assessment="code_bug",
         flags=[],
     )
-    captured: dict = {}
-
-    def capture_planner(report, repo_path, **kwargs):
-        captured["paths"] = [f.path for f in report.affected_files]
-        return ExecutionPlan(
-            ticket_id="SEC-4421",
-            root_hypothesis="noop",
-            files_to_change=captured["paths"],
-            execution_steps=[
-                ExecutionStep(
-                    step_id=1,
-                    action="LOCATE",
-                    where=captured["paths"][0],
-                    what="ok",
-                    why="ok",
-                    validate="ok",
-                ),
-            ],
-            risk_level="low",
-        )
-
     fake_exec = ExecutionResult(
         ticket_id="SEC-4421",
-        changed_files=[],
-        steps_completed=1,
+        changed_files=[demo_path],
+        steps_completed=3,
         step_results=[],
     )
 
     with (
         patch("src.pipeline.runner.mock_security_jira_ticket", return_value=ticket),
         patch("src.pipeline.runner.run_research", return_value=fake_report),
-        patch("src.pipeline.runner.run_planner", side_effect=capture_planner),
+        patch("src.pipeline.runner.run_planner") as mock_planner,
         patch("src.pipeline.runner.run_executor", return_value=fake_exec),
     ):
         result = run_pipeline("SEC-4421", str(tmp_path), mock_security=True)
 
     assert result.success
-    assert captured["paths"] == ["src/agents/planner/fixtures/demo/UserSearchController.py"]
+    mock_planner.assert_not_called()
+    assert result.plan is not None
+    assert demo_path in result.plan.files_to_change
+    assert any(step.action == "EDIT" for step in result.plan.execution_steps)
 
 
 def test_pipeline_malformed_ticket_load_fails(tmp_path):

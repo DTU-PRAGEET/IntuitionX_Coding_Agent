@@ -8,11 +8,20 @@ Autonomous coding platform for Sprinklr developers — Jira ticket to GitLab MR 
 pip install -r requirements.txt
 cp .env.local .env   # configure as needed
 
+# Use Sprinklr IntuitionX LLM router (internal — no API key required)
+LLM_PROVIDER=sprinklr
+SPRINKLR_LLM_BASE_URL=http://qa6-intuitionx-llm-router-v2.sprinklr.com
+SPRINKLR_LLM_MODEL=gpt-5.2-2025-12-11
+SPRINKLR_LLM_CLIENT_IDENTIFIER=backend-platform-dev
+SPRINKLR_LLM_PARTNER_ID=66006006
+SPRINKLR_LLM_TRACKING_FEATURE=SPRINKLR_JIRA_SOLVER
+# SPRINKLR_LLM_TRACKING_PARAMS={"feature":"CUSTOM_FEATURE"}  # optional JSON override
+
 # API (CI/CD webhook)
 uvicorn src.api.main:app --reload --port 8000
 
 # Chainlit UI
-chainlit run chainlit_app.py --port 8080
+chainlit run src/ui/chainlit_app.py --port 8080
 
 # Docker
 docker compose -f docker/docker-compose.yml up

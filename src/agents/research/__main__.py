@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
         anchors = extract_anchors(ticket, args.prompt)
         loaded_skill, skill_reason = resolve_research_skill(ticket)
         prompt = build_research_prompt(
-            ticket, repo_path, profile, anchors, args.prompt, memory, ticket_skill=loaded_skill
+            ticket, repo_path, profile, anchors, args.prompt, memory
         )
         registry, tools = build_research_tool_registry(repo_path)
         print(
@@ -74,6 +74,8 @@ def main(argv: list[str] | None = None) -> int:
                     "tool_names": [t.name for t in tools],
                     "anchors": anchors,
                     "prompt_chars": len(prompt),
+                    "skills_mode": "deepagents_progressive",
+                    "skills_root": str(Path(__file__).parent / "skills"),
                     "loaded_skill": loaded_skill.name if loaded_skill else None,
                     "skill_reason": skill_reason,
                 },

@@ -13,12 +13,28 @@ def expand_path(file_path: str) -> str:
 
 
 def resolve_to_cwd(file_path: str, cwd: str) -> Path:
-    """Resolve a path relative to cwd; absolute paths are allowed if under cwd."""
+    """Resolve a path relative to cwd; absolute paths are allowed if under cwd.
+
+    Handles three common LLM path forms:
+      1. "sqli/views.py"              → join with cwd
+      2. "/sqli/views.py"             → pseudo-absolute; remap under cwd if missing
+      3. "/private/tmp/.../sqli/..."  → real absolute path; use as-is when it exists
+    """
     expanded = expand_path(file_path)
     p = Path(expanded)
-    if not p.is_absolute():
-        p = Path(cwd) / expanded
-    return p.resolve()
+    cwd_path = Path(cwd).resolve()
+
+    if p.is_absolute():
+        resolved = p.resolve()
+        if resolved.exists():
+            return resolved
+        # Pseudo-absolute: /sqli/views.py → {cwd}/sqli/views.py
+        candidate = (cwd_path / Path(str(p).lstrip("/"))).resolve()
+        if candidate.exists():
+            return candidate
+        return resolved
+
+    return (cwd_path / expanded).resolve()
 
 
 def assert_within_cwd(resolved: Path, cwd: str) -> None:
