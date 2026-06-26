@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+from src.core.skill_registry import default_skills_root
+
 from src.agents.orchestrator.tools.jira import fetch_jira_ticket, mock_security_jira_ticket
 from src.agents.research.deep_runner import run_research
 from src.agents.research.memory import InMemoryResearchMemory
@@ -37,6 +39,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Build context and tools only; skip LLM invocation",
     )
+    parser.add_argument(
+        "--mock-cursor",
+        action="store_true",
+        help="Use MockCursorGateway: real LLM, but no Cursor SDK calls "
+        "(auto-enabled with --mock-security)",
+    )
     args = parser.parse_args(argv)
 
     repo_path = str(Path(args.repo_path or settings.default_repo_path or ".").resolve())
@@ -58,13 +66,17 @@ def main(argv: list[str] | None = None) -> int:
         from src.agents.research.deep_runner import build_research_prompt, resolve_research_skill
         from src.agents.research.tools.file_discovery import extract_anchors
         from src.agents.research.tools.builder import build_research_tool_registry
+        from src.integrations.cursor.gateway import get_cursor_gateway
 
         anchors = extract_anchors(ticket, args.prompt)
         loaded_skill, skill_reason = resolve_research_skill(ticket)
         prompt = build_research_prompt(
             ticket, repo_path, profile, anchors, args.prompt, memory
         )
-        registry, tools = build_research_tool_registry(repo_path)
+        gateway = get_cursor_gateway(repo_path, dry_run=True)
+        _, tools = build_research_tool_registry(
+            repo_path, gateway=gateway, thread_id=ticket.get("issue_id") or "research", memory=memory
+        )
         print(
             json.dumps(
                 {
@@ -75,15 +87,21 @@ def main(argv: list[str] | None = None) -> int:
                     "anchors": anchors,
                     "prompt_chars": len(prompt),
                     "skills_mode": "deepagents_progressive",
-                    "skills_root": str(Path(__file__).parent / "skills"),
+                    "skills_root": str(default_skills_root()),
                     "loaded_skill": loaded_skill.name if loaded_skill else None,
                     "skill_reason": skill_reason,
                 },
                 indent=2,
             )
         )
-        registry.dispose()
         return 0
+
+    gateway = None
+    if args.mock_cursor or args.mock_security:
+        from src.integrations.cursor.gateway import MockCursorGateway
+
+        gateway = MockCursorGateway(repo_path)
+        _log.info("cursor_mode", mode="mock", reason="mock_cursor_or_mock_security")
 
     try:
         report = run_research(
@@ -92,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
             user_prompt=args.prompt,
             repo_profile=profile,
             memory=memory,
+            gateway=gateway,
         )
         print(json.dumps(report.model_dump(), indent=2))
         print("\n--- run memory ---")

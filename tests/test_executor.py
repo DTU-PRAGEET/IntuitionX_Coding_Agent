@@ -15,9 +15,14 @@ from src.agents.executor.agent import ExecutionResult, load_execution_plan, run_
 from src.agents.executor.tools.builder import build_executor_tools
 from src.core.tool_permissions import get_allowed_tools
 from src.core.schemas import ExecutionPlan, ExecutionStep
+from src.integrations.cursor.gateway import LocalPatchCursorGateway
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PLAN = REPO_ROOT / "src/agents/executor/fixtures/mock_plan.json"
+
+
+def _test_gateway(tmp_path: Path) -> LocalPatchCursorGateway:
+    return LocalPatchCursorGateway(tmp_path)
 
 
 def test_load_mock_plan():
@@ -34,14 +39,18 @@ def test_malformed_plan_fails_loudly(tmp_path):
         load_execution_plan(bad)
 
 
-def test_executor_tools_write_edit_bash_only(tmp_path):
+def test_executor_tools_read_bash_only(tmp_path):
     registry, names = build_executor_tools(str(tmp_path))
     try:
         assert set(names) == set(get_allowed_tools("executor"))
-        assert "read" not in names
+        assert "read" in names
+        assert "write" not in names
+        assert "edit" not in names
         assert "grep" not in names
         assert "git_worktree" in names
         assert "mr_create" in names
+        denied = registry.execute("edit", path="x", old_string="a", new_string="b")
+        assert denied.is_error
     finally:
         registry.dispose()
 
@@ -75,7 +84,7 @@ def test_run_executor_write_and_edit(tmp_path):
         create_files=True,
         risk_level="low",
     )
-    result = run_executor(plan, str(tmp_path))
+    result = run_executor(plan, str(tmp_path), gateway=_test_gateway(tmp_path))
     assert isinstance(result, ExecutionResult)
     assert (tmp_path / "hello.txt").read_text(encoding="utf-8") == "Hello, Executor!\n"
     assert result.steps_completed == 2
@@ -105,7 +114,7 @@ def test_run_executor_edit_failure(tmp_path):
     mock_llm.invoke.return_value = AIMessage(content='{"old_string": "still wrong", "new_string": "x"}')
 
     with pytest.raises(RuntimeError, match="step 1"):
-        run_executor(plan, str(tmp_path), llm=mock_llm)
+        run_executor(plan, str(tmp_path), llm=mock_llm, gateway=_test_gateway(tmp_path))
 
 
 def test_verify_ignores_planner_validate_fragments_when_edit_patterns_exist(tmp_path):
@@ -190,7 +199,7 @@ def test_verify_requires_all_validate_patterns(tmp_path):
         risk_level="high",
     )
     with pytest.raises(RuntimeError, match="step 1"):
-        run_executor(plan, str(tmp_path))
+        run_executor(plan, str(tmp_path), gateway=_test_gateway(tmp_path))
 
 
 def test_verify_passes_when_full_fix_applied(tmp_path):
@@ -220,7 +229,7 @@ def test_verify_passes_when_full_fix_applied(tmp_path):
         ],
         risk_level="high",
     )
-    result = run_executor(plan, str(tmp_path))
+    result = run_executor(plan, str(tmp_path), gateway=_test_gateway(tmp_path))
     assert result.steps_completed == 1
     assert "cursor.execute(sql, params)" in target.read_text(encoding="utf-8")
 
@@ -309,7 +318,7 @@ def test_edit_applies_full_planned_patch(tmp_path):
         ],
         risk_level="high",
     )
-    result = run_executor(plan, str(tmp_path))
+    result = run_executor(plan, str(tmp_path), gateway=_test_gateway(tmp_path))
     content = target.read_text(encoding="utf-8")
     assert result.steps_completed == 1
     assert 'sql = f"SELECT' not in content
@@ -362,7 +371,7 @@ def test_fallback_noop_accepted_when_intent_already_satisfied(tmp_path):
             }
         )
     )
-    result = run_executor(plan, str(tmp_path), llm=mock_llm)
+    result = run_executor(plan, str(tmp_path), llm=mock_llm, gateway=_test_gateway(tmp_path))
     assert result.steps_completed == 2
 
     """LLM fallback that only changes the SQL string must fail completeness check."""
@@ -416,14 +425,14 @@ def test_fallback_noop_accepted_when_intent_already_satisfied(tmp_path):
     ]
 
     with pytest.raises(RuntimeError, match="incomplete"):
-        run_executor(plan, str(tmp_path), llm=mock_llm)
+        run_executor(plan, str(tmp_path), llm=mock_llm, gateway=_test_gateway(tmp_path))
     assert "cursor.execute(sql)" in target.read_text(encoding="utf-8")
     assert "cursor.execute(sql, params)" not in target.read_text(encoding="utf-8")
 
 
 def test_run_executor_mock_fixture_end_to_end(tmp_path):
     plan = load_execution_plan(FIXTURE_PLAN)
-    result = run_executor(plan, str(tmp_path))
+    result = run_executor(plan, str(tmp_path), gateway=_test_gateway(tmp_path))
     assert (tmp_path / "hello.txt").read_text(encoding="utf-8") == "Hello, Executor!\n"
     assert (tmp_path / "app.py").read_text(encoding="utf-8") == 'VERSION = "1.0.0"\n'
     assert result.steps_completed == 4

@@ -7,6 +7,43 @@ from pathlib import Path
 from src.core.state import RepoProfile
 
 
+def bootstrap_repo_context(repo_path: str, *, max_entries: int = 12) -> dict[str, object]:
+    """Verified repo facts for research prompts — prevents false repo_path_not_found."""
+    root = Path(repo_path).resolve()
+    if not root.exists():
+        return {
+            "repo_path": str(root),
+            "exists": False,
+            "is_git": False,
+            "top_level_entries": [],
+            "file_count_estimate": 0,
+        }
+
+    top_level: list[str] = []
+    file_count = 0
+    try:
+        for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+            if child.name == ".git":
+                continue
+            top_level.append(child.name + ("/" if child.is_dir() else ""))
+            if len(top_level) >= max_entries:
+                break
+        for _ in root.rglob("*"):
+            file_count += 1
+            if file_count >= 5000:
+                break
+    except OSError:
+        pass
+
+    return {
+        "repo_path": str(root),
+        "exists": True,
+        "is_git": (root / ".git").exists(),
+        "top_level_entries": top_level,
+        "file_count_estimate": file_count,
+    }
+
+
 def profile_repository(repo_path: str) -> RepoProfile:
     root = Path(repo_path).resolve()
     if not root.exists():

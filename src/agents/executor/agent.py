@@ -17,6 +17,7 @@ from src.core.llm import TaskComplexity, get_llm
 from src.core.logging import configure_logging, get_logger
 from src.core.runner_utils import invoke_tracked, llm_content
 from src.core.prompt_builder import PromptBuilder
+from src.core.skill_registry import module_skills_dir
 from src.core.repo_snapshot import (
     file_content_hash,
     file_git_diff,
@@ -24,19 +25,51 @@ from src.core.repo_snapshot import (
     log_edit_patch,
     log_repo_snapshot,
     old_string_in_file,
+    sha256_text,
     snapshots_match,
 )
+
+# #region agent log
+_DEBUG_LOG_PATH = Path(__file__).resolve().parents[3] / ".cursor" / "debug-196e90.log"
+
+
+def _debug_log(hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
+    import time
+
+    payload = {
+        "sessionId": "196e90",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload) + "\n")
+    except OSError:
+        pass
+
+
+# #endregion
 from src.core.skill_scripts.run_tests import run_tests_for_file
 from src.core.skill_scripts.verify_edit import verify_intent_marker
 from src.core.schemas import ExecutionPlan, ToolResult
 from src.core.state import AgentState, ExecutionOutput
+from src.core.config import settings
+from src.integrations.cursor.gateway import (
+    CursorGateway,
+    LocalPatchCursorGateway,
+    get_cursor_gateway,
+)
+from src.integrations.cursor.schemas import CursorEditResult
 from src.memory.cache import save_failed_attempt
 from src.tools.path_utils import resolve_path_sandbox
 from src.tools.registry import ToolRegistry
 
 _log = get_logger("executor")
 
-SKILLS_DIR = Path(__file__).parent / "skills"
+SKILLS_DIR = module_skills_dir("executor")
 _LEGACY_ACTION_MAP = {"LOCATE": "READ", "SEARCH": "READ"}
 
 
@@ -82,6 +115,80 @@ def _step_to_dict(step: Any) -> dict[str, Any]:
 
 def _tool_ok(result: ToolResult) -> tuple[bool, str]:
     return not result.is_error, result.output
+
+
+def _cursor_edit_ok(result: CursorEditResult) -> tuple[bool, str]:
+    if result.dry_run:
+        return True, result.text or "dry_run edit (no file mutation)"
+    if result.exit_code != 0 or result.status in ("failed", "error"):
+        msg = result.stderr or result.text or f"Cursor edit failed: {result.status}"
+        return False, msg
+    if not result.changed_files and result.status not in ("dry_run", "success", "finished", "completed"):
+        return False, result.text or "Cursor edit returned no changed files"
+    return True, result.text or "edit applied via CursorGateway"
+
+
+def _build_edit_instruction(
+    step: dict[str, Any],
+    plan: ExecutionPlan,
+    *,
+    create_file: bool = False,
+    old_string: str | None = None,
+    new_string: str | None = None,
+) -> str:
+    path = _step_path(step)
+    old_s = old_string if old_string is not None else (step.get("old_string") or "")
+    new_s = new_string if new_string is not None else (step.get("new_string") or "")
+    parts = [
+        f"Ticket: {plan.ticket_id}",
+        f"File: {path}",
+        f"Reason: {step.get('why') or step.get('reason', '')}",
+        f"Change: {step.get('change') or step.get('what', '')}",
+    ]
+    if step.get("intent_marker"):
+        parts.append(f"After edit, file MUST contain intent marker: {step['intent_marker']}")
+    if create_file and not old_s and new_s:
+        parts.append("Action: CREATE new file with the following content:")
+        parts.append(new_s)
+    else:
+        parts.append("Action: REPLACE the following exact text:")
+        parts.append(old_s)
+        parts.append("WITH:")
+        parts.append(new_s)
+    parts.append("Apply ONLY this change. Do not modify unrelated files. Preserve code style.")
+    return "\n".join(parts)
+
+
+def _apply_edit_via_cursor(
+    gateway: CursorGateway,
+    step: dict[str, Any],
+    plan: ExecutionPlan,
+    *,
+    create_files: bool,
+    old_string: str | None = None,
+    new_string: str | None = None,
+) -> tuple[bool, str]:
+    path = _step_path(step)
+    old_s = old_string if old_string is not None else (step.get("old_string") or "")
+    new_s = new_string if new_string is not None else (step.get("new_string") or "")
+    create_file = create_files and not old_s and bool(new_s)
+    instruction = _build_edit_instruction(
+        step,
+        plan,
+        create_file=create_file,
+        old_string=old_s,
+        new_string=new_s,
+    )
+    metadata = {
+        "step_id": step.get("step_id"),
+        "ticket_id": plan.ticket_id,
+        "old_string": old_s,
+        "new_string": new_s,
+        "create_file": create_file,
+        "intent_marker": step.get("intent_marker"),
+    }
+    result = gateway.edit(instruction, files=[path], metadata=metadata)
+    return _cursor_edit_ok(result)
 
 
 def _log_step(step_id: int, action: str, file_path: str) -> None:
@@ -225,14 +332,10 @@ def _validate_edit_completeness(
         return False, content, [content]
 
     missing = [
-        ln
-        for ln in _meaningful_patch_lines(planned_new)
-        if not any(ln in file_line for file_line in content.splitlines())
+        ln for ln in _meaningful_patch_lines(planned_new) if ln not in content
     ]
     remaining = [
-        ln
-        for ln in _meaningful_patch_lines(planned_old)
-        if any(ln in file_line for file_line in content.splitlines())
+        ln for ln in _meaningful_patch_lines(planned_old) if ln in content
     ]
     errors: list[str] = []
     if missing:
@@ -325,6 +428,7 @@ def _llm_edit_fallback(
     plan: ExecutionPlan,
     llm: BaseChatModel,
     file_content: str,
+    gateway: CursorGateway,
     extra_context: str = "",
 ) -> tuple[bool, str]:
     path = _step_path(step)
@@ -379,13 +483,14 @@ Apply the FULL intended transformation from the plan — include every line from
             )
         if not old_fb or not new_fb:
             return False, f"LLM fallback rejected: empty patch for {path}"
-        result = registry.execute(
-            "edit",
-            path=path,
+        return _apply_edit_via_cursor(
+            gateway,
+            step,
+            plan,
+            create_files=False,
             old_string=old_fb,
             new_string=new_fb,
         )
-        return _tool_ok(result)
     except Exception as e:
         return False, f"Edit fallback failed: {e}"
 
@@ -527,6 +632,7 @@ def _execute_edit(
     *,
     create_files: bool,
     llm: BaseChatModel,
+    gateway: CursorGateway,
 ) -> tuple[bool, str, list[str]]:
     path = _step_path(step)
     old_s = step.get("old_string")
@@ -544,8 +650,9 @@ def _execute_edit(
     )
 
     if not old_s and new_s and create_files:
-        result = registry.execute("write", path=path, content=new_s)
-        ok, out = _tool_ok(result)
+        ok, out = _apply_edit_via_cursor(
+            gateway, step, plan, create_files=True, old_string="", new_string=new_s
+        )
         if ok:
             complete, msg, errs = _validate_edit_completeness(registry, step)
             if not complete:
@@ -558,11 +665,12 @@ def _execute_edit(
         return False, file_content, deviations
 
     pre_check = old_string_in_file(registry.cwd, path, old_s or "")
+    pre_hash = pre_check["file_sha256"]
     _log.info(
         "executor_pre_edit_file",
         step_id=step_id,
         file=path,
-        file_sha256=pre_check["file_sha256"],
+        file_sha256=pre_hash,
         old_string_exists=pre_check["exists"],
         occurrence_count=pre_check["occurrence_count"],
     )
@@ -589,8 +697,8 @@ def _execute_edit(
             deviations.append(
                 f"step {step.get('step_id')}: plan old_string not in fresh read; attempting edit anyway"
             )
-        result = registry.execute("edit", path=path, old_string=old_s, new_string=new_s)
-        ok, last_out = _tool_ok(result)
+        result = _apply_edit_via_cursor(gateway, step, plan, create_files=create_files)
+        ok, last_out = result
         post_hash = file_content_hash(registry.cwd, path)
         post_diff = file_git_diff(registry.cwd, path)
         _log.info(
@@ -602,9 +710,60 @@ def _execute_edit(
             file_diff=post_diff[:2000],
         )
         if ok:
+            expected_sha = sha256_text(new_s) if new_s else ""
+            sha_match = bool(expected_sha and post_hash == expected_sha)
+            sha_delta = bool(pre_hash and post_hash and pre_hash != post_hash)
+            # #region agent log
+            _debug_log(
+                "H1-H2",
+                "agent.py:_execute_edit:post_cursor",
+                "post-cursor sha guards",
+                {
+                    "step_id": step_id,
+                    "path": path,
+                    "pre_hash": pre_hash,
+                    "post_hash": post_hash,
+                    "expected_sha": expected_sha,
+                    "sha_match": sha_match,
+                    "sha_delta": sha_delta,
+                },
+            )
+            # #endregion
+            if sha_match:
+                _log.info(
+                    "executor_sha_match",
+                    step_id=step_id,
+                    file=path,
+                    sha=post_hash,
+                )
+                return ok, last_out, deviations
+            if sha_delta:
+                _log.info(
+                    "executor_edit_confirmed_by_sha_delta",
+                    step_id=step_id,
+                    file=path,
+                    pre_hash=pre_hash,
+                    post_hash=post_hash,
+                )
+                return ok, last_out, deviations
+
             complete, msg, errs = _validate_edit_outcome(
                 registry, step, plan, used_fallback=False
             )
+            # #region agent log
+            _debug_log(
+                "H1",
+                "agent.py:_execute_edit:completeness",
+                "completeness after cursor ok",
+                {
+                    "step_id": step_id,
+                    "path": path,
+                    "complete": complete,
+                    "msg": msg,
+                    "errs": errs,
+                },
+            )
+            # #endregion
             if complete:
                 return ok, last_out, deviations
             accepted = _try_accept_by_intent(
@@ -640,7 +799,9 @@ def _execute_edit(
     if not ok_read:
         return False, file_content, deviations
 
-    ok, out = _llm_edit_fallback(registry, step, plan=plan, llm=llm, file_content=file_content)
+    ok, out = _llm_edit_fallback(
+        registry, step, plan=plan, llm=llm, file_content=file_content, gateway=gateway
+    )
     if ok:
         deviations.append(
             f"step {step.get('step_id')}: used LLM fallback edit (plan patch did not apply verbatim)"
@@ -659,6 +820,7 @@ def _execute_edit(
             plan=plan,
             llm=llm,
             file_content=file_content,
+            gateway=gateway,
             extra_context=f"Incomplete after first fallback: {msg}. Apply ALL planned lines.",
         )
         if ok_retry:
@@ -689,6 +851,7 @@ def _execute_step(
     step: dict[str, Any],
     plan: ExecutionPlan,
     llm: BaseChatModel,
+    gateway: CursorGateway,
 ) -> tuple[bool, str, list[str]]:
     action = step.get("action", "")
     path = _step_path(step)
@@ -702,7 +865,9 @@ def _execute_step(
         elif action == "VERIFY":
             ok, out = _execute_verify(registry, step, plan)
         elif action == "EDIT":
-            ok, out, deviations = _execute_edit(registry, step, plan, create_files=plan.create_files, llm=llm)
+            ok, out, deviations = _execute_edit(
+                registry, step, plan, create_files=plan.create_files, llm=llm, gateway=gateway
+            )
         elif action == "RUN_TESTS":
             ok, out = _execute_run_tests(registry, step)
         else:
@@ -735,11 +900,22 @@ def run_executor(
     repo_path: str,
     *,
     llm: BaseChatModel | None = None,
+    gateway: CursorGateway | None = None,
+    dry_run: bool = False,
 ) -> ExecutionResult:
     """Execute all plan steps in order; stop on first failure."""
     configure_logging()
     log_repo_snapshot(_log, "start", repo_path, ticket_id=plan.ticket_id, steps=len(plan.execution_steps))
     _assert_snapshot_consistency(plan, repo_path)
+
+    if gateway is None:
+        if dry_run:
+            gateway = get_cursor_gateway(Path(repo_path), dry_run=True)
+        elif settings.cursor_api_key:
+            gateway = get_cursor_gateway(Path(repo_path), dry_run=False)
+        else:
+            _log.warning("cursor_api_key_missing", fallback="LocalPatchCursorGateway")
+            gateway = LocalPatchCursorGateway(repo_path)
 
     registry, _ = build_executor_tools(repo_path)
     # print("registry:")
@@ -752,7 +928,7 @@ def run_executor(
         for raw_step in plan.execution_steps:
             step = _step_to_dict(raw_step)
             _assert_file_allowed(step, plan)
-            ok, out, deviations = _execute_step(registry, step, plan, llm)
+            ok, out, deviations = _execute_step(registry, step, plan, llm, gateway)
             plan_deviations.extend(deviations)
             step_results.append(
                 {
@@ -848,7 +1024,11 @@ def executor_node(state: AgentState) -> AgentState:
             status=worktree_info.get("status"),
         )
 
-        result = run_executor(plan, worktree_path)
+        result = run_executor(
+            plan,
+            worktree_path,
+            gateway=get_cursor_gateway(Path(worktree_path), dry_run=False),
+        )
         diff_summary = show_diff(worktree_path, worktree_info.get("base_branch"))
         commit_msg = f"fix({ticket_id}): {plan.root_hypothesis[:72]}"
         push_result = stage_commit_push(worktree_path, branch_name, commit_msg)

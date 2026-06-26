@@ -11,6 +11,7 @@ from pathlib import Path
 from langchain_core.language_models import BaseChatModel
 
 from src.agents.executor.agent import ExecutionResult, run_executor
+from src.integrations.cursor.gateway import get_cursor_gateway
 from src.agents.orchestrator.tools.jira import (
     fetch_jira_ticket,
     is_ticket_done,
@@ -377,7 +378,11 @@ def _run_pipeline_body(
 
     _log_node_start("executor", on_progress)
     try:
-        execution = run_executor(plan, repo_path)
+        execution = run_executor(
+            plan,
+            repo_path,
+            gateway=get_cursor_gateway(Path(repo_path), dry_run=False),
+        )
     except Exception as e:
         _log_stage_failed("executor", str(e))
         raise PipelineError("executor", str(e)) from e

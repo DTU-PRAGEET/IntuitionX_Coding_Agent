@@ -57,6 +57,9 @@ class Settings:
 
     default_repo_path: str = os.getenv("REPO_PATH", "")
 
+    cursor_api_key: str = os.getenv("CURSOR_API_KEY", "")
+    cursor_model: str = os.getenv("CURSOR_MODEL", "composer-2.5")
+
     langchain_tracing: bool = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
     langchain_project: str = os.getenv("LANGCHAIN_PROJECT", "sprinklr-jira-solver-dev")
 

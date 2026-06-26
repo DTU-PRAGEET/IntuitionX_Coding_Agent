@@ -18,12 +18,10 @@ from src.core.skills_loader import (
     select_research_skill,
 )
 
-SKILLS_ROOT = (
-    Path(__file__).resolve().parents[1] / "src" / "agents" / "research" / "skills"
-)
-SKILL_DIR = SKILLS_ROOT / "research"
+SKILLS_ROOT = Path(__file__).resolve().parents[1] / "skills" / "research"
+SKILL_DIR = SKILLS_ROOT
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SECURITY_REF = SKILL_DIR / "references" / "security_patterns.md"
+SECURITY_REF = SKILLS_ROOT / "references" / "security_patterns.md"
 
 
 def test_load_skill_manifest_research():

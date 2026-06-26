@@ -21,6 +21,7 @@ _KEY_LINE = re.compile(r"^(script_name|script_description|script_content):\s*(.*
 
 # Research reference selection: (predicate, reference stem, reason)
 _RESEARCH_REFERENCE_RULES: list[tuple[Callable[[JiraTicket], bool], str, str]] = [
+    (lambda _t: True, "general_patterns", "default_baseline"),
     (lambda t: _labels_match_security(t), "security_patterns", "label_match"),
     (lambda t: _issue_type_is_security(t), "security_patterns", "issue_type_security"),
     (lambda t: _has_cve_ids(t), "security_patterns", "cve_present"),
@@ -75,6 +76,9 @@ def _resolve_skill_source(skills_dir: Path) -> tuple[Path, bool]:
     skill_path = _skill_md_path(skills_dir)
     if skill_path is not None:
         return skill_path, True
+    module_md = skills_dir / f"{skills_dir.name}.md"
+    if module_md.is_file():
+        return module_md, True
     legacy = skills_dir / _LEGACY_SCRIPTS
     if legacy.is_file():
         _log.warning("deprecated_skill_source", path=str(legacy), use=_SKILL_MD)
@@ -218,6 +222,10 @@ def load_skills_from_dir(skills_dir: Path) -> dict[str, Skill]:
         raise ValueError(f"Skills directory does not exist: {skills_dir}")
     for path in sorted(skills_dir.glob("*.md")):
         if path.name in (_LEGACY_SCRIPTS, _SKILL_MD):
+            continue
+        if path.name.lower() == "readme.md":
+            continue
+        if path.stem == skills_dir.name:
             continue
         try:
             skill = load_skill_file(path)

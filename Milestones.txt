@@ -1,0 +1,244 @@
+SWE Security Agent Roadmap = 
+
+
+Phase 1 — Architecture & Scaffolding
+Week 1
+Milestone 1.1 Project setup & repo structure
+Deliverables:
+Monorepo with /core, /agents, /evals, /skills directories
+Cursor CLI integration proof-of-concept (headless, programmatic file editing)
+LangChain deep-agent version pinned, virtual env + lock file committed
+
+Milestone 1.2 Core orchestration agent skeleton
+Deliverables:
+AgentContext dataclass: bug_description, file_paths, history, metadata
+SubAgent abstract base class with run(context: AgentContext) -> AgentContext
+Orchestrator loop: receive bug ticket → fan out to sub-agents → collect results → raises MR
+Definition of done: Orchestrator instantiates with stub sub-agents and completes one dummy loop without errors.
+
+Milestone 1.3 Research & Plan sub-agents (stub implementations)
+Deliverables:
+Research agent: wraps codebase grep + web search via Cursor CLI; returns structured ResearchOutput
+Plan agent: takes ResearchOutput, produces FixPlan with file paths, line targets, fix type
+Both agents wired into orchestrator; full call chain runs end-to-end (mock outputs are fine)
+Definition of done: orchestrator.run(bug_ticket) calls all three agent stubs in sequence and returns a typed result.
+
+Milestone 1.4 Implement sub-agent + skills plugin system
+Deliverables:
+Implement agent: takes FixPlan, calls Cursor CLI, captures diff output, returns PatchResult
+Skills registry: Markdown-declared modules in /skills/<team>/; loaded at runtime, no core changes needed
+Two reference skills: java-sast-fixes.md and java-sca-fixes.md
+Skill file structure:
+/skills/
+  <module-name>/
+	<skill-name>.md 	← skill definition + test cases
+	README.md         	← team-specific docs
+Definition of done: Loading a skill file changes agent behaviour without touching any file in /core or /agents.
+
+Phase 2 — Eval Framework & First Test Suites
+Weeks 2
+This phase begins the 60% eval focus. No new agent features until Phase 3.
+Milestone 2.1 Eval harness design
+Deliverables:
+Eval case schema: bug_description, repo_snapshot, expected_patch, severity_label, difficulty, vuln_class, language
+pytest-based runner: replays cases, compares outputs, emits JSON results
+Scoring rubrics:
+Research: did the agent identify the correct file(s) and relevant references?
+Plan: does the plan target the correct lines and propose the right fix type?
+Implement: does the patch compile, pass lint, and match expected diff at ≥80% AST similarity?
+eval report generated from results (one command, no manual steps)
+Definition of done: evals/ runs against 1 dummy case and produces a report.
+
+Milestone 2.2 Golden dataset: 20 security bug cases
+Coverage matrix:
+Vuln class
+SAST
+XSS
+SCA
+Secrets in code
+IDOR
+
+Rules:
+Sources: CVE examples, OWASP test cases, synthetic repos — no real customer code
+Each case: buggy file(s), ground-truth fix, difficulty label
+Cases are immutable once used in a baseline run — never edit, only add
+Definition of done: 20 cases in /evals/golden/, all passing schema validation.
+
+Milestone 2.3 Sub-agent unit evals
+Per-agent eval targets (baseline):
+Agent
+Metric
+Target
+Research
+Correct file identified
+≥85%
+Plan
+Correct line range targeted
+≥75%
+Implement
+Patch compiles + passes pipeline checks (build, deployment, test coverage)
+≥80%
+
+Gate: All three agents must hit baseline before integration testing begins.
+Definition of done: Unit eval suite runs in CI; failing an agent's gate blocks the workflow.
+
+Milestone 2.4 End-to-end integration evals (first pass)
+Deliverables:
+Full pipeline run on first 10 golden cases; all intermediate outputs logged
+Failure mode taxonomy — categorise every failure:
+WRONG_FILE — agent targeted the wrong file
+WRONG_FIX_TYPE — correct file, incorrect fix approach
+BROKEN_SYNTAX — correct intent, invalid code generated
+PARTIAL_FIX — fix applied but vulnerability not fully closed
+NO_OUTPUT — agent timed out or errored
+Baseline scorecard published (pass rate by vuln class, language, difficulty)
+Definition of done: Baseline scorecard committed to repo; failure taxonomy documented in /docs/failure-modes.md.
+
+Phase 3 — Iteration, Adversarial Evals & Skills Hardening
+Weeks 2–3
+Milestone 3.1 Fix iteration from eval failures
+Process:
+Address the top 3 failure categories from the taxonomy before adding any new features
+Tune orchestrator routing if agents are being invoked in the wrong order or skipped
+Improve system prompts per sub-agent based on observed output patterns
+Re-run full eval suite after each fix; score must not regress on previously passing cases
+Definition of done: Top 3 failure modes reduced by ≥50% from baseline; no regressions.
+
+Milestone 3.2 Adversarial & edge-case evals
+Test scenarios:
+Scenario
+Expected behaviour
+Vague bug description
+Agent asks for clarification or graceful fail
+Multi-file cascading fix (3+ files)
+Plan agent handles dependency ordering
+Large repo (500+ files)
+Research agent does not hallucinate file paths
+Cursor CLI returns error
+Graceful degradation, not silent failure
+Duplicate/conflicting skills
+Registry rejects at load time with clear error
+
+Definition of done: All 5 adversarial scenarios have test cases in /evals/adversarial/ with defined pass criteria.
+
+Milestone 3.3 Skills system hardening
+Deliverables:
+Skill validation at load time: malformed .md cannot crash the core agent (sandboxed loading)
+Skill-level eval hooks: each skill's test_cases run as part of the standard eval suite
+Third reference skill: java-dependency-vulns.md (stress-tests API surface)
+Skills authoring guide at /docs/skills-authoring.md — the primary artifact for teams wanting to extend the agent
+Skills authoring guide sections:
+Skill YAML schema reference
+Writing trigger_conditions (when does this skill activate?)
+Writing prompt_templates (how to override agent prompts)
+Declaring test_cases alongside your skill
+Allowed file globs (scope limiting per team)
+Publishing a skill (PR checklist)
+Definition of done: A developer unfamiliar with the codebase can write and test a new skill using only the authoring guide.
+
+Milestone 3.4 Expand dataset to 40 cases + full re-eval
+New case focus: skewed toward previously failing categories (edge cases, multi-file, hard difficulty)
+Scorecard targets (production thresholds):
+Difficulty
+Pass rate target
+Easy
+≥ 85%
+Medium
+≥ 70%
+Hard
+≥ 50%
+
+Deliverables:
+40 golden cases in /evals/golden/
+Full scorecard by vuln class × language × difficulty
+Scorecard shared with stakeholders as first production-readiness checkpoint
+Definition of done: All targets met, or a documented decision to accept gaps with a remediation plan.
+
+Phase 4 — Production Hardening, Docs & Launch Readiness
+Week 3
+Milestone 4.1 Observability & error handling
+Structured log fields (every LLM call):
+{
+  "trace_id": "...",
+  "agent_name": "research|plan|implement|orchestrator",
+  "input_hash": "...",
+  "output_hash": "...",
+  "latency_ms": 1234,
+  "tokens_used": 850,
+  "cost_usd": 0.012,
+  "status": "success|error|timeout"
+}
+Reliability controls:
+Exponential backoff + retry on LLM API errors
+Hard timeout per sub-agent (default: 120s, configurable per skill)
+Per-run token budget enforcement (hard cap; rogue loops cannot exceed it)
+Dry-run mode: produces diff but never writes to disk
+Definition of done: A full bug-fix run produces a single traceable log stream with all four agent calls linked by trace_id.
+
+Milestone 4.2 CI/CD eval gate + regression suite
+CI structure:
+Trigger
+Suite
+Cases
+Time budget
+Block on fail?
+Every PR
+Smoke (fast)
+10
+< 5 min
+Yes (>5% drop)
+Every merge
+Regression (full)
+40
+< 30 min
+Yes
+Nightly
+Full + adversarial
+50+
+< 60 min
+Alert only
+
+Baseline management:
+Baseline scores stored in /evals/baselines/current.json in the repo
+PRs that regress the smoke score by more than 5% are auto-blocked with a report comment
+Merges that improve scores update the baseline automatically
+Skill regression check: Loading a new skill file must not change scores on existing test cases.
+Definition of done: A PR intentionally regressing an eval is auto-blocked by CI.
+
+Milestone 4.3 Security review & human-in-the-loop controls
+HITL gates:
+Condition
+Required action
+CVSS severity ≥ 8.0
+Human approval before patch is committed
+File outside team's scope
+Hard block; Implement agent cannot proceed
+Implement agent uncertainty
+Flag for review; do not auto-commit
+
+Scope control (per team skill):
+allowed_file_globs:
+  - "src/auth/**"
+  - "src/api/middleware/**"
+  - "!src/api/middleware/vendor/**"
+Audit log: Immutable log of every patch attempt — actor, timestamp, diff hash, approval status. Stored separately from application logs.
+Definition of done: A CVSS ≥ 8 test case triggers the approval gate and does not commit without it.
+
+Milestone 4.4 Final eval run, docs & launch
+Final eval checklist:
+[ ] 40-case full suite passes all production thresholds
+[ ] Adversarial suite passes all defined scenarios
+[ ] Skill regression check passes for all 3 reference skills
+[ ] CI gates are green on main
+Documentation deliverables:
+[ ] README.md — setup, quickstart, architecture overview
+[ ] /docs/architecture.md — agent design, context flow, decision logic
+[ ] /docs/skills-authoring.md — team extensibility guide (from Milestone 3.3)
+[ ] /docs/evals.md — how to run evals, add cases, interpret the scorecard
+[ ] /docs/onboarding-<team>.md — per-team checklist template
+Launch demo: Fix one real low-risk bug end-to-end in front of stakeholders, with full trace log visible. This is the acceptance test, not a presentation.
+Eval suite handoff: The suite must be runnable by any team member with a single command:
+make evals    	# full suite
+make evals-smoke  # PR gate subset
+make evals-report # open HTML report
+

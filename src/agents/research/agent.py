@@ -7,8 +7,8 @@ from pathlib import Path
 
 from langsmith import traceable
 
-from src.agents.research.deep_runner import run_research
 from src.agents.research.memory import InMemoryResearchMemory
+from src.agents.research.research_agent import ResearchAgent
 from src.agents.research.tools.file_discovery import extract_anchors
 from src.core.config import settings
 from src.core.logging import get_logger
@@ -19,6 +19,7 @@ _log = get_logger("research")
 
 
 def _report_to_output(report: ResearchReport) -> ResearchOutput:
+    """Convert the Research Agent's report into the pipeline's standard output format"""
     return ResearchOutput(
         ticket_id=report.ticket_id,
         research_summary=report.research_summary,
@@ -33,6 +34,7 @@ def _report_to_output(report: ResearchReport) -> ResearchOutput:
 
 
 def _negative_finding_report(ticket_id: str, summary: str, error: str, module: str = "unknown") -> ResearchOutput:
+    """Whenever the Research Agent crashes, instead of returning nothing, this function creates a valid ResearchOutput."""
     return ResearchOutput(
         ticket_id=ticket_id,
         research_summary=summary,
@@ -93,14 +95,14 @@ def research_node(state: AgentState) -> AgentState:
             ).strip()
         anchors = extract_anchors(ticket, user_prompt)
         memory.record("anchors", {"anchors": anchors})
-        report = run_research(
+        report = ResearchAgent(repo_path).run(
             ticket=ticket,
-            repo_path=repo_path,
             user_prompt=user_prompt,
             repo_profile=state.get("repo_profile"),
             anchors=anchors,
             memory=memory,
         )
+
         research_output = _report_to_output(report)
     except Exception as e:
         research_output = _negative_finding_report(

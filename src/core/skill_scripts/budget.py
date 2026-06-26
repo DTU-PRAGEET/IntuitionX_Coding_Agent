@@ -7,11 +7,16 @@ import argparse
 import json
 import os
 import sys
+import threading
+import time
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 DEFAULT_BUDGET_DIR = Path(os.environ.get("AGENT_BUDGET_DIR", "/tmp"))
+_DEBUG_LOG = Path(__file__).resolve().parents[3] / ".cursor" / "debug-bf6ef2.log"
+_path_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 
 
 @dataclass
@@ -45,20 +50,74 @@ def _budget_path(agent: str, thread_id: str, budget_dir: Path | None = None) -> 
     return root / f"agent_budget_{agent}_{thread_id}.json"
 
 
+def _lock_for(path: Path) -> threading.Lock:
+    return _path_locks[str(path.resolve())]
+
+
+def _debug_log(hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
+    # #region agent log
+    try:
+        payload = {
+            "sessionId": "bf6ef2",
+            "runId": "budget",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with _DEBUG_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, default=str) + "\n")
+    except OSError:
+        pass
+    # #endregion
+
+
 class BudgetTracker:
     def __init__(self, agent: str, thread_id: str, hard_limit: int, budget_dir: Path | None = None):
         self._path = _budget_path(agent, thread_id, budget_dir)
         self._state = BudgetState(agent=agent, thread_id=thread_id, hard_limit=hard_limit)
 
     def init(self) -> dict[str, Any]:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(self._state.to_dict(), indent=2), encoding="utf-8")
-        return self._state.to_dict()
+        with _lock_for(self._path):
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._write_state(self._state)
+            result = self._state.to_dict()
+        _debug_log("H2", "budget.py:init", "budget_initialized", {"path": str(self._path), **result})
+        return result
 
-    def _load(self) -> BudgetState:
+    def _read_raw(self) -> str:
+        return self._path.read_text(encoding="utf-8") if self._path.exists() else ""
+
+    def _load_unlocked(self) -> BudgetState:
         if not self._path.exists():
             raise FileNotFoundError(f"Budget not initialized: {self._path}")
-        data = json.loads(self._path.read_text(encoding="utf-8"))
+        raw = self._read_raw().strip()
+        if not raw:
+            _debug_log(
+                "H1",
+                "budget.py:_load_unlocked",
+                "empty_budget_file",
+                {"path": str(self._path), "thread": threading.current_thread().name},
+            )
+            raise json.JSONDecodeError("Empty budget file", raw, 0)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            _debug_log(
+                "H1",
+                "budget.py:_load_unlocked",
+                "corrupt_budget_file",
+                {
+                    "path": str(self._path),
+                    "thread": threading.current_thread().name,
+                    "raw_len": len(raw),
+                    "raw_preview": raw[:80],
+                    "error": str(exc),
+                },
+            )
+            raise
         return BudgetState(
             agent=data["agent"],
             thread_id=data["thread_id"],
@@ -66,11 +125,30 @@ class BudgetTracker:
             calls_made=data.get("calls_made", 0),
         )
 
+    def _write_state(self, state: BudgetState) -> None:
+        tmp = self._path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state.to_dict(), indent=2), encoding="utf-8")
+        tmp.replace(self._path)
+
     def check_and_decrement(self) -> dict[str, Any]:
-        state = self._load()
-        state.calls_made += 1
-        self._path.write_text(json.dumps(state.to_dict(), indent=2), encoding="utf-8")
-        return state.to_dict()
+        with _lock_for(self._path):
+            _debug_log(
+                "H1",
+                "budget.py:check_and_decrement",
+                "budget_lock_acquired",
+                {"path": str(self._path), "thread": threading.current_thread().name},
+            )
+            state = self._load_unlocked()
+            state.calls_made += 1
+            self._write_state(state)
+            result = state.to_dict()
+        _debug_log(
+            "H1",
+            "budget.py:check_and_decrement",
+            "budget_decremented",
+            {"path": str(self._path), "calls_made": result["calls_made"]},
+        )
+        return result
 
 
 def init_budget(

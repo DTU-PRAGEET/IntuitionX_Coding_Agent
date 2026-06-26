@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 
 from src.agents.planner.agent import (
+    _coerce_execution_plan_payload,
     build_planner_prompt,
     load_research_report,
     run_planner,
@@ -76,6 +77,68 @@ def test_planner_tools_read_grep_find_only(tmp_path):
         assert "bash" not in names
     finally:
         registry.dispose()
+
+
+def test_coerce_fills_missing_root_hypothesis_risk_level_step_ids():
+    """Reproduce SPACE-129068 failure: LLM omitted root_hypothesis, risk_level, step_id."""
+    report = load_research_report(FIXTURE_REPORT)
+    llm_payload = {
+        "ticket_id": "SEC-4421",
+        "files_to_change": ["sqli/dao/student.py"],
+        "execution_steps": [
+            {
+                "action": "RUN_TESTS",
+                "where": ".",
+                "what": "validate plan",
+                "why": "preflight",
+                "validate": "exits 0",
+            },
+            {
+                "action": "READ",
+                "where": "sqli/dao/student.py",
+                "what": "read file",
+                "why": "ground patch",
+                "validate": "exists",
+            },
+        ],
+        "flags": [],
+    }
+    coerced = _coerce_execution_plan_payload(llm_payload, report, str(REPO_ROOT))
+    plan = ExecutionPlan.model_validate(coerced)
+    assert plan.root_hypothesis
+    assert plan.risk_level in ("low", "medium", "high")
+    assert [s.step_id for s in plan.execution_steps] == [1, 2]
+
+
+def test_run_planner_accepts_llm_output_missing_required_top_level_fields(tmp_path):
+    """End-to-end: run_planner coerces omitted schema fields before validation."""
+    report = load_research_report(FIXTURE_REPORT)
+    demo = tmp_path / "sqli" / "dao" / "student.py"
+    demo.parent.mkdir(parents=True)
+    demo.write_text("SELECT 1\n", encoding="utf-8")
+    rel = str(demo.relative_to(tmp_path))
+    report.affected_files[0].path = rel
+
+    payload = {
+        "ticket_id": "SEC-4421",
+        "files_to_change": [rel],
+        "execution_steps": [
+            {
+                "action": "READ",
+                "where": rel,
+                "what": "Read file",
+                "why": "Confirm",
+                "validate": "exists",
+            }
+        ],
+        "flags": [],
+    }
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = AIMessage(content=json.dumps(payload))
+
+    plan = run_planner(report, str(tmp_path), llm=mock_llm, verify=False)
+    assert plan.root_hypothesis
+    assert plan.execution_steps[0].step_id == 1
 
 
 def test_build_planner_prompt_includes_research():
@@ -145,7 +208,7 @@ def test_run_planner_rejects_invalid_llm_output(tmp_path):
     mock_llm = MagicMock()
     mock_llm.invoke.return_value = AIMessage(content='{"ticket_id": "SEC-4421"}')
 
-    with pytest.raises(ValueError, match="schema validation"):
+    with pytest.raises((ValueError, RuntimeError), match="empty execution_steps|schema validation"):
         run_planner(report, str(tmp_path), llm=mock_llm, verify=False)
 
 

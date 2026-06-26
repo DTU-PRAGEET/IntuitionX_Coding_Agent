@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_skill_directory_layout_for_deepagents():
-    assert (SKILL_DIR / "SKILL.md").is_file()
+    assert (SKILL_DIR / "research.md").is_file()
     assert (SKILL_DIR / "references" / "security_patterns.md").is_file()
     manifest = load_skill_manifest_safe()
     assert manifest.name == "research"
@@ -40,6 +40,27 @@ def test_build_research_user_message_excludes_skill_body(tmp_path):
     assert "## CONTEXT" in message
     assert "Research Agent" not in message  # SKILL.md body title
     assert "Workflow (Follow In Order)" not in message
+
+
+def test_build_research_user_message_normalizes_repo_path(tmp_path):
+    ticket = mock_security_jira_ticket("SEC-NORM")
+    memory = InMemoryResearchMemory()
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    message = build_research_user_message(
+        ticket,
+        str(nested),
+        None,
+        [],
+        "",
+        memory,
+    )
+
+    resolved = str(nested.resolve())
+    assert resolved in message
+    assert '"exists": true' in message.lower() or '"exists": True' in message
 
 
 @patch("deepagents.create_deep_agent")

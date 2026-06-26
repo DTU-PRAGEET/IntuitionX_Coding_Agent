@@ -147,7 +147,7 @@ class AffectedFile(BaseModel):
 class ResearchReport(BaseModel):
     ticket_id: str
     research_summary: str
-    hypotheses: list[Hypothesis] = Field(min_length=1, max_length=3)
+    hypotheses: list[Hypothesis] = Field(min_length=1, max_length=10)
     affected_files: list[AffectedFile]
     affected_modules: list[str]
     module_blast_radius: list[str]
@@ -156,6 +156,54 @@ class ResearchReport(BaseModel):
         "code_bug", "feature", "environment", "config", "unknown"
     ]
     flags: list[str] = Field(default_factory=list)
+
+
+FixType = Literal[
+    "parameterize_sql",
+    "sanitize_input",
+    "auth_check",
+    "dependency_upgrade",
+    "secrets_removal",
+    "xss_encoding",
+    "other",
+]
+
+
+class FixTarget(BaseModel):
+    file_path: str
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    fix_type: FixType
+    rationale: str
+
+
+class FixPlan(BaseModel):
+    ticket_id: str
+    root_cause: str
+    primary_fix_type: FixType
+    targets: list[FixTarget] = Field(default_factory=list)
+    files_to_change: list[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    flags: list[str] = Field(default_factory=list)
+
+
+class PatchResult(BaseModel):
+    """Typed output from the Implementation SubAgent after Cursor edits."""
+
+    ticket_id: str
+    status: Literal["success", "partial", "failed", "dry_run"]
+    changed_files: list[str] = Field(default_factory=list)
+    expected_files: list[str] = Field(default_factory=list)
+    git_diff_summary: str = ""
+    git_diff_full: str = ""
+    worktree_path: str = ""
+    branch_name: str = ""
+    mr_url: str = ""
+    compilation_status: str = "SKIPPED"
+    flags: list[str] = Field(default_factory=list)
+    cursor_status: str = ""
+    errors: list[str] = Field(default_factory=list)
 
 
 class ExecutionStep(BaseModel):

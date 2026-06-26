@@ -11,23 +11,22 @@ from langchain_core.messages import AIMessage
 
 from src.agents.research.memory import InMemoryResearchMemory, ResearchMemoryStore
 from src.agents.research.tools.builder import build_research_tool_registry
-from src.agents.research.tools.file_discovery import rank_candidate_files
+from src.agents.research.tools.repo_profile import bootstrap_repo_context
 from src.core.logging import configure_logging, get_logger
 from src.core.runner_utils import llm_content, parse_llm_json
 from src.core.skill_scripts.budget import init_budget
-from src.core.skill_scripts.file_index import build_file_index
 from src.core.token_usage import record_messages_usage
 from src.core.schemas import ResearchReport, Skill
+from src.core.skill_registry import default_skills_root, module_skills_dir
 from src.core.skills_loader import load_skill_manifest, select_research_skill
 from src.core.state import JiraTicket, RepoProfile
+from src.integrations.cursor.gateway import CursorGateway, get_cursor_gateway
 
 _log = get_logger("research_deep")
 
-# deepagents expects skills/research/SKILL.md (skill name matches directory)
-SKILLS_ROOT = Path(__file__).parent / "skills"
-SKILL_DIR = SKILLS_ROOT / "research"
+SKILLS_ROOT = default_skills_root()
+SKILL_DIR = module_skills_dir("research", SKILLS_ROOT)
 
-# Exclude deepagents FS tools except read_file (needed for skill progressive disclosure)
 DEEPAGENTS_FS_TOOLS = frozenset(
     {"ls", "write_file", "edit_file", "glob", "grep", "execute"}
 )
@@ -36,7 +35,7 @@ DEEPAGENTS_SKILL_SOURCE = "/"
 
 
 def _register_research_harness_profile(tool_budget: int) -> None:
-    """Hide deepagents built-in filesystem tools — we use src/tools primitives for repo work."""
+    """Hide deepagents built-in filesystem tools — repo nav goes through cursor_search."""
     try:
         from deepagents import HarnessProfile, register_harness_profile
 
@@ -45,7 +44,8 @@ def _register_research_harness_profile(tool_budget: int) -> None:
             HarnessProfile(
                 excluded_tools=DEEPAGENTS_FS_TOOLS,
                 system_prompt_suffix=(
-                    "Use ONLY the provided read/grep/find/bash/ls tools for repository investigation. "
+                    "Use cursor_search for ALL repository investigation. "
+                    "Do NOT traverse files directly with read/grep/find/ls/bash. "
                     "Use read_file only for loading skill files listed in the Skills System section. "
                     f"Never call write_file or edit_file. Max {tool_budget} tool iterations."
                 ),
@@ -56,9 +56,8 @@ def _register_research_harness_profile(tool_budget: int) -> None:
 
 
 def _research_system_prompt(tool_budget: int) -> str:
-    """Minimal user instructions — skill body loads via deepagents progressive disclosure."""
     return (
-        "Investigate the Jira ticket using the research skill and repository tools. "
+        "Investigate the Jira ticket using the research skill and cursor_search. "
         f"Hard limit: {tool_budget} tool calls. "
         "Return a complete ResearchReport JSON when completion criteria are met."
     )
@@ -71,7 +70,7 @@ def _build_skills_backend():
 
 
 def _build_deep_agent(llm: BaseChatModel, tools: list, tool_budget: int):
-    """Create deep agent with skills= progressive disclosure (Python 3.11+)."""
+    """It creates the actual Deep Agent."""
     from deepagents import create_deep_agent
 
     _register_research_harness_profile(tool_budget)
@@ -84,8 +83,11 @@ def _build_deep_agent(llm: BaseChatModel, tools: list, tool_budget: int):
         response_format=ResearchReport,
     )
 
-
+# print("**********************************************************")
+# print("**********************************************************")
+# print("**********************************************************")
 def _build_react_fallback(llm: BaseChatModel, tools: list, tool_budget: int):
+    """If DeepAgents isn't installed or ImportError, it falls back to create_react_agent(...) using LangGraph."""
     from langgraph.prebuilt import create_react_agent
 
     from src.core.prompt_builder import PromptBuilder
@@ -114,16 +116,7 @@ def build_research_agent(llm: BaseChatModel, tools: list, tool_budget: int):
 
 
 def resolve_research_skill(ticket: JiraTicket) -> tuple[Skill | None, str]:
-    """Select ticket-type supplemental skill (CLI reporting / ReAct fallback)."""
-    return select_research_skill(ticket, SKILLS_ROOT)
-
-
-def _format_file_hints(repo_path: str, anchors: list[str], repo_profile: RepoProfile | None) -> str:
-    ranked = rank_candidate_files(repo_path, anchors, repo_profile)
-    if not ranked:
-        return ""
-    lines = [f"- {path} (score={score:.0f}, {reason})" for path, score, reason in ranked[:5]]
-    return "\n".join(lines)
+    return select_research_skill(ticket, SKILL_DIR)
 
 
 def _is_mock_security_ticket(ticket: JiraTicket) -> bool:
@@ -134,15 +127,42 @@ def _is_mock_security_ticket(ticket: JiraTicket) -> bool:
     return any("mock security" in str(flag).lower() for flag in flags)
 
 
-def _file_index_summary(repo_path: str) -> dict[str, Any]:
-    index = build_file_index(repo_path)
-    top_paths = [p["path"] for p in index.get("paths", [])[:30]]
+_SECURITY_ENRICHMENT_KEYS = (
+    "severity",
+    "vulnerability_type",
+    "repository",
+    "target_branch",
+)
+_ENRICHMENT_DESCRIPTION_MAX = 800
+
+
+def _compact_repo_profile(repo_profile: RepoProfile | None) -> dict[str, object] | None:
+    """Repo facts research needs to navigate — drops root_path and package_roots noise."""
+    if not repo_profile:
+        return None
     return {
-        "total_files": index.get("total_files", 0),
-        "by_extension": index.get("by_extension", {}),
-        "sample_paths": top_paths,
-        "truncated": index.get("truncated", False),
+        "repo_type": repo_profile.get("repo_type", "unknown"),
+        "modules": list(repo_profile.get("modules") or [])[:8],
     }
+
+
+def _compact_security_enrichment(enrichment: dict | None) -> dict[str, object]:
+    """Keep the security fields that steer the search; drop verbose internal metadata."""
+    if not enrichment:
+        return {}
+    compact: dict[str, object] = {
+        key: enrichment[key] for key in _SECURITY_ENRICHMENT_KEYS if enrichment.get(key)
+    }
+    description = enrichment.get("description")
+    if description:
+        text = str(description).strip()
+        if len(text) > _ENRICHMENT_DESCRIPTION_MAX:
+            text = text[: _ENRICHMENT_DESCRIPTION_MAX - 3].rstrip() + "..."
+        compact["description"] = text
+    flags = enrichment.get("flags")
+    if flags:
+        compact["flags"] = list(flags)[:5]
+    return compact
 
 
 def build_research_user_message(
@@ -152,24 +172,24 @@ def build_research_user_message(
     anchors: list[str],
     user_prompt: str,
     memory: ResearchMemoryStore,
-    *,
-    file_index: dict[str, Any] | None = None,
 ) -> str:
-    """Runtime context only — skills load via deepagents metadata + read_file on demand."""
+    """Runtime context — skills load via deepagents metadata + read_file on demand."""
     enrichment = (ticket.get("ticket_history_summary") or {}).get("security_enrichment", {})
     memory_snippet = memory.to_context_snippet()
+    resolved_repo = str(Path(repo_path).resolve())
+    bootstrap = bootstrap_repo_context(resolved_repo)
     context = {
         "ticket_id": ticket.get("issue_id"),
         "title": ticket.get("title"),
         "module": ticket.get("module"),
         "problem_statement": ticket.get("problem_statement"),
         "labels": ticket.get("labels", []),
-        "repo_path": repo_path,
-        "repo_profile": dict(repo_profile) if repo_profile else None,
+        "repo_path": resolved_repo,
+        "repo_bootstrap": bootstrap,
+        "repo_profile": _compact_repo_profile(repo_profile),
         "anchors": anchors,
         "user_prompt": user_prompt,
-        "security_enrichment": enrichment,
-        "file_index": file_index or _file_index_summary(repo_path),
+        "security_enrichment": _compact_security_enrichment(enrichment),
     }
 
     parts: list[str] = [f"## CONTEXT\n{json.dumps(context, indent=2, default=str)}\n"]
@@ -177,17 +197,12 @@ def build_research_user_message(
     if memory_snippet:
         parts.append(f"\n## RUN MEMORY\n{memory_snippet}")
 
-    if not _is_mock_security_ticket(ticket):
-        file_hints = _format_file_hints(repo_path, anchors, repo_profile)
-        if file_hints:
-            parts.append(f"\n## PRE-RANKED FILE CANDIDATES\n{file_hints}\n")
-
     if _is_mock_security_ticket(ticket):
         parts.append(
             "\n## MOCK DEMO HINT\n"
-            "This is a local mock-security exercise. The vulnerable demo file is "
-            "`src/agents/planner/fixtures/demo/UserSearchController.py` (Python, not Java). "
-            "Read it, confirm the SQLi pattern, then return the ResearchReport.\n"
+            "This is a local mock-security exercise. Use cursor_search to locate the vulnerable "
+            "demo file (likely under src/agents/planner/fixtures/demo/). "
+            "Confirm the SQLi pattern, then return the ResearchReport.\n"
         )
 
     return "".join(parts)
@@ -200,18 +215,9 @@ def build_research_prompt(
     anchors: list[str],
     user_prompt: str,
     memory: ResearchMemoryStore,
-    *,
-    file_index: dict[str, Any] | None = None,
 ) -> str:
-    """Backward-compatible alias — context message without embedded skill body."""
     return build_research_user_message(
-        ticket,
-        repo_path,
-        repo_profile,
-        anchors,
-        user_prompt,
-        memory,
-        file_index=file_index,
+        ticket, repo_path, repo_profile, anchors, user_prompt, memory
     )
 
 
@@ -230,7 +236,6 @@ def _resolve_research_report(result: dict[str, Any]) -> ResearchReport:
 
 
 def _mock_security_fallback_report(ticket: JiraTicket) -> ResearchReport:
-    """Last-resort report so mock-security demos can proceed when the agent loops."""
     demo_path = "src/agents/planner/fixtures/demo/UserSearchController.py"
     return ResearchReport(
         ticket_id=ticket.get("issue_id") or "SEC-4421",
@@ -291,80 +296,18 @@ def run_research(
     anchors: list[str] | None = None,
     llm: BaseChatModel | None = None,
     memory: ResearchMemoryStore | None = None,
+    gateway: CursorGateway | None = None,
+    dry_run: bool = False,
 ) -> ResearchReport:
-    """Run Research Deep Agent loop; internal tool iterations are not exposed to LangGraph."""
-    configure_logging()
-    from src.core.llm import TaskComplexity, get_llm
-    from src.agents.research.tools.file_discovery import extract_anchors
+    """Backward-compatible alias for ResearchAgent.run()."""
+    from src.agents.research.research_agent import ResearchAgent
 
-    memory = memory or InMemoryResearchMemory()
-    anchors = anchors if anchors is not None else extract_anchors(ticket, user_prompt)
-    llm = llm or get_llm(TaskComplexity.HIGH)
-
-    manifest = load_skill_manifest_safe()
-    thread_id = ticket.get("issue_id") or "research"
-    init_budget("research", thread_id, manifest.tool_budget)
-
-    file_index = _file_index_summary(repo_path)
-    memory.record("research_start", {"ticket_id": ticket.get("issue_id"), "repo_path": repo_path})
-    _log.info(
-        "start",
-        ticket_id=ticket.get("issue_id"),
-        repo_path=repo_path,
-        anchors=anchors[:10],
-        tool_budget=manifest.tool_budget,
-        recursion_limit=manifest.recursion_limit,
-        skills_mode="deepagents_progressive",
-    )
-
-    registry, tools = build_research_tool_registry(repo_path)
-    user_message = build_research_user_message(
+    agent = ResearchAgent(repo_path, gateway=gateway, dry_run=dry_run)
+    return agent.run(
         ticket,
-        repo_path,
-        repo_profile,
-        anchors,
-        user_prompt,
-        memory,
-        file_index=file_index,
+        user_prompt=user_prompt,
+        repo_profile=repo_profile,
+        anchors=anchors,
+        llm=llm,
+        memory=memory,
     )
-
-    agent, harness = build_research_agent(llm, tools, manifest.tool_budget)
-    # LangGraph counts one step per model/tools node; deepagents adds skill-load steps.
-    recursion_limit = max(manifest.recursion_limit, manifest.tool_budget * 4 + 8)
-
-    stage = "setup"
-    try:
-        memory.record("agent_invoke", {"harness": harness, "tool_count": len(tools)})
-        stage = "agent.invoke"
-        result = agent.invoke(
-            {"messages": [{"role": "user", "content": user_message}]},
-            config={"recursion_limit": recursion_limit},
-        )
-        record_messages_usage("research", result.get("messages", []))
-
-        stage = "_resolve_research_report"
-        report = _resolve_research_report(result)
-        memory.record(
-            "agent_complete",
-            {"response_preview": report.research_summary[:500]},
-        )
-        _log.info("complete", ticket_id=report.ticket_id, harness=harness)
-        return report
-    except Exception as e:
-        from langgraph.errors import GraphRecursionError
-
-        if isinstance(e, GraphRecursionError) and _is_mock_security_ticket(ticket):
-            _log.warning(
-                "recursion_limit_fallback",
-                ticket_id=ticket.get("issue_id"),
-                harness=harness,
-            )
-            memory.record("agent_fallback", {"reason": "recursion_limit", "harness": harness})
-            return _mock_security_fallback_report(ticket)
-        memory.record("agent_error", {"error": str(e), "harness": harness, "stage": stage})
-        _log.exception("failed", error=str(e), harness=harness, stage=stage)
-        raise RuntimeError(
-            f"Research agent failed for ticket={ticket.get('issue_id')!r} repo={repo_path!r}: {e}"
-        ) from e
-    finally:
-        registry.dispose()

@@ -21,14 +21,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def test_get_allowed_tools_research():
     tools = get_allowed_tools("research")
-    assert "read" in tools
+    assert "cursor_search" in tools
     assert "web_search" in tools
+    assert "grep" not in tools
     assert "write" not in tools
 
 
 def test_get_allowed_tools_planner_executor():
     assert get_allowed_tools("planner") == ["read", "grep", "find"]
-    assert get_allowed_tools("executor") == ["write", "edit", "bash", "git_worktree", "mr_create"]
+    assert get_allowed_tools("executor") == ["read", "bash", "git_worktree", "mr_create"]
     assert get_allowed_tools("orchestrator") == []
 
 
@@ -36,8 +37,10 @@ def test_builders_respect_permissions(tmp_path):
     from src.agents.executor.tools.builder import build_executor_tools
     from src.agents.planner.tools.builder import build_planner_tools
     from src.agents.research.tools.builder import build_research_tool_registry
+    from src.integrations.cursor.gateway import DryRunCursorGateway
 
-    r_reg, r_tools = build_research_tool_registry(str(tmp_path))
+    gateway = DryRunCursorGateway(tmp_path)
+    _, r_tools = build_research_tool_registry(str(tmp_path), gateway=gateway)
     p_reg, p_names = build_planner_tools(str(tmp_path))
     e_reg, e_names = build_executor_tools(str(tmp_path))
     try:
@@ -47,7 +50,6 @@ def test_builders_respect_permissions(tmp_path):
         for name in get_allowed_tools("research"):
             assert name in r_names
     finally:
-        r_reg.dispose()
         p_reg.dispose()
         e_reg.dispose()
 

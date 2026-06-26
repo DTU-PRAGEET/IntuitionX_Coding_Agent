@@ -23,7 +23,13 @@ from src.core.plan_validation import (
     validate_edit_patches,
     validate_execution_plan,
 )
+from src.core.planner_context import (
+    compact_ticket_for_planner,
+    research_handoff_for_planner,
+    retry_summary_for_planner,
+)
 from src.core.prompt_builder import PromptBuilder
+from src.core.skill_registry import module_skills_dir
 from src.core.repo_snapshot import git_repo_snapshot, log_edit_patch, log_repo_snapshot
 from src.core.schemas import ExecutionPlan, ResearchReport
 from src.core.state import AgentState, PlanOutput
@@ -31,9 +37,45 @@ from src.tools.registry import ToolRegistry
 
 _log = get_logger("planner")
 
-SKILLS_DIR = Path(__file__).parent / "skills"
+SKILLS_DIR = module_skills_dir("planner")
 MAX_VERIFICATION_CALLS = 3
 _INVALID_WHERE = frozenset({".", ""})
+_DEBUG_LOG = Path(__file__).resolve().parents[3] / ".cursor" / "debug-5343a0.log"
+_DEBUG_SESSION = "5343a0"
+
+
+def _planner_debug(hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
+    # #region agent log
+    try:
+        payload = {
+            "sessionId": _DEBUG_SESSION,
+            "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+            "location": location,
+            "message": message,
+            "data": data,
+            "hypothesisId": hypothesis_id,
+            "runId": "pre-fix",
+        }
+        _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with _DEBUG_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, default=str) + "\n")
+    except OSError:
+        pass
+    # #endregion
+
+
+def _missing_plan_fields(data: dict[str, Any]) -> list[str]:
+    missing: list[str] = []
+    for field in ("ticket_id", "root_hypothesis", "risk_level"):
+        if not data.get(field):
+            missing.append(field)
+    steps = data.get("execution_steps") or []
+    if not steps:
+        missing.append("execution_steps")
+    for i, step in enumerate(steps):
+        if isinstance(step, dict) and not step.get("step_id"):
+            missing.append(f"execution_steps[{i}].step_id")
+    return missing
 
 
 def _is_valid_step_path(path: str, repo_path: str) -> bool:
@@ -74,9 +116,35 @@ def _coerce_execution_plan_payload(
 ) -> dict[str, Any]:
     """Fill required ExecutionPlan fields the LLM often omits."""
     out = dict(data)
+    before_missing = _missing_plan_fields(out)
+    _planner_debug(
+        "H1",
+        "planner/agent.py:_coerce_execution_plan_payload",
+        "coerce_before",
+        {"missing": before_missing, "step_count": len(out.get("execution_steps") or [])},
+    )
+
+    out.setdefault("ticket_id", report.ticket_id)
     out.setdefault("implementation_constraints", [])
     out.setdefault("self_healing_notes", [])
     out.setdefault("flags", [])
+    out.setdefault("write_tests", False)
+    out.setdefault("create_files", False)
+
+    if not out.get("root_hypothesis"):
+        if report.hypotheses:
+            out["root_hypothesis"] = report.hypotheses[0].hypothesis
+        else:
+            out["root_hypothesis"] = (report.research_summary or "Fix per research findings")[:500]
+
+    if not out.get("risk_level"):
+        out["risk_level"] = report.architectural_risk
+
+    steps = list(out.get("execution_steps") or [])
+    for i, step in enumerate(steps, start=1):
+        if isinstance(step, dict) and not step.get("step_id"):
+            step["step_id"] = i
+    out["execution_steps"] = steps
 
     files = out.get("files_to_change")
     if not files:
@@ -84,7 +152,15 @@ def _coerce_execution_plan_payload(
         if candidates:
             out["files_to_change"] = list(dict.fromkeys(candidates))
         else:
-            out["files_to_change"] = _step_file_paths(out.get("execution_steps") or [], repo_path)
+            out["files_to_change"] = _step_file_paths(steps, repo_path)
+
+    after_missing = _missing_plan_fields(out)
+    _planner_debug(
+        "H1",
+        "planner/agent.py:_coerce_execution_plan_payload",
+        "coerce_after",
+        {"missing": after_missing, "filled_root_hypothesis": bool(out.get("root_hypothesis")), "filled_risk_level": out.get("risk_level")},
+    )
     return out
 
 
@@ -132,6 +208,8 @@ def _validate_plan_executable(plan: ExecutionPlan, report: ResearchReport, repo_
         raise ValueError("Planner produced empty execution_steps")
     for step in plan.execution_steps:
         where = step.where or step.file
+        if step.action == "RUN_TESTS":
+            continue
         if not _is_valid_step_path(where, repo_path):
             raise ValueError(
                 f"Planner step {step.step_id} has invalid where={where!r} "
@@ -146,13 +224,25 @@ def build_planner_prompt(
     routing_route: str = "FULL",
     previous_attempts: list[dict[str, Any]] | None = None,
     gate_feedback: str | None = None,
+    ticket: dict[str, Any] | None = None,
+    git_target_branch: str | None = None,
+    repo_type: str | None = None,
 ) -> str:
-    context = {
-        "research_output": report.model_dump(),
-        "repo_path": repo_path,
+    context: dict[str, Any] = {
+        "research_output": research_handoff_for_planner(report),
+        "repository": {
+            "repo_path": repo_path,
+            "target_branch": git_target_branch,
+            "repo_type": repo_type,
+        },
         "routing_route": routing_route,
-        "previous_attempts": previous_attempts or [],
     }
+    compact_ticket = compact_ticket_for_planner(ticket)
+    if compact_ticket:
+        context["ticket"] = compact_ticket
+    retry_summary = retry_summary_for_planner(previous_attempts)
+    if retry_summary:
+        context["retry_summary"] = retry_summary
     if gate_feedback:
         context["gate_feedback"] = gate_feedback
     file_contents = _affected_file_contents(report, repo_path)
@@ -162,7 +252,9 @@ def build_planner_prompt(
         context,
         include_references=False,
         extra_instructions=(
-            "Produce the ExecutionPlan JSON with canonical fields on every step: "
+            "Produce the ExecutionPlan JSON with required top-level fields: "
+            "ticket_id, root_hypothesis, risk_level (low|medium|high), files_to_change, "
+            "execution_steps. Every step MUST include step_id (1-based), action, "
             "why, where, what, validate. Include top-level files_to_change listing "
             "every affected file path that will be READ or EDIT. "
             "Use actions READ|EDIT|VERIFY|RUN_TESTS only. "
@@ -420,6 +512,9 @@ def run_planner(
     routing_route: str = "FULL",
     previous_attempts: list[dict[str, Any]] | None = None,
     gate_feedback: str | None = None,
+    ticket: dict[str, Any] | None = None,
+    git_target_branch: str | None = None,
+    repo_type: str | None = None,
     llm: BaseChatModel | None = None,
     verify: bool = True,
 ) -> ExecutionPlan:
@@ -434,6 +529,9 @@ def run_planner(
         routing_route=routing_route,
         previous_attempts=previous_attempts,
         gate_feedback=gate_feedback,
+        ticket=ticket,
+        git_target_branch=git_target_branch,
+        repo_type=repo_type,
     )
 
     registry: ToolRegistry | None = None
@@ -538,6 +636,7 @@ def planner_node(state: AgentState) -> AgentState:
         }
 
     repo_path = state.get("repo_path") or "."
+    repo_profile = state.get("repo_profile") or {}
     gate_feedback = _latest_gate_feedback(state, "PLANNING")
     if gate_feedback:
         _log.info("rerun", gate="PLANNING", feedback_preview=gate_feedback[:200])
@@ -548,6 +647,9 @@ def planner_node(state: AgentState) -> AgentState:
             routing_route=state.get("routing_route") or "FULL",
             previous_attempts=state.get("previous_attempts"),
             gate_feedback=gate_feedback,
+            ticket=state.get("jira_ticket"),
+            git_target_branch=state.get("git_target_branch"),
+            repo_type=repo_profile.get("repo_type"),
         )
         plan_output = _plan_to_output(plan)
     except Exception as e:

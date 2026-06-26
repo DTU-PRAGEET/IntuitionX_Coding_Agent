@@ -17,14 +17,16 @@ from src.core.schemas import RoutingDecision
 from src.core.state import AgentState, JiraTicket
 from src.core.tracing import PROMPT_VERSIONS, apply_trace_metadata, sync_trace_context_from_state
 from src.core.prompt_builder import PromptBuilder
+from src.core.orchestrator_context import build_orchestrator_routing_context
 from src.core.plan_validation import validate_execution_plan
+from src.core.skill_registry import module_skills_dir
 from src.memory.cache import get_failed_attempts
 from src.agents.orchestrator.tools.jira import fetch_jira_ticket, is_ticket_done, mock_security_jira_ticket
 from src.agents.research.tools.repo_profile import profile_repository
 
 _log = get_logger("orchestrator")
 
-SKILLS_DIR = Path(__file__).parent / "skills"
+SKILLS_DIR = module_skills_dir("orchestrator")
 
 
 def _resolve_repo_path(state: AgentState) -> tuple[str | None, str | None]:
@@ -58,42 +60,19 @@ def run_orchestrator_routing(
     """Single-turn routing decision from orchestrator skills + ticket context."""
     apply_trace_metadata(prompt_version=PROMPT_VERSIONS["orchestrator"])
     llm = llm or get_llm(TaskComplexity.MEDIUM)
-    prompt_state: AgentState = {
-        "jira_ticket_id": ticket["issue_id"],
-        "user_prompt": user_prompt,
-        "context_image": None,
-        "repo_path": repo_path,
-        "git_target_branch": None,
-        "jira_ticket": ticket,
-        "repo_profile": repo_profile,
-        "routing_route": None,
-        "current_phase": "ORCHESTRATOR",
-        "risk_level": None,
-        "exit_message": None,
-        "research_output": None,
-        "plan_output": None,
-        "execution_output": None,
-        "human_gates": [],
-        "previous_attempts": previous_attempts or [],
-        "current_error_log": None,
-        "retry_count": 0,
-        "max_retries": 3,
-        "self_healing_cycle_index": 0,
-        "total_tokens_used": 0,
-        "token_budget": settings.token_budget,
-        "messages": [],
-        "session_id": "standalone",
-        "created_at": "",
-        "updated_at": "",
-        "prompt_version": "orch-v1.0",
-        "pending_diff": None,
-        "pending_worktree": None,
-        "pending_branch": None,
-    }
+    routing_context = build_orchestrator_routing_context(
+        ticket,
+        user_prompt=user_prompt,
+        repo_path=repo_path,
+        repo_profile=dict(repo_profile) if repo_profile else None,
+        previous_attempts=previous_attempts,
+        current_phase="ORCHESTRATOR",
+        token_budget=settings.token_budget,
+    )
     routing_prompt, _manifest = PromptBuilder.build(
         "orchestrator",
         SKILLS_DIR,
-        prompt_state,
+        routing_context,
         ticket=ticket,
         include_references=False,
         extra_instructions="Return ONLY the RoutingDecision JSON.",
