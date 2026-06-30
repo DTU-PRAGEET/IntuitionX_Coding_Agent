@@ -5,15 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from src.agents.orchestrator.tools.jira import mock_security_jira_ticket
 from src.agents.research.deep_runner import (
-    DEEPAGENTS_SKILL_SOURCE,
     SKILL_DIR,
-    SKILLS_ROOT,
     build_research_user_message,
     load_skill_manifest_safe,
 )
 from src.agents.research.memory import InMemoryResearchMemory
+from tests.helpers import make_security_ticket
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,7 +25,7 @@ def test_skill_directory_layout_for_deepagents():
 
 
 def test_build_research_user_message_excludes_skill_body(tmp_path):
-    ticket = mock_security_jira_ticket("SEC-4421")
+    ticket = make_security_ticket("SEC-TEST-1")
     memory = InMemoryResearchMemory()
     message = build_research_user_message(
         ticket,
@@ -42,8 +40,28 @@ def test_build_research_user_message_excludes_skill_body(tmp_path):
     assert "Workflow (Follow In Order)" not in message
 
 
+def test_build_research_user_message_inlines_skill_pointer_not_body(tmp_path):
+    """Security skill surfaces as a compact load_skill pointer, never the full body."""
+    ticket = make_security_ticket("SEC-PTR-1")
+    memory = InMemoryResearchMemory()
+    message = build_research_user_message(
+        ticket,
+        str(tmp_path),
+        None,
+        ["search"],
+        "",
+        memory,
+    )
+    assert "## Skills System" in message
+    assert "load_skill" in message
+    assert "/security/injection.md" in message
+    assert "CWE-89" not in message
+    assert "Negative Indicators" not in message
+    assert "Positive Indicators" not in message
+
+
 def test_build_research_user_message_normalizes_repo_path(tmp_path):
-    ticket = mock_security_jira_ticket("SEC-NORM")
+    ticket = make_security_ticket("SEC-NORM")
     memory = InMemoryResearchMemory()
     nested = tmp_path / "nested"
     nested.mkdir()
@@ -64,7 +82,7 @@ def test_build_research_user_message_normalizes_repo_path(tmp_path):
 
 
 @patch("deepagents.create_deep_agent")
-def test_build_deep_agent_uses_skills_and_backend(mock_create):
+def test_build_deep_agent_uses_research_only_stack(mock_create):
     from src.agents.research.deep_runner import _build_deep_agent
     from src.core.schemas import ResearchReport
 
@@ -74,7 +92,7 @@ def test_build_deep_agent_uses_skills_and_backend(mock_create):
 
     mock_create.assert_called_once()
     kwargs = mock_create.call_args.kwargs
-    assert kwargs["skills"] == [DEEPAGENTS_SKILL_SOURCE]
-    assert kwargs["backend"] is not None
+    assert kwargs["subagents"] == []
     assert kwargs["response_format"] is ResearchReport
-    assert "research skill" in kwargs["system_prompt"].lower()
+    assert "load_skill" in kwargs["system_prompt"].lower()
+    assert "skills" not in kwargs

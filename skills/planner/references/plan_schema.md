@@ -26,9 +26,9 @@
 |-------|------|------|--------|-----------|
 | `step_id` | yes | yes | yes | yes |
 | `action` | yes | yes | yes | yes |
-| `where` | yes | yes | yes | yes |
-| `what` | yes | yes | yes | yes |
-| `why` | yes | yes | yes | yes |
+| `file` | yes | yes | yes | yes |
+| `target` | yes | yes | yes | yes |
+| `reason` | yes | yes | yes | yes |
 | `validate` | yes | yes | yes | yes |
 | `old_string` | — | yes* | — | — |
 | `new_string` | — | yes | — | — |
@@ -51,9 +51,9 @@
     {
       "step_id": 1,
       "action": "READ",
-      "where": "src/dao/UserDAO.java",
-      "what": "Read query method before edit",
-      "why": "Ground old_string from disk",
+      "file": "src/dao/UserDAO.java",
+      "target": "Read query method before edit",
+      "reason": "Ground old_string from disk",
       "validate": "File read succeeds",
       "read_start_line": 40,
       "read_end_line": 80
@@ -61,9 +61,9 @@
     {
       "step_id": 2,
       "action": "EDIT",
-      "where": "src/dao/UserDAO.java",
-      "what": "Parameterize SQL query",
-      "why": "Fix SQL injection root cause",
+      "file": "src/dao/UserDAO.java",
+      "target": "Parameterize SQL query",
+      "reason": "Fix SQL injection root cause",
       "validate": "grep shows PreparedStatement",
       "old_string": "exact text from READ",
       "new_string": "replacement with PreparedStatement",
@@ -73,18 +73,18 @@
     {
       "step_id": 3,
       "action": "VERIFY",
-      "where": "src/dao/UserDAO.java",
-      "what": "Confirm fix applied",
-      "why": "Ensure parameterized query present",
+      "file": "src/dao/UserDAO.java",
+      "target": "Confirm fix applied",
+      "reason": "Ensure parameterized query present",
       "validate": "grep for PreparedStatement; !string concatenation in SQL",
       "intent_marker": "PreparedStatement"
     },
     {
       "step_id": 4,
       "action": "RUN_TESTS",
-      "where": "src/test/dao/UserDAOTest.java",
-      "what": "Run unit tests for DAO",
-      "why": "Regression check after SQL fix",
+      "file": "src/test/dao/UserDAOTest.java",
+      "target": "Run unit tests for DAO",
+      "reason": "Regression check after SQL fix",
       "validate": "Tests pass or skip"
     }
   ],
@@ -96,10 +96,25 @@
 }
 ```
 
+## Issue Completeness (1:1 Mapping)
+
+Each entry in `research_output.hypotheses[]` is one **issue**. The plan MUST address every issue:
+
+| Research field | Plan requirement |
+|----------------|------------------|
+| `hypotheses[i].rank` | ≥1 `execution_steps` entry with `reason` citing `hypothesis rank=i` |
+| Issue requiring code change | READ → EDIT → VERIFY on fix file |
+| Issue mitigated elsewhere | READ → VERIFY only (no EDIT) |
+
+**Self-check before emit:** For each hypothesis rank, confirm a corresponding step block exists.
+Never emit EDIT where `old_string == new_string`.
+
 ## Triad Validation Checklist
 
 Before emitting, confirm for each modified file:
-- [ ] READ step immediately before EDIT on same `where`
-- [ ] VERIFY step immediately after EDIT on same `where`
+- [ ] Every hypothesis rank has a corresponding step block
+- [ ] READ step immediately before EDIT on same `file`
+- [ ] VERIFY step immediately after EDIT on same `file`
+- [ ] EDIT `old_string` ≠ `new_string` (identical strings fail validation)
 - [ ] EDIT `intent_marker` is substring of `new_string`
-- [ ] All `where` paths ∈ `files_to_change` (unless `create_files=true`)
+- [ ] All `file` paths ∈ `files_to_change` (unless `create_files=true`)

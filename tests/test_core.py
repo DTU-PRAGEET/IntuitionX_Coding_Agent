@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest.mock import patch
+
+import pytest
 
 from src.core.schemas import ExecutionPlan, ResearchReport, RoutingDecision, ToolResult
 from src.core.state import initial_state
 from src.agents.research.tools.file_discovery import extract_anchors, rank_candidate_files
-from src.agents.orchestrator.tools.jira import _mock_jira_ticket, fetch_jira_ticket, is_ticket_done
+from src.agents.orchestrator.tools.jira import JiraCredentialsError, fetch_jira_ticket, is_ticket_done
 from src.agents.research.tools.repo_profile import profile_repository
+from tests.helpers import make_bug_ticket
 
 _JIRA_ENV_KEYS = ("JIRA_SERVER_URL", "JIRA_EMAIL", "JIRA_API_TOKEN")
 
@@ -32,12 +36,12 @@ def test_initial_state():
     assert s["routing_route"] is None
 
 
-def test_mock_jira_fetch():
+def test_fetch_jira_raises_without_credentials():
     saved = _without_jira_env()
     try:
-        ticket = fetch_jira_ticket("PLAT-9999")
-        assert ticket["issue_id"] == "PLAT-9999"
-        assert not is_ticket_done(ticket)
+        with patch("src.agents.orchestrator.tools.jira.credentials_configured", return_value=False):
+            with pytest.raises(JiraCredentialsError, match="Jira credentials not configured"):
+                fetch_jira_ticket("PLAT-9999")
     finally:
         _restore_env(saved)
 
@@ -53,8 +57,7 @@ def test_repo_profiler_unknown(tmp_path):
 
 
 def test_extract_anchors():
-    ticket = _mock_jira_ticket("PLAT-1")
-    ticket["problem_statement"] = "NullPointer in PaymentService.java:42"
+    ticket = make_bug_ticket("PLAT-1")
     anchors = extract_anchors(ticket, "")
     assert any("PaymentService" in a for a in anchors)
 
@@ -81,8 +84,8 @@ class TestCore(unittest.TestCase):
     def test_initial_state(self):
         test_initial_state()
 
-    def test_mock_jira_fetch(self):
-        test_mock_jira_fetch()
+    def test_fetch_jira_raises_without_credentials(self):
+        test_fetch_jira_raises_without_credentials()
 
     def test_routing_decision_schema(self):
         test_routing_decision_schema()

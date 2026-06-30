@@ -27,6 +27,7 @@ def test_parsed_jira_ticket_accepts_dict_ticket():
         "comments": [],
         "ticket_history_summary": {},
         "flags": [],
+        "vulnerability_category": "",
     }
     parsed = ParsedJiraTicket(
         issue_id=ticket.get("issue_id") or "SCRUM-5",

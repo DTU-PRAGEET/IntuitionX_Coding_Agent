@@ -17,7 +17,7 @@ from src.core.llm import TaskComplexity, get_llm
 from src.core.logging import configure_logging, get_logger
 from src.core.runner_utils import invoke_tracked, llm_content
 from src.core.prompt_builder import PromptBuilder
-from src.core.skill_registry import module_skills_dir
+from src.core.skill_registry import format_domain_skills_for_prompt, module_skills_dir
 from src.core.repo_snapshot import (
     file_content_hash,
     file_git_diff,
@@ -28,30 +28,6 @@ from src.core.repo_snapshot import (
     sha256_text,
     snapshots_match,
 )
-
-# #region agent log
-_DEBUG_LOG_PATH = Path(__file__).resolve().parents[3] / ".cursor" / "debug-196e90.log"
-
-
-def _debug_log(hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
-    import time
-
-    payload = {
-        "sessionId": "196e90",
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    try:
-        with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload) + "\n")
-    except OSError:
-        pass
-
-
-# #endregion
 from src.core.skill_scripts.run_tests import run_tests_for_file
 from src.core.skill_scripts.verify_edit import verify_intent_marker
 from src.core.schemas import ExecutionPlan, ToolResult
@@ -81,8 +57,11 @@ class ExecutionResult(BaseModel):
     plan_deviations: list[str] = []
 
 
-def _load_skills() -> str:
+def _load_skills(ticket: dict[str, Any] | None = None) -> str:
     body, _ = PromptBuilder.build_system_only(SKILLS_DIR)
+    domain = format_domain_skills_for_prompt("executor", ticket)
+    if domain:
+        return f"{body}\n\n{domain}"
     return body
 
 
@@ -99,7 +78,7 @@ def load_execution_plan(path: Path) -> ExecutionPlan:
 
 
 def _step_path(step: dict[str, Any]) -> str:
-    return step.get("where") or step.get("file") or ""
+    return step.get("file") or step.get("where") or ""
 
 
 def _step_to_dict(step: Any) -> dict[str, Any]:
@@ -142,8 +121,8 @@ def _build_edit_instruction(
     parts = [
         f"Ticket: {plan.ticket_id}",
         f"File: {path}",
-        f"Reason: {step.get('why') or step.get('reason', '')}",
-        f"Change: {step.get('change') or step.get('what', '')}",
+        f"Reason: {step.get('reason') or step.get('why', '')}",
+        f"Change: {step.get('change') or step.get('target') or step.get('what', '')}",
     ]
     if step.get("intent_marker"):
         parts.append(f"After edit, file MUST contain intent marker: {step['intent_marker']}")
@@ -189,6 +168,123 @@ def _apply_edit_via_cursor(
     }
     result = gateway.edit(instruction, files=[path], metadata=metadata)
     return _cursor_edit_ok(result)
+
+
+def _edit_steps(plan: ExecutionPlan) -> list[dict[str, Any]]:
+    return [
+        s
+        for s in (_step_to_dict(raw) for raw in plan.execution_steps)
+        if s.get("action") == "EDIT"
+    ]
+
+
+def _independent_edits(plan: ExecutionPlan) -> bool:
+    """True when every file has at most one EDIT (no chained same-file edits).
+
+    Chained edits depend on prior edits already being on disk, so they can only be
+    applied sequentially — batching them into one call would break ordering.
+    """
+    counts: dict[str, int] = {}
+    for step in _edit_steps(plan):
+        path = _step_path(step)
+        counts[path] = counts.get(path, 0) + 1
+    return bool(counts) and all(count == 1 for count in counts.values())
+
+
+def _build_batched_instruction(plan: ExecutionPlan, steps: list[dict[str, Any]]) -> str:
+    parts = [
+        f"Apply ALL of the following edits in a single pass for ticket {plan.ticket_id} "
+        f"(risk={plan.risk_level}).",
+        "Do not stop after the first file — every edit below must be applied.",
+        "",
+    ]
+    for step in steps:
+        path = _step_path(step)
+        old_s = step.get("old_string") or ""
+        new_s = step.get("new_string") or ""
+        parts.append(f"--- [step {step.get('step_id')}] {path} ---")
+        if step.get("reason"):
+            parts.append(f"Reason: {step['reason']}")
+        if step.get("intent_marker"):
+            parts.append(f"After edit, file MUST contain: {step['intent_marker']}")
+        if plan.create_files and not old_s and new_s:
+            parts.append("CREATE new file with content:")
+            parts.append(new_s)
+        else:
+            parts.append("REPLACE the following exact text:")
+            parts.append(old_s)
+            parts.append("WITH:")
+            parts.append(new_s)
+        parts.append("")
+    parts.append("Do not modify unrelated files. Preserve code style.")
+    return "\n".join(parts)
+
+
+def _apply_batched_edits(gateway: CursorGateway, plan: ExecutionPlan) -> tuple[bool, str]:
+    """Send every EDIT step to Cursor in one consolidated call (single-call contract)."""
+    steps = _edit_steps(plan)
+    if not steps:
+        return True, "no edits to batch"
+    files = list(dict.fromkeys(_step_path(s) for s in steps if _step_path(s)))
+    edits = []
+    for step in steps:
+        old_s = step.get("old_string") or ""
+        new_s = step.get("new_string") or ""
+        edits.append(
+            {
+                "step_id": step.get("step_id"),
+                "file": _step_path(step),
+                "old_string": old_s,
+                "new_string": new_s,
+                "create_file": bool(plan.create_files and not old_s and new_s),
+                "intent_marker": step.get("intent_marker"),
+            }
+        )
+    instruction = _build_batched_instruction(plan, steps)
+    metadata = {
+        "ticket_id": plan.ticket_id,
+        "create_files": plan.create_files,
+        "edits": edits,
+    }
+    _log.info("cursor_batched_edit", files=files, edit_count=len(edits))
+    result = gateway.edit(instruction, files=files, metadata=metadata)
+    return _cursor_edit_ok(result)
+
+
+def _accept_batched_edit(
+    registry: ToolRegistry,
+    step: dict[str, Any],
+    plan: ExecutionPlan,
+) -> tuple[bool, str, list[str]]:
+    """Validate that the single batched Cursor call already applied this EDIT — no extra call."""
+    old_s = step.get("old_string")
+    new_s = step.get("new_string")
+    if old_s is not None and new_s is not None and old_s == new_s:
+        return False, (
+            f"EDIT step {step.get('step_id')}: old_string identical to new_string"
+        ), []
+    # Whole-file replacement: if the file now hashes to the planned new_string, the batched
+    # edit applied exactly — accept before line-level completeness (which over-rejects when
+    # unchanged lines are shared between old_string and new_string).
+    path = _step_path(step)
+    if new_s:
+        post_hash = file_content_hash(registry.cwd, path)
+        if post_hash and post_hash == sha256_text(new_s):
+            return True, "batched cursor edit applied (sha match)", []
+    complete, msg, errs = _validate_edit_completeness(registry, step)
+    if complete:
+        return True, "applied via single batched cursor call", []
+    deviations: list[str] = []
+    accepted = _try_accept_by_intent(
+        registry,
+        step,
+        plan,
+        deviations,
+        reason="batched cursor edit satisfied fix intent",
+    )
+    if accepted:
+        return accepted
+    return False, msg, errs
 
 
 def _log_step(step_id: int, action: str, file_path: str) -> None:
@@ -283,6 +379,40 @@ def _meaningful_patch_lines(text: str) -> list[str]:
     return lines
 
 
+def _distinct_patch_lines(planned_old: str, planned_new: str) -> list[str]:
+    """Lines introduced by the patch (in new_string but not old_string)."""
+    old_lines = set(_meaningful_patch_lines(planned_old))
+    return [ln for ln in _meaningful_patch_lines(planned_new) if ln not in old_lines]
+
+
+def _edit_targets_sql(step: dict[str, Any]) -> bool:
+    """True when the planned edit is about SQL/query parameterization."""
+    blob = " ".join(
+        [
+            step.get("old_string") or "",
+            step.get("new_string") or "",
+            step.get("change") or "",
+            step.get("reason") or "",
+            step.get("intent_marker") or "",
+        ]
+    ).lower()
+    markers = (
+        "execute(",
+        "cur.execute",
+        "cursor.execute",
+        " sql",
+        "select ",
+        "insert ",
+        "update ",
+        "delete ",
+        "like ?",
+        "parameteriz",
+        "%s",
+        "values (%s)",
+    )
+    return any(marker in blob for marker in markers)
+
+
 def _read_file_snippet(registry: ToolRegistry, path: str, *, max_lines: int = 200) -> tuple[bool, str]:
     try:
         resolved = _resolve_repo_file(registry, path)
@@ -331,11 +461,13 @@ def _validate_edit_completeness(
     if not ok:
         return False, content, [content]
 
-    missing = [
-        ln for ln in _meaningful_patch_lines(planned_new) if ln not in content
-    ]
+    new_lines = set(_meaningful_patch_lines(planned_new))
+    missing = [ln for ln in new_lines if ln not in content]
+    # Shared context lines appear in both old and new — only flag lines removed by the patch.
     remaining = [
-        ln for ln in _meaningful_patch_lines(planned_old) if ln in content
+        ln
+        for ln in _meaningful_patch_lines(planned_old)
+        if ln in content and ln not in new_lines
     ]
     errors: list[str] = []
     if missing:
@@ -358,21 +490,35 @@ def _validate_edit_intent(
     if not ok_read:
         return False, content
 
-    errors: list[str] = []
-    if re.search(r'f["\'].*SELECT.*\{query\}', content):
-        errors.append("vulnerable f-string SQL interpolation still present")
-    if 'LIKE ?' not in content and "?" not in content:
-        errors.append("parameterized query marker not found")
-
     planned_new = step.get("new_string") or ""
-    critical_lines = [
-        ln
-        for ln in _meaningful_patch_lines(planned_new)
-        if any(marker in ln for marker in ("execute(sql", "params", "LIKE ?"))
-    ]
-    missing_critical = [ln for ln in critical_lines if ln not in content]
-    if missing_critical:
-        errors.append(f"critical planned fix lines missing: {missing_critical}")
+    planned_old = step.get("old_string") or ""
+    if planned_old and planned_new and planned_old == planned_new:
+        return False, "planned patch has no changes"
+
+    errors: list[str] = []
+
+    if _edit_targets_sql(step):
+        if re.search(r'f["\'].*SELECT.*\{query\}', content):
+            errors.append("vulnerable f-string SQL interpolation still present")
+        if "LIKE ?" not in content and "?" not in content:
+            errors.append("parameterized query marker not found")
+        critical_lines = [
+            ln
+            for ln in _meaningful_patch_lines(planned_new)
+            if any(marker in ln for marker in ("execute(sql", "params", "LIKE ?"))
+        ]
+        missing_critical = [ln for ln in critical_lines if ln not in content]
+        if missing_critical:
+            errors.append(f"critical planned fix lines missing: {missing_critical}")
+
+    distinct_new = _distinct_patch_lines(planned_old, planned_new)
+    missing_distinct = [ln for ln in distinct_new if ln not in content]
+    if missing_distinct:
+        errors.append(f"distinct planned fix lines missing: {missing_distinct}")
+
+    intent_marker = step.get("intent_marker")
+    if intent_marker and intent_marker not in content:
+        errors.append(f"intent marker not found: {intent_marker}")
 
     validate = step.get("validate") or ""
     for raw in plan.execution_steps:
@@ -385,14 +531,18 @@ def _validate_edit_intent(
     if required or forbidden:
         verify_step = {
             "action": "VERIFY",
-            "where": path,
+            "file": path,
             "validate": validate,
             "step_id": step.get("step_id"),
         }
         ok, msg = _execute_verify(registry, verify_step, plan)
         if not ok:
             errors.append(msg)
-    elif 'LIKE ?' in content and not re.search(r'f["\'].*SELECT.*\{query\}', content):
+    elif (
+        _edit_targets_sql(step)
+        and "LIKE ?" in content
+        and not re.search(r'f["\'].*SELECT.*\{query\}', content)
+    ):
         # File already satisfies core SQLi fix — skip malformed planner validate prose.
         pass
 
@@ -430,15 +580,16 @@ def _llm_edit_fallback(
     file_content: str,
     gateway: CursorGateway,
     extra_context: str = "",
+    ticket: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
     path = _step_path(step)
     fallback_llm = llm or get_llm(TaskComplexity.LOW)
-    skills = _load_skills()
+    skills = _load_skills(ticket)
     prompt = f"""{skills}
 
 ## EDIT FALLBACK
 File: {path}
-Change required: {step.get('change') or step.get('why') or step.get('reason', '')}
+Change required: {step.get('change') or step.get('reason') or step.get('why', '')}
 Planned replacement (apply ALL of these lines — not a subset):
 {step.get('new_string') or '(see change description)'}
 Previous patch error: old_string missing, failed, incomplete, or not applied
@@ -526,7 +677,7 @@ def _resolve_verify_patterns(
     path = _step_path(step)
     step_id = step.get("step_id", 0)
     validate = step.get("validate") or step.get("step_validate") or ""
-    what = step.get("what") or step.get("target") or ""
+    target = step.get("target") or step.get("what") or ""
 
     edit_patterns = _patterns_from_prior_edits(plan, path, step_id)
     validate_required, validate_forbidden = _extract_grep_patterns_from_validate(validate)
@@ -536,9 +687,9 @@ def _resolve_verify_patterns(
         required = list(edit_patterns)
     else:
         required = list(validate_required)
-        if what and not _is_human_verify_text(what):
-            if any(c in what for c in ("=", "%", "(", '"', "'", ".", "/")):
-                required.append(what.strip())
+        if target and not _is_human_verify_text(target):
+            if any(c in target for c in ("=", "%", "(", '"', "'", ".", "/")):
+                required.append(target.strip())
 
     forbidden = list(
         dict.fromkeys(
@@ -633,6 +784,7 @@ def _execute_edit(
     create_files: bool,
     llm: BaseChatModel,
     gateway: CursorGateway,
+    ticket: dict[str, Any] | None = None,
 ) -> tuple[bool, str, list[str]]:
     path = _step_path(step)
     old_s = step.get("old_string")
@@ -713,22 +865,6 @@ def _execute_edit(
             expected_sha = sha256_text(new_s) if new_s else ""
             sha_match = bool(expected_sha and post_hash == expected_sha)
             sha_delta = bool(pre_hash and post_hash and pre_hash != post_hash)
-            # #region agent log
-            _debug_log(
-                "H1-H2",
-                "agent.py:_execute_edit:post_cursor",
-                "post-cursor sha guards",
-                {
-                    "step_id": step_id,
-                    "path": path,
-                    "pre_hash": pre_hash,
-                    "post_hash": post_hash,
-                    "expected_sha": expected_sha,
-                    "sha_match": sha_match,
-                    "sha_delta": sha_delta,
-                },
-            )
-            # #endregion
             if sha_match:
                 _log.info(
                     "executor_sha_match",
@@ -750,20 +886,6 @@ def _execute_edit(
             complete, msg, errs = _validate_edit_outcome(
                 registry, step, plan, used_fallback=False
             )
-            # #region agent log
-            _debug_log(
-                "H1",
-                "agent.py:_execute_edit:completeness",
-                "completeness after cursor ok",
-                {
-                    "step_id": step_id,
-                    "path": path,
-                    "complete": complete,
-                    "msg": msg,
-                    "errs": errs,
-                },
-            )
-            # #endregion
             if complete:
                 return ok, last_out, deviations
             accepted = _try_accept_by_intent(
@@ -800,7 +922,7 @@ def _execute_edit(
         return False, file_content, deviations
 
     ok, out = _llm_edit_fallback(
-        registry, step, plan=plan, llm=llm, file_content=file_content, gateway=gateway
+        registry, step, plan=plan, llm=llm, file_content=file_content, gateway=gateway, ticket=ticket
     )
     if ok:
         deviations.append(
@@ -822,6 +944,7 @@ def _execute_edit(
             file_content=file_content,
             gateway=gateway,
             extra_context=f"Incomplete after first fallback: {msg}. Apply ALL planned lines.",
+            ticket=ticket,
         )
         if ok_retry:
             deviations.append(f"step {step.get('step_id')}: required second LLM fallback attempt")
@@ -852,6 +975,9 @@ def _execute_step(
     plan: ExecutionPlan,
     llm: BaseChatModel,
     gateway: CursorGateway,
+    ticket: dict[str, Any] | None = None,
+    *,
+    batched: bool = False,
 ) -> tuple[bool, str, list[str]]:
     action = step.get("action", "")
     path = _step_path(step)
@@ -865,9 +991,33 @@ def _execute_step(
         elif action == "VERIFY":
             ok, out = _execute_verify(registry, step, plan)
         elif action == "EDIT":
-            ok, out, deviations = _execute_edit(
-                registry, step, plan, create_files=plan.create_files, llm=llm, gateway=gateway
-            )
+            if batched:
+                # Edits were already sent in one consolidated Cursor call — validate only.
+                ok, out, deviations = _accept_batched_edit(registry, step, plan)
+                if not ok:
+                    # Per-file repair (the single permitted retry for a failed edit).
+                    ok, out, repair_devs = _execute_edit(
+                        registry,
+                        step,
+                        plan,
+                        create_files=plan.create_files,
+                        llm=llm,
+                        gateway=gateway,
+                        ticket=ticket,
+                    )
+                    deviations = deviations + repair_devs + [
+                        f"step {step_id}: batched edit needed per-file repair"
+                    ]
+            else:
+                ok, out, deviations = _execute_edit(
+                    registry,
+                    step,
+                    plan,
+                    create_files=plan.create_files,
+                    llm=llm,
+                    gateway=gateway,
+                    ticket=ticket,
+                )
         elif action == "RUN_TESTS":
             ok, out = _execute_run_tests(registry, step)
         else:
@@ -886,6 +1036,11 @@ def _assert_file_allowed(step: dict[str, Any], plan: ExecutionPlan) -> None:
     path = _step_path(step)
     if not path:
         return
+    action = step.get("action", "")
+    # Planner emits READ→VERIFY on files outside files_to_change for verify-only
+    # mitigations (e.g. hypothesis fixed elsewhere or pending follow-up patch).
+    if action in ("READ", "VERIFY"):
+        return
     allowed = set(plan.files_to_change)
     if allowed and path not in allowed and not plan.create_files:
         raise RuntimeError(
@@ -902,6 +1057,7 @@ def run_executor(
     llm: BaseChatModel | None = None,
     gateway: CursorGateway | None = None,
     dry_run: bool = False,
+    ticket: dict[str, Any] | None = None,
 ) -> ExecutionResult:
     """Execute all plan steps in order; stop on first failure."""
     configure_logging()
@@ -918,17 +1074,30 @@ def run_executor(
             gateway = LocalPatchCursorGateway(repo_path)
 
     registry, _ = build_executor_tools(repo_path)
-    # print("registry:")
-    # print(registry)
     step_results: list[dict[str, Any]] = []
     changed_files: set[str] = set()
     plan_deviations: list[str] = []
+
+    # Single-call contract: when edits are independent (one EDIT per file), send them all
+    # to Cursor in ONE consolidated call up front. Chained same-file edits fall back to the
+    # sequential per-step path because they depend on prior edits already being on disk.
+    batched = _independent_edits(plan)
+    if batched:
+        b_ok, b_msg = _apply_batched_edits(gateway, plan)
+        if b_ok:
+            plan_deviations.append("cursor: all edits applied in a single batched call")
+        else:
+            plan_deviations.append(
+                f"cursor: batched edit incomplete ({b_msg}); repairing failed files per-step"
+            )
 
     try:
         for raw_step in plan.execution_steps:
             step = _step_to_dict(raw_step)
             _assert_file_allowed(step, plan)
-            ok, out, deviations = _execute_step(registry, step, plan, llm, gateway)
+            ok, out, deviations = _execute_step(
+                registry, step, plan, llm, gateway, ticket=ticket, batched=batched
+            )
             plan_deviations.extend(deviations)
             step_results.append(
                 {
@@ -1028,6 +1197,7 @@ def executor_node(state: AgentState) -> AgentState:
             plan,
             worktree_path,
             gateway=get_cursor_gateway(Path(worktree_path), dry_run=False),
+            ticket=state.get("jira_ticket"),
         )
         diff_summary = show_diff(worktree_path, worktree_info.get("base_branch"))
         commit_msg = f"fix({ticket_id}): {plan.root_hypothesis[:72]}"

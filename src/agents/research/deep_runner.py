@@ -10,6 +10,12 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 
 from src.agents.research.memory import InMemoryResearchMemory, ResearchMemoryStore
+from src.agents.research.middleware import (
+    RESEARCH_EXCLUDED_DEEPAGENT_TOOLS,
+    ProgressiveSkillMiddleware,
+    ResearchToolFilterMiddleware,
+)
+from src.agents.research.run_context import ResearchRunContext
 from src.agents.research.tools.builder import build_research_tool_registry
 from src.agents.research.tools.repo_profile import bootstrap_repo_context
 from src.core.logging import configure_logging, get_logger
@@ -17,7 +23,11 @@ from src.core.runner_utils import llm_content, parse_llm_json
 from src.core.skill_scripts.budget import init_budget
 from src.core.token_usage import record_messages_usage
 from src.core.schemas import ResearchReport, Skill
-from src.core.skill_registry import default_skills_root, module_skills_dir
+from src.core.skill_registry import (
+    default_skills_root,
+    get_skill_registry,
+    module_skills_dir,
+)
 from src.core.skills_loader import load_skill_manifest, select_research_skill
 from src.core.state import JiraTicket, RepoProfile
 from src.integrations.cursor.gateway import CursorGateway, get_cursor_gateway
@@ -27,67 +37,94 @@ _log = get_logger("research_deep")
 SKILLS_ROOT = default_skills_root()
 SKILL_DIR = module_skills_dir("research", SKILLS_ROOT)
 
-DEEPAGENTS_FS_TOOLS = frozenset(
-    {"ls", "write_file", "edit_file", "glob", "grep", "execute"}
-)
-HARNESS_PROFILE_KEY = "sprinklr-research"
-DEEPAGENTS_SKILL_SOURCE = "/"
+_SKILL_POINTER_DESC_MAX = 200
 
 
-def _register_research_harness_profile(tool_budget: int) -> None:
-    """Hide deepagents built-in filesystem tools — repo nav goes through cursor_search."""
+def _register_research_harness_profile(tool_budget: int, llm: BaseChatModel) -> None:
+    """Register provider/model harness profile so deepagents exclusions actually apply."""
     try:
-        from deepagents import HarnessProfile, register_harness_profile
-
-        register_harness_profile(
-            HARNESS_PROFILE_KEY,
-            HarnessProfile(
-                excluded_tools=DEEPAGENTS_FS_TOOLS,
-                system_prompt_suffix=(
-                    "Use cursor_search for ALL repository investigation. "
-                    "Do NOT traverse files directly with read/grep/find/ls/bash. "
-                    "Use read_file only for loading skill files listed in the Skills System section. "
-                    f"Never call write_file or edit_file. Max {tool_budget} tool iterations."
-                ),
-            ),
+        from deepagents import (
+            GeneralPurposeSubagentProfile,
+            HarnessProfile,
+            register_harness_profile,
         )
+        from deepagents._models import get_model_identifier, get_model_provider
     except ImportError:
-        pass
+        return
+
+    profile = HarnessProfile(
+        excluded_tools=RESEARCH_EXCLUDED_DEEPAGENT_TOOLS,
+        excluded_middleware=frozenset({"TodoListMiddleware"}),
+        general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
+        system_prompt_suffix=_harness_workflow_suffix(tool_budget),
+    )
+
+    # Provider-wide default (Sprinklr ChatOpenAI resolves as provider=openai).
+    register_harness_profile("openai", profile)
+
+    provider = get_model_provider(llm)
+    identifier = get_model_identifier(llm)
+    if provider and identifier and ":" not in identifier:
+        register_harness_profile(f"{provider}:{identifier}", profile)
+
+
+def _harness_workflow_suffix(tool_budget: int) -> str:
+    return (
+        "Begin every investigation with ONE cursor_search call to locate relevant files, "
+        "then use read, ls, and bash to inspect the 2-3 files it surfaces. "
+        "cursor_search runs a limited, expensive Cursor agent — call it a second time ONLY "
+        "if the codebase is large and the first sweep left the location unclear; "
+        "never more than 2 cursor_search calls total. Skip cursor_search and read directly "
+        "when anchors already name exact file paths. Do not exceed 8 read/ls/bash calls — "
+        "emit the ResearchReport once you have enough evidence. "
+        "Call load_skill once on research plus the most relevant security skill from "
+        "the Skills System section before forming hypotheses. "
+        f"Max {tool_budget} tool iterations."
+    )
 
 
 def _research_system_prompt(tool_budget: int) -> str:
     return (
-        "Investigate the Jira ticket using the research skill and cursor_search. "
+        "Investigate the Jira ticket using progressive skills. "
+        "First call load_skill for `research` and the most relevant security skill "
+        "listed in the user message, then run one cursor_search to locate relevant files, "
+        "then use read/ls/bash to inspect the 2-3 files it surfaces; call cursor_search "
+        "again only if the codebase is large and still unclear "
+        "(max 2 cursor_search calls total, max 8 read/ls/bash calls total). "
         f"Hard limit: {tool_budget} tool calls. "
         "Return a complete ResearchReport JSON when completion criteria are met."
     )
 
 
-def _build_skills_backend():
-    from deepagents.backends import FilesystemBackend
-
-    return FilesystemBackend(root_dir=str(SKILLS_ROOT.resolve()), virtual_mode=True)
-
-
-def _build_deep_agent(llm: BaseChatModel, tools: list, tool_budget: int):
-    """It creates the actual Deep Agent."""
+def _build_deep_agent(
+    llm: BaseChatModel,
+    tools: list,
+    tool_budget: int,
+):
+    """Create the research-only Deep Agent."""
     from deepagents import create_deep_agent
 
-    _register_research_harness_profile(tool_budget)
+    _register_research_harness_profile(tool_budget, llm)
+    run_context = ResearchRunContext()
     return create_deep_agent(
         model=llm,
         tools=tools,
-        backend=_build_skills_backend(),
-        skills=[DEEPAGENTS_SKILL_SOURCE],
+        middleware=[
+            ProgressiveSkillMiddleware(run_context),
+            ResearchToolFilterMiddleware(run_context),
+        ],
+        subagents=[],
         system_prompt=_research_system_prompt(tool_budget),
         response_format=ResearchReport,
     )
 
-# print("**********************************************************")
-# print("**********************************************************")
-# print("**********************************************************")
-def _build_react_fallback(llm: BaseChatModel, tools: list, tool_budget: int):
-    """If DeepAgents isn't installed or ImportError, it falls back to create_react_agent(...) using LangGraph."""
+
+def _build_react_fallback(
+    llm: BaseChatModel,
+    tools: list,
+    tool_budget: int,
+):
+    """LangGraph ReAct fallback when deepagents is unavailable."""
     from langgraph.prebuilt import create_react_agent
 
     from src.core.prompt_builder import PromptBuilder
@@ -104,12 +141,16 @@ def _build_react_fallback(llm: BaseChatModel, tools: list, tool_budget: int):
     )
 
 
-def build_research_agent(llm: BaseChatModel, tools: list, tool_budget: int):
+def build_research_agent(
+    llm: BaseChatModel,
+    tools: list,
+    tool_budget: int,
+):
     try:
         import deepagents  # noqa: F401
 
         agent = _build_deep_agent(llm, tools, tool_budget)
-        _log.info("harness", type="deepagents", skills_source=DEEPAGENTS_SKILL_SOURCE)
+        _log.info("harness", type="deepagents", research_only=True)
         return agent, "deepagents"
     except ImportError:
         return _build_react_fallback(llm, tools, tool_budget), "react_fallback"
@@ -117,14 +158,6 @@ def build_research_agent(llm: BaseChatModel, tools: list, tool_budget: int):
 
 def resolve_research_skill(ticket: JiraTicket) -> tuple[Skill | None, str]:
     return select_research_skill(ticket, SKILL_DIR)
-
-
-def _is_mock_security_ticket(ticket: JiraTicket) -> bool:
-    history = ticket.get("ticket_history_summary") or {}
-    if history.get("mock"):
-        return True
-    flags = ticket.get("flags") or []
-    return any("mock security" in str(flag).lower() for flag in flags)
 
 
 _SECURITY_ENRICHMENT_KEYS = (
@@ -165,6 +198,37 @@ def _compact_security_enrichment(enrichment: dict | None) -> dict[str, object]:
     return compact
 
 
+def _format_domain_skill_pointer(ticket: JiraTicket | None) -> str:
+    """Compact skill catalog — bodies load on demand via load_skill tool."""
+    if not ticket:
+        return ""
+
+    lines = [
+        "\n## Skills System",
+        "Load skills progressively with load_skill — call ONCE on `research` plus the "
+        "most relevant security skill below before forming hypotheses; do not re-load.",
+        "- `research` — core research workflow",
+    ]
+
+    skills_root = SKILLS_ROOT.resolve()
+    for skill in get_skill_registry().select("research", ticket=ticket):
+        if skill.module != "security":
+            continue
+        try:
+            rel = Path(skill.source_path).resolve().relative_to(skills_root)
+            path = f"/{rel.as_posix()}"
+        except ValueError:
+            path = skill.source_path
+        desc = " ".join((skill.description or "").split())
+        if len(desc) > _SKILL_POINTER_DESC_MAX:
+            desc = desc[: _SKILL_POINTER_DESC_MAX - 3].rstrip() + "..."
+        lines.append(f"- `{skill.name}` or `{path}` — {desc}")
+
+    if len(lines) <= 3:
+        return ""
+    return "\n".join(lines) + "\n"
+
+
 def build_research_user_message(
     ticket: JiraTicket,
     repo_path: str,
@@ -173,7 +237,7 @@ def build_research_user_message(
     user_prompt: str,
     memory: ResearchMemoryStore,
 ) -> str:
-    """Runtime context — skills load via deepagents metadata + read_file on demand."""
+    """Runtime ticket/repo context — skill bodies load via load_skill on demand."""
     enrichment = (ticket.get("ticket_history_summary") or {}).get("security_enrichment", {})
     memory_snippet = memory.to_context_snippet()
     resolved_repo = str(Path(repo_path).resolve())
@@ -184,6 +248,7 @@ def build_research_user_message(
         "module": ticket.get("module"),
         "problem_statement": ticket.get("problem_statement"),
         "labels": ticket.get("labels", []),
+        "vulnerability_category": ticket.get("vulnerability_category") or "",
         "repo_path": resolved_repo,
         "repo_bootstrap": bootstrap,
         "repo_profile": _compact_repo_profile(repo_profile),
@@ -197,13 +262,9 @@ def build_research_user_message(
     if memory_snippet:
         parts.append(f"\n## RUN MEMORY\n{memory_snippet}")
 
-    if _is_mock_security_ticket(ticket):
-        parts.append(
-            "\n## MOCK DEMO HINT\n"
-            "This is a local mock-security exercise. Use cursor_search to locate the vulnerable "
-            "demo file (likely under src/agents/planner/fixtures/demo/). "
-            "Confirm the SQLi pattern, then return the ResearchReport.\n"
-        )
+    domain_skills = _format_domain_skill_pointer(ticket)
+    if domain_skills:
+        parts.append(domain_skills)
 
     return "".join(parts)
 
@@ -233,37 +294,6 @@ def _resolve_research_report(result: dict[str, Any]) -> ResearchReport:
         return ResearchReport.model_validate(structured)
     raw = _extract_final_text(result)
     return parse_llm_json(raw, ResearchReport)
-
-
-def _mock_security_fallback_report(ticket: JiraTicket) -> ResearchReport:
-    demo_path = "src/agents/planner/fixtures/demo/UserSearchController.py"
-    return ResearchReport(
-        ticket_id=ticket.get("issue_id") or "SEC-4421",
-        research_summary=(
-            "Research agent hit recursion limit; using mock-security fallback. "
-            f"Inspect {demo_path} for the intentional SQL concatenation demo."
-        ),
-        hypotheses=[
-            {
-                "rank": 1,
-                "hypothesis": "SQL injection via unparameterized query string in demo controller",
-                "evidence_strength": "moderate",
-                "evidence": [f"Mock demo target: {demo_path}"],
-            }
-        ],
-        affected_files=[
-            {
-                "path": demo_path,
-                "reason": "Mock security demo fixture (fallback injection)",
-                "evidence_strength": "moderate",
-            }
-        ],
-        affected_modules=["auth"],
-        module_blast_radius=[],
-        architectural_risk="high",
-        issue_type_assessment="code_bug",
-        flags=["research_recursion_limit_fallback"],
-    )
 
 
 def _extract_final_text(result: dict[str, Any]) -> str:

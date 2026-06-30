@@ -186,6 +186,20 @@ class SkillRegistry:
         mapped = _AGENT_MODULE_MAP.get(agent, agent)
         return agent in skill.agents or mapped in skill.agents or "implement" in skill.agents and mapped == "executor"
 
+    @staticmethod
+    def _category_matches_triggers(category: str, trigger_labels: set[str]) -> bool:
+        if not category or not trigger_labels:
+            return False
+        norm = category.lower().strip()
+        tokens = {
+            norm,
+            norm.replace(" ", "-"),
+            norm.replace("-", " "),
+            norm.replace("_", "-"),
+        }
+        tokens.update(part for part in norm.replace("-", " ").split() if part)
+        return bool(tokens & trigger_labels)
+
     def _matches_ticket(self, skill: LoadedSkill, ticket: JiraTicket | None) -> bool:
         triggers = skill.trigger_conditions
         if not triggers:
@@ -195,7 +209,9 @@ class SkillRegistry:
         labels = {lbl.lower() for lbl in ticket.get("labels", [])}
         trigger_labels = {lbl.lower() for lbl in triggers.get("labels", [])}
         labels_matched = bool(trigger_labels and (labels & trigger_labels))
-        if trigger_labels and not labels_matched:
+        category = (ticket.get("vulnerability_category") or "").strip()
+        category_matched = self._category_matches_triggers(category, trigger_labels)
+        if trigger_labels and not (labels_matched or category_matched):
             return False
         issue_types = {t.lower() for t in triggers.get("issue_types", [])}
         if issue_types and (ticket.get("issue_type") or "").lower() not in issue_types:
@@ -273,6 +289,17 @@ class SkillRegistry:
                 if content:
                     parts.append(f"\n#### {section}\n{content}\n")
         return "".join(parts)
+
+
+def format_domain_skills_for_prompt(agent: str, ticket: JiraTicket | None) -> str:
+    """Return formatted security domain skills for injection into agent prompts."""
+    if not ticket:
+        return ""
+    selected = get_skill_registry().select(agent, ticket=ticket)
+    domain = [s for s in selected if s.module == "security"]
+    if not domain:
+        return ""
+    return SkillRegistry.format_for_prompt(domain)
 
 
 _default_registry: SkillRegistry | None = None

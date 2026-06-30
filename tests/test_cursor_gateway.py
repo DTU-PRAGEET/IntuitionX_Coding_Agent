@@ -31,7 +31,7 @@ def test_dry_run_gateway_search_returns_structured_hits():
     assert result.method == "search"
     assert result.search_response is not None
     assert result.search_response.hits
-    assert result.search_response.hits[0].path.endswith("UserSearchController.py")
+    assert result.search_response.hits[0].path.endswith("handler.py")
 
 
 def test_dry_run_gateway_edit_returns_diff_fields():

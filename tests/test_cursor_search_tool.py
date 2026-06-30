@@ -34,7 +34,7 @@ def test_cursor_search_returns_structured_json(search_tool):
     result = search_tool.invoke({"query": "sql injection in user search"})
     payload = json.loads(result)
     assert payload["hits"]
-    assert payload["hits"][0]["path"].endswith("UserSearchController.py")
+    assert payload["hits"][0]["path"].endswith("handler.py")
 
 
 def test_cursor_search_budget_abort(gateway, tmp_path):

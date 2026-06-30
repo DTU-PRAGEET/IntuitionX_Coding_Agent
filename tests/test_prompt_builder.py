@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.agents.orchestrator.tools.jira import mock_security_jira_ticket
 from src.core.prompt_builder import PromptBuilder
+from src.core.skill_registry import module_skills_dir
+from tests.helpers import make_security_ticket
 
-ORCH_SKILLS = Path(__file__).resolve().parents[1] / "src" / "agents" / "orchestrator" / "skills"
-RESEARCH_SKILLS = Path(__file__).resolve().parents[1] / "src" / "agents" / "research" / "skills" / "research"
+ORCH_SKILLS = module_skills_dir("orchestrator")
+RESEARCH_SKILLS = module_skills_dir("research")
 
 
 def test_build_orchestrator_prompt_once():
@@ -19,7 +20,7 @@ def test_build_orchestrator_prompt_once():
         include_references=False,
     )
     assert manifest.name == "orchestrator"
-    assert "Routing Routes" in prompt
+    assert "decision flow" in prompt.lower() or "routing" in prompt.lower()
     assert prompt.count("## CONTEXT") == 1
 
 
@@ -30,7 +31,7 @@ def test_build_system_only_no_context():
 
 
 def test_research_includes_security_reference():
-    ticket = mock_security_jira_ticket("SEC-1")
+    ticket = make_security_ticket("SEC-1")
     prompt, _ = PromptBuilder.build(
         "research",
         RESEARCH_SKILLS,

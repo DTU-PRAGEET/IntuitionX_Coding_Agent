@@ -14,6 +14,10 @@ from src.core.logging import get_logger
 _log = get_logger("jira_client")
 
 
+class JiraCredentialsError(RuntimeError):
+    """Raised when Jira API credentials are missing or invalid."""
+
+
 def create_jira_client(
     atlassian_url: Optional[str] = None,
     username: Optional[str] = None,

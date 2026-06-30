@@ -34,11 +34,6 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Validate plan JSON only; do not execute steps",
     )
-    parser.add_argument(
-        "--mock-cursor",
-        action="store_true",
-        help="Use MockCursorGateway: real LLM, edits applied locally, no Cursor SDK calls",
-    )
     args = parser.parse_args(argv)
 
     plan_path = Path(args.plan)
@@ -78,15 +73,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    gateway = None
-    if args.mock_cursor:
-        from src.integrations.cursor.gateway import MockCursorGateway
-
-        gateway = MockCursorGateway(repo_path)
-        _log.info("cursor_mode", mode="mock")
-
     try:
-        result = run_executor(plan, repo_path, gateway=gateway)
+        result = run_executor(plan, repo_path)
         print(json.dumps(result.model_dump(), indent=2))
         return 0
     except Exception as e:

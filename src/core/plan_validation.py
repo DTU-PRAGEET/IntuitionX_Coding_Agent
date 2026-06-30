@@ -10,6 +10,8 @@ from src.core.schemas import ExecutionPlan, ResearchReport
 # Minimum new_string length when old_string is longer — detects LLM truncation.
 _TRUNCATION_RATIO = 0.6
 _TRUNCATION_MIN_NEW_LEN = 80
+# Max trailing newlines to strip when aligning a snippet to on-disk content.
+_SNIPPET_NEWLINE_TRIM_LIMIT = 4
 
 
 def align_old_string_to_disk(old_string: str, file_content: str) -> str:
@@ -23,6 +25,22 @@ def align_old_string_to_disk(old_string: str, file_content: str) -> str:
     return old_string
 
 
+def align_old_string_in_content(old_string: str, file_content: str) -> str:
+    """Return on-disk substring matching old_string, tolerating trailing newline drift."""
+    if not old_string or not file_content:
+        return old_string
+    if old_string in file_content:
+        return old_string
+    trimmed = old_string
+    for _ in range(_SNIPPET_NEWLINE_TRIM_LIMIT):
+        if not trimmed.endswith("\n"):
+            break
+        trimmed = trimmed[:-1]
+        if trimmed in file_content:
+            return trimmed
+    return align_old_string_to_disk(old_string, file_content)
+
+
 def old_string_occurrence_count(file_content: str, old_string: str) -> int:
     """Count exact matches, then try disk-aligned old_string."""
     if not old_string:
@@ -30,7 +48,7 @@ def old_string_occurrence_count(file_content: str, old_string: str) -> int:
     count = file_content.count(old_string)
     if count:
         return count
-    aligned = align_old_string_to_disk(old_string, file_content)
+    aligned = align_old_string_in_content(old_string, file_content)
     if aligned != old_string:
         return file_content.count(aligned)
     return 0
@@ -61,10 +79,10 @@ def validate_plan_triad(plan: ExecutionPlan) -> list[str]:
     for i, step in enumerate(steps):
         if step.action != "EDIT":
             continue
-        path = step.where
-        if i == 0 or steps[i - 1].action != "READ" or steps[i - 1].where != path:
+        path = step.file
+        if i == 0 or steps[i - 1].action != "READ" or steps[i - 1].file != path:
             errors.append(f"step {step.step_id}: EDIT requires preceding READ on {path}")
-        if i + 1 >= len(steps) or steps[i + 1].action != "VERIFY" or steps[i + 1].where != path:
+        if i + 1 >= len(steps) or steps[i + 1].action != "VERIFY" or steps[i + 1].file != path:
             errors.append(f"step {step.step_id}: EDIT requires following VERIFY on {path}")
         if not step.intent_marker:
             errors.append(f"step {step.step_id}: EDIT requires intent_marker")
@@ -83,7 +101,7 @@ def validate_plan_paths(
         research_paths = {f.path for f in research.affected_files}
 
     for step in plan.execution_steps:
-        p = step.where
+        p = step.file
         if research_paths and p not in research_paths and p not in plan.files_to_change:
             errors.append(f"step {step.step_id}: path {p!r} not in research affected_files")
         if not (repo / p).exists() and not plan.create_files and step.action != "RUN_TESTS":
@@ -100,7 +118,7 @@ def validate_edit_patches(plan: ExecutionPlan, repo_path: str) -> tuple[list[str
     for step in plan.execution_steps:
         if step.action != "EDIT":
             continue
-        path = step.where or step.file
+        path = step.file
         old_s = step.old_string or ""
         new_s = step.new_string or ""
 
@@ -135,7 +153,7 @@ def validate_edit_patches(plan: ExecutionPlan, repo_path: str) -> tuple[list[str
             raw = ""
         count = old_string_occurrence_count(raw, old_s)
         if count == 0:
-            aligned = align_old_string_to_disk(old_s, raw)
+            aligned = align_old_string_in_content(old_s, raw)
             if aligned != old_s and aligned in raw:
                 soft.append(
                     f"step {step.step_id}: old_string aligned to disk for {path} "

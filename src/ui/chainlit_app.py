@@ -25,11 +25,8 @@ from src.core.graph import build_graph
 from src.core.state import initial_state
 from src.integrations.jira.client import fetch_ticket_by_id
 from src.integrations.llm.sprinklr_router import SprinklrRouterError, probe_sprinklr_router
-from src.pipeline.runner import PipelineError, run_pipeline #### only used for Mock mode. Runs simple pipeline.
 from src.core.token_usage import start_pipeline_tracking, stop_pipeline_tracking
 from src.tools.base import register_event_handler
-
-_MOCK_MARKER = "[mock-security]"
 
 
 def _chainlit_event_handler(event_type: str, payload: dict) -> None:
@@ -61,20 +58,9 @@ def _resolve_repo_path(explicit: str | None) -> str | None:
     return None
 
 
-def _default_repo_path() -> str:
-    """Fallback repo for mock mode and local-only runs."""
-    if settings.default_repo_path:
-        return str(Path(settings.default_repo_path).resolve())
-    return str(Path(".").resolve())
-
-
-def _parse_user_input(text: str) -> tuple[str, str, str | None, bool]:
-    """Return ticket_id, user_prompt, repo_path, mock_security."""
+def _parse_user_input(text: str) -> tuple[str, str, str | None]:
+    """Return ticket_id, user_prompt, repo_path."""
     text = text.strip()
-    mock_security = False
-    if text.lower().startswith("mock "):
-        mock_security = True
-        text = text[5:].strip()
 
     parts = text.split(maxsplit=1)
     jira_ticket_id = parts[0].upper()
@@ -87,10 +73,7 @@ def _parse_user_input(text: str) -> tuple[str, str, str | None, bool]:
         repo_path = repo_match.group(1)
         user_prompt = remainder.replace(repo_path, "").strip()
 
-    if mock_security:
-        user_prompt = f"{_MOCK_MARKER} {user_prompt}".strip()
-
-    return jira_ticket_id, user_prompt, repo_path, mock_security
+    return jira_ticket_id, user_prompt, repo_path
 
 
 _NODE_LABELS = {
@@ -132,84 +115,6 @@ async def _show_token_usage(snapshot: dict[str, Any] | None) -> None:
     await cl.Message(content=_format_token_usage(snapshot)).send()
 
 
-async def _run_mock_pipeline(
-    ticket_id: str,
-    repo_path: str,
-    user_prompt: str,
-) -> None:
-    """Level 1 path — linear mock-security pipeline without HITL gates."""
-    progress_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
-
-    def on_progress(event: str, payload: dict[str, Any]) -> None:
-        progress_queue.put_nowait((event, payload))
-
-    async def drain_progress() -> None:
-        while True:
-            try:
-                event, payload = progress_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            if event == "node_start":
-                await _post_progress(f"▶ **{_NODE_LABELS.get(payload.get('node', ''), payload.get('node', ''))}** started")
-            elif event == "handoff":
-                await _post_progress(
-                    f"→ Handoff **{payload.get('source')}** → **{payload.get('target')}**"
-                )
-            elif event == "routing":
-                await _post_progress(
-                    f"**Routing:** {payload.get('route')} (risk: {payload.get('risk_level')})"
-                )
-            elif event == "complete":
-                await _post_progress(
-                    f"✓ **Pipeline complete** — {payload.get('steps')} executor steps, "
-                    f"changed: `{', '.join(payload.get('changed_files', []))}`"
-                )
-            elif event == "token_usage":
-                await _show_token_usage(payload)
-
-    loop = asyncio.get_event_loop()
-
-    async def runner() -> None:
-        try:
-            return await loop.run_in_executor(
-                None,
-                lambda: run_pipeline(
-                    ticket_id,
-                    repo_path,
-                    mock_security=True,
-                    user_prompt=user_prompt.replace(_MOCK_MARKER, "").strip(),
-                    on_progress=on_progress,
-                ),
-            )
-        except PipelineError:
-            raise
-
-    task = asyncio.create_task(runner())
-    while not task.done():
-        await drain_progress()
-        await asyncio.sleep(0.2)
-    await drain_progress()
-
-    try:
-        result = await task
-    except PipelineError as e:
-        await cl.Message(content=f"**Pipeline failed** at `{e.stage}`:\n```\n{e.message}\n```").send()
-        return
-
-    summary = {
-        "success": result.success,
-        "ticket_id": result.ticket_id,
-        "routing_route": result.routing_route,
-        "plan_steps": len(result.plan.execution_steps) if result.plan else 0,
-        "executor_steps": result.execution.steps_completed if result.execution else 0,
-        "changed_files": result.execution.changed_files if result.execution else [],
-        "token_usage": result.token_usage,
-    }
-    await cl.Message(content=f"**Result**\n```json\n{json.dumps(summary, indent=2)}\n```").send()
-    if result.token_usage:
-        await _show_token_usage(result.token_usage)
-
-
 async def _show_jira_ingestion(ticket_id: str) -> None:
     try:
         ticket, raw_payload, parsed = await asyncio.to_thread(fetch_ticket_by_id, ticket_id)
@@ -235,7 +140,8 @@ async def _show_jira_ingestion(ticket_id: str) -> None:
             f"**Jira ticket** `{ticket_id}` — {parsed.title}\n\n"
             f"**GitHub repo:** `{github_repo}`\n"
             f"**Target branch:** `{target_branch}`\n"
-            f"**Labels:** {', '.join(parsed.labels[:8]) or 'none'}\n\n"
+            f"**Labels:** {', '.join(parsed.labels[:8]) or 'none'}\n"
+            f"**Vulnerability category:** {parsed.vulnerability_category or 'not specified'}\n\n"
             f"**Full description** ({len(description)} chars)\n"
             f"```\n{description[:8000]}\n```\n\n"
             + (
@@ -389,6 +295,9 @@ async def on_chat_start():
             )
         except Exception as e:
             llm_note = f"\n\n**LLM warning:** Sprinklr probe failed — {e}"
+    else:
+        await cl.Message(content="LLM provider is not set. Please set the LLM_PROVIDER environment variable.").send()
+        return
 
     await cl.Message(
         content=(
@@ -396,9 +305,8 @@ async def on_chat_start():
             "Submit a Jira ticket ID to run the full pipeline with approval gates.\n\n"
             "**Examples:**\n"
             "- `PLAT-1234` — real Jira ticket\n"
-            "- `mock SEC-4421` — mock security demo (no gates, fast path)\n"
-            "- `mock SEC-4421 /path/to/repo` — mock demo with explicit repo\n\n"
-            "Format: `[mock] JIRA-ID [optional prompt] [optional /repo/path]`"
+            "- `PLAT-1234 /path/to/repo` — ticket with explicit repo\n\n"
+            "Format: `JIRA-ID [optional prompt] [optional /repo/path]`"
             f"{llm_note}"
         )
     ).send()
@@ -408,27 +316,15 @@ async def on_chat_start():
 async def on_message(message: cl.Message):
     text = message.content.strip()
     if not text:
-        await cl.Message(content="Please provide a Jira ID to begin.").send()
+        await cl.Message(content="Please provide a Jira ID and User Prompt to begin.").send()
         return
 
-    if not re.match(r"^(mock\s+)?[A-Z]+-\d+", text, re.I):
-        await cl.Message(content="Invalid format. Start with a Jira ID like `PLAT-1234` or `mock SEC-4421`.").send()
+    if not re.match(r"^[A-Z]+-\d+", text, re.I):
+        await cl.Message(content="Invalid format. Start with a Jira ID like `PLAT-1234` and then User Prompt.").send()
         return
 
-    jira_ticket_id, user_prompt, repo_path_arg, mock_security = _parse_user_input(text)
+    jira_ticket_id, user_prompt, repo_path_arg = _parse_user_input(text)
     explicit_repo = _resolve_repo_path(repo_path_arg)
-
-    if mock_security:
-        repo_path = explicit_repo or _default_repo_path()
-        if not Path(repo_path).exists():
-            await cl.Message(content=f"**Repo path not found:** `{repo_path}`").send()
-            return
-        await cl.Message(
-            content=f"**Mock mode** — running linear pipeline for `{jira_ticket_id}` in `{repo_path}`"
-        ).send()
-        await _run_mock_pipeline(jira_ticket_id, repo_path, user_prompt)
-        await _show_event_log()
-        return
 
     if explicit_repo and not Path(explicit_repo).exists():
         await cl.Message(content=f"**Repo path not found:** `{explicit_repo}`").send()

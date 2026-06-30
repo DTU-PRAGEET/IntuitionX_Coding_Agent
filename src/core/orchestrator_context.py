@@ -35,6 +35,7 @@ def build_orchestrator_routing_context(
             "priority": priority,
             "labels": (ticket.get("labels") or [])[:12],
             "status": ticket.get("status", ""),
+            "vulnerability_category": ticket.get("vulnerability_category") or "",
         },
         "user_prompt": user_prompt,
         "repository": {

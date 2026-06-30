@@ -43,6 +43,7 @@ class Settings:
     jira_server_url: str = os.getenv("JIRA_SERVER_URL", "")
     jira_email: str = os.getenv("JIRA_EMAIL", "")
     jira_api_token: str = os.getenv("JIRA_API_TOKEN", "")
+    jira_vulnerability_category_field: str = os.getenv("JIRA_VULNERABILITY_CATEGORY_FIELD", "")
 
     redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379")
     mongo_url: str = os.getenv("MONGO_URL", "mongodb://localhost:27017")

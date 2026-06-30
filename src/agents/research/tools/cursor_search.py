@@ -89,9 +89,8 @@ def make_cursor_search_tool(
         func=cursor_search,
         name="cursor_search",
         description=(
-            "Search the repository using natural language. Cursor navigates the codebase "
-            "and returns structured hits (file paths, confidence, summaries, snippets). "
-            "Use for locating code — do NOT use read/grep/find directly."
+            "Natural-language repo search. Returns file paths, summaries, snippets. "
+            "Args: query, path."
         ),
         args_schema=CursorSearchInput,
     )

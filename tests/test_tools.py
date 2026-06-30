@@ -90,11 +90,14 @@ def test_edit_old_text_alias(registry: ToolRegistry, workspace: Path) -> None:
 
 
 def test_edit_fixture_regression(registry: ToolRegistry, workspace: Path) -> None:
-    fixture_rel = "src/pipeline/fixtures/user_search_controller_vulnerable.py"
-    source = Path(__file__).resolve().parents[1] / fixture_rel
+    fixture_rel = "src/example/handler.py"
     target = workspace / fixture_rel
     target.parent.mkdir(parents=True, exist_ok=True)
-    content = source.read_text(encoding="utf-8")
+    content = (
+        'def search_users(query: str) -> list[dict[str, Any]]:\n'
+        '    sql = f"SELECT * FROM users WHERE name LIKE \'%{query}%\'"\n'
+        '    return [{"sql": sql}]\n'
+    )
     target.write_text(content, encoding="utf-8")
 
     old_line = '    sql = f"SELECT * FROM users WHERE name LIKE \'%{query}%\'"'

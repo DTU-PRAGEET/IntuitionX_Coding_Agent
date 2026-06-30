@@ -14,6 +14,7 @@ from src.core.repo_snapshot import git_repo_snapshot, log_repo_snapshot
 _log = get_logger("git_worktree")
 
 PROTECTED_BRANCHES = {"main", "master", "develop", "production"}
+_BRANCH_MAX_LEN = 63
 
 
 def _remote_branch_exists(repo_path: str, branch: str) -> bool:
@@ -67,12 +68,16 @@ def validate_repository(repo_path: str) -> tuple[bool, str]:
 
 
 def make_branch_name(ticket_id: str, prefix: str = "fix", description: str = "") -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", description.lower())[:30].strip("-")
+    """Build a unique fix branch name — each pipeline run gets its own branch."""
+    slug = re.sub(r"[^a-z0-9]+", "-", description.lower())[:20].strip("-")
+    run_tag = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
     base = f"{prefix}/{ticket_id.lower()}"
     if slug:
         base = f"{base}-{slug}"
-    name = base[:50]
-    return name
+    # Reserve room for -{run_tag} so every run gets a distinct branch on origin.
+    max_base_len = _BRANCH_MAX_LEN - len(run_tag) - 1
+    base = base[:max_base_len].rstrip("-")
+    return f"{base}-{run_tag}"
 
 
 def _worktree_is_dirty(worktree_path: str) -> bool:
@@ -84,6 +89,18 @@ def _reset_worktree(worktree_path: str, target_ref: str) -> None:
     _log.info("worktree_reset", worktree_path=worktree_path, target_ref=target_ref)
     _run_git(["reset", "--hard", target_ref], worktree_path, check=False)
     _run_git(["clean", "-fd"], worktree_path, check=False)
+
+
+def _start_ref(
+    repo_path: str,
+    *,
+    planner_head: str | None,
+    base_branch: str,
+) -> str:
+    if planner_head:
+        return planner_head
+    _run_git(["fetch", "origin", base_branch], repo_path, check=False)
+    return f"origin/{base_branch}"
 
 
 def _sync_worktree_to_snapshot(
@@ -101,10 +118,11 @@ def _sync_worktree_to_snapshot(
     if not dirty and not head_mismatch:
         return "reused"
 
-    target = planner_head
-    if not target:
-        _run_git(["fetch", "origin", base_branch], source_repo_path, check=False)
-        target = f"origin/{base_branch}"
+    target = _start_ref(
+        source_repo_path,
+        planner_head=planner_head,
+        base_branch=base_branch,
+    )
 
     _reset_worktree(worktree_path, target)
     after = git_repo_snapshot(worktree_path)
@@ -126,6 +144,10 @@ def _sync_worktree_to_snapshot(
     return "reset"
 
 
+def _checkout_new_branch(worktree_path: str, branch_name: str) -> None:
+    _run_git(["checkout", "-B", branch_name], worktree_path, check=False)
+
+
 def create_worktree(
     repo_path: str,
     ticket_id: str,
@@ -135,7 +157,7 @@ def create_worktree(
     *,
     planner_snapshot_head: str | None = None,
 ) -> dict:
-    """Create isolated git worktree and execution branch."""
+    """Create isolated git worktree and a fresh execution branch for this run."""
     base = resolve_base_branch(repo_path, base_branch)
     log_repo_snapshot(_log, "worktree_source", repo_path, ticket_id=ticket_id, base_branch=base)
 
@@ -144,48 +166,41 @@ def create_worktree(
     worktree_base.mkdir(parents=True, exist_ok=True)
     worktree_path = worktree_base / ticket_id.lower().replace("-", "_")
 
-    existing = _run_git(["branch", "--list", branch_name], repo_path, check=False)
-    if branch_name in (existing.stdout or ""):
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
-        branch_name = f"{branch_name[:40]}-{ts}"[:50]
-
     if worktree_path.exists():
-        checked_out = _current_branch(str(worktree_path))
         status = _sync_worktree_to_snapshot(
             str(worktree_path),
             planner_head=planner_snapshot_head,
             source_repo_path=repo_path,
             base_branch=base,
         )
+        _checkout_new_branch(str(worktree_path), branch_name)
         log_repo_snapshot(
             _log,
             "worktree_ready",
             str(worktree_path),
             status=status,
-            branch_name=checked_out or branch_name,
+            branch_name=branch_name,
         )
         return {
             "worktree_path": str(worktree_path),
-            "branch_name": checked_out or branch_name,
+            "branch_name": branch_name,
             "base_branch": base,
             "status": status,
             "source_repo_path": str(Path(repo_path).resolve()),
             "planner_snapshot_head": planner_snapshot_head,
         }
 
-    _run_git(["fetch", "origin", base], repo_path, check=False)
-    start_ref = planner_snapshot_head or f"origin/{base}"
+    start_ref = _start_ref(
+        repo_path,
+        planner_head=planner_snapshot_head,
+        base_branch=base,
+    )
     _run_git(
         ["worktree", "add", "-b", branch_name, str(worktree_path), start_ref],
         repo_path,
         check=False,
     )
-    result = _run_git(
-        ["worktree", "add", "-b", branch_name, str(worktree_path), base],
-        repo_path,
-        check=False,
-    )
-    if result.returncode != 0 and not worktree_path.exists():
+    if not worktree_path.exists():
         _run_git(["worktree", "add", "-b", branch_name, str(worktree_path)], repo_path)
 
     log_repo_snapshot(_log, "worktree_created", str(worktree_path), branch_name=branch_name)

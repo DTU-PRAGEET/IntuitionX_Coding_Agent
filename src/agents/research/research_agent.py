@@ -10,24 +10,25 @@ from src.agents.research.deep_runner import (
     build_research_agent,
     build_research_user_message,
     load_skill_manifest_safe,
-    _is_mock_security_ticket,
-    _mock_security_fallback_report,
     _resolve_research_report,
 )
 from src.agents.research.memory import InMemoryResearchMemory, ResearchMemoryStore
 from src.agents.research.tools.builder import build_research_tool_registry
 from src.agents.research.tools.file_discovery import extract_anchors
 from src.agents.research.tools.repo_profile import profile_repository
+from src.core.file_paths import extract_repo_file_paths_from_texts
 from src.core.logging import configure_logging, get_logger
 from src.core.skill_scripts.budget import init_budget
 from src.core.token_usage import record_messages_usage
-from src.core.schemas import ResearchReport
+from src.core.schemas import AffectedFile, ResearchReport
 from src.core.state import JiraTicket, RepoProfile
 from src.integrations.cursor.gateway import CursorGateway, get_cursor_gateway
 
 _log = get_logger("research_agent")
 
-_CURSOR_SEARCH_BUDGET = 6
+# Cursor-first flow: one broad cursor_search to locate code, optionally one more for
+# large/unresolved repos. Capped at 2 to conserve limited Cursor agent requests.
+_CURSOR_SEARCH_BUDGET = 2
 _FALSE_REPO_BLOCKERS = (
     "repo_path_not_found",
     "not checked out",
@@ -59,6 +60,57 @@ def _sanitize_research_report(report: ResearchReport, repo_path: str) -> Researc
         ).strip()
 
     return report.model_copy(update={"flags": flags, "research_summary": summary})
+
+
+def _backfill_affected_files_from_hypotheses(
+    report: ResearchReport,
+    repo_path: str,
+) -> ResearchReport:
+    """Ensure every file cited in hypothesis evidence appears in affected_files."""
+    root = Path(repo_path)
+    if not root.exists():
+        return report
+
+    existing = {f.path for f in report.affected_files}
+    strength_by_path: dict[str, str] = {f.path: f.evidence_strength for f in report.affected_files}
+    for hypothesis in report.hypotheses:
+        for path in extract_repo_file_paths_from_texts(hypothesis.evidence, repo_path):
+            if path not in strength_by_path:
+                strength_by_path[path] = hypothesis.evidence_strength
+
+    added: list[AffectedFile] = []
+    for path, strength in strength_by_path.items():
+        if path in existing:
+            continue
+        if not (root / path).is_file():
+            continue
+        added.append(
+            AffectedFile(
+                path=path,
+                reason=f"Backfilled from hypothesis evidence ({strength})",
+                evidence_strength=strength,
+            )
+        )
+        existing.add(path)
+
+    if not added:
+        return report
+
+    flags = list(report.flags)
+    if "affected_files_backfilled" not in flags:
+        flags.append("affected_files_backfilled")
+
+    return report.model_copy(
+        update={
+            "affected_files": list(report.affected_files) + added,
+            "flags": flags,
+        }
+    )
+
+
+def _finalize_research_report(report: ResearchReport, repo_path: str) -> ResearchReport:
+    report = _sanitize_research_report(report, repo_path)
+    return _backfill_affected_files_from_hypotheses(report, repo_path)
 
 
 class ResearchAgent:
@@ -156,7 +208,7 @@ class ResearchAgent:
             record_messages_usage("research", result.get("messages", []))
 
             stage = "_resolve_research_report"
-            report = _sanitize_research_report(
+            report = _finalize_research_report(
                 _resolve_research_report(result),
                 self.repo_path,
             )
@@ -167,16 +219,6 @@ class ResearchAgent:
             _log.info("complete", ticket_id=report.ticket_id, harness=harness)
             return report
         except Exception as e:
-            from langgraph.errors import GraphRecursionError
-
-            if isinstance(e, GraphRecursionError) and _is_mock_security_ticket(ticket):
-                _log.warning(
-                    "recursion_limit_fallback",
-                    ticket_id=ticket.get("issue_id"),
-                    harness=harness,
-                )
-                memory.record("agent_fallback", {"reason": "recursion_limit", "harness": harness})
-                return _mock_security_fallback_report(ticket)
             memory.record("agent_error", {"error": str(e), "harness": harness, "stage": stage})
             _log.exception("failed", error=str(e), harness=harness, stage=stage)
             raise RuntimeError(

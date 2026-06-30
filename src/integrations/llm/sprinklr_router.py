@@ -10,8 +10,6 @@ import httpx
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
-from src.core.debug_log import agent_debug
-
 _SPRINKLR_FORBIDDEN_HEADERS = frozenset(
     {"authorization", "content-length", "api-key", "x-api-key"}
 )
@@ -39,19 +37,6 @@ class SprinklrRouterTransport(httpx.BaseTransport):
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         url_str = str(request.url).replace("/chat/completions", "/chat-completion")
-        # #region agent log
-        agent_debug(
-            "sprinklr",
-            "sprinklr_router.py:handle_request:entry",
-            "transport_request",
-            {
-                "original_url": str(request.url),
-                "rewritten_url": url_str,
-                "header_names": [k for k, _ in request.headers.items()],
-            },
-            hypothesis_id="H4",
-        )
-        # #endregion
         if not url_str.endswith("/chat-completion"):
             raise SprinklrRouterError(
                 0,
@@ -68,64 +53,16 @@ class SprinklrRouterTransport(httpx.BaseTransport):
             for key, value in request.headers.items()
             if key.lower() not in _SPRINKLR_FORBIDDEN_HEADERS
         ]
-        # #region agent log
-        agent_debug(
-            "sprinklr",
-            "sprinklr_router.py:handle_request:rewritten",
-            "outbound_request",
-            {
-                "url": url_str,
-                "forwarded_headers": [k for k, _ in headers],
-                "body_keys": sorted(body.keys()),
-                "client_identifier": body.get("client_identifier"),
-                "model": body.get("model"),
-            },
-            hypothesis_id="H4",
-        )
-        # #endregion
 
         rewritten = httpx.Request(request.method, url, headers=headers, content=content)
         try:
             response = self._transport.handle_request(rewritten)
             response.read()
-        except Exception as exc:
-            # #region agent log
-            agent_debug(
-                "sprinklr",
-                "sprinklr_router.py:handle_request:network",
-                "transport_network_error",
-                {"error_type": type(exc).__name__, "error": str(exc)[:500]},
-                hypothesis_id="H2",
-            )
-            # #endregion
+        except Exception:
             raise
-
-        # #region agent log
-        agent_debug(
-            "sprinklr",
-            "sprinklr_router.py:handle_request:response",
-            "router_response",
-            {
-                "status_code": response.status_code,
-                "content_preview": (response.text or "")[:300],
-                "content_type": response.headers.get("content-type", ""),
-            },
-            hypothesis_id="H1",
-        )
-        # #endregion
 
         if response.status_code >= 400:
             detail = _format_router_error(response)
-            # #region agent log
-            agent_debug(
-                "sprinklr",
-                "sprinklr_router.py:handle_request:http_error",
-                "returning_http_error_response",
-                {"status_code": response.status_code, "detail": detail[:500]},
-                hypothesis_id="H1",
-            )
-            # #endregion
-            # Return HTTP error to LangChain — raising here becomes APIConnectionError.
             error_payload = {
                 "error": {
                     "message": detail,
@@ -140,20 +77,7 @@ class SprinklrRouterTransport(httpx.BaseTransport):
                 request=rewritten,
             )
 
-        normalized = _normalize_openai_response(response, rewritten)
-        # #region agent log
-        agent_debug(
-            "sprinklr",
-            "sprinklr_router.py:handle_request:success",
-            "normalized_response",
-            {
-                "status_code": normalized.status_code,
-                "body_preview": (normalized.text or "")[:300],
-            },
-            hypothesis_id="H3",
-        )
-        # #endregion
-        return normalized
+        return _normalize_openai_response(response, rewritten)
 
 
 def _format_router_error(response: httpx.Response) -> str:
@@ -236,15 +160,6 @@ def _sprinklr_extra_body() -> dict[str, Any]:
 def _sprinklr_http_client(transport: SprinklrRouterTransport, timeout: float) -> httpx.Client:
     """Build httpx client with optional corporate proxy from environment."""
     proxy = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy") or os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
-    # #region agent log
-    agent_debug(
-        "sprinklr",
-        "sprinklr_router.py:_sprinklr_http_client",
-        "http_client_proxy",
-        {"proxy_configured": bool(proxy)},
-        hypothesis_id="H6",
-    )
-    # #endregion
     return httpx.Client(
         transport=transport,
         timeout=timeout,
@@ -254,36 +169,16 @@ def _sprinklr_http_client(transport: SprinklrRouterTransport, timeout: float) ->
 
 
 def create_sprinklr_chat_model(model_name: str) -> BaseChatModel:
-    """Return a LangChain chat model backed by the Sprinklr LLM router.
-
-    The Sprinklr router uses client_identifier in the JSON body — no API key
-    or Authorization header is required per internal docs.
-    """
+    """Return a LangChain chat model backed by the Sprinklr LLM router."""
     base_url = os.getenv(
         "SPRINKLR_LLM_BASE_URL",
         "http://qa6-intuitionx-llm-router-v2.sprinklr.com",
     ).rstrip("/")
-    # LangChain requires api_key to be set but Sprinklr ignores it; transport strips Authorization.
     api_key = os.getenv("SPRINKLR_LLM_API_KEY", "not-used")
     timeout = float(os.getenv("SPRINKLR_LLM_TIMEOUT", "120"))
 
     transport = SprinklrRouterTransport(extra_body=_sprinklr_extra_body())
     http_client = _sprinklr_http_client(transport, timeout)
-
-    # #region agent log
-    agent_debug(
-        "sprinklr",
-        "sprinklr_router.py:create_sprinklr_chat_model",
-        "chat_model_config",
-        {
-            "base_url": base_url,
-            "model_name": model_name,
-            "timeout": timeout,
-            "http_client_transport": type(http_client._transport).__name__,
-        },
-        hypothesis_id="H5",
-    )
-    # #endregion
 
     return ChatOpenAI(
         model=model_name,
@@ -299,10 +194,7 @@ def probe_sprinklr_router(
     model_name: str | None = None,
     timeout: float | None = None,
 ) -> dict[str, Any]:
-    """Send a minimal ping to verify Sprinklr router connectivity.
-
-    Returns the parsed JSON response on success. Raises SprinklrRouterError on failure.
-    """
+    """Send a minimal ping to verify Sprinklr router connectivity."""
     base_url = os.getenv(
         "SPRINKLR_LLM_BASE_URL",
         "http://qa6-intuitionx-llm-router-v2.sprinklr.com",

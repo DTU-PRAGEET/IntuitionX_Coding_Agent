@@ -186,7 +186,7 @@ class FixPlan(BaseModel):
     recommendations: list[str] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
     flags: list[str] = Field(default_factory=list)
-
+    
 
 class PatchResult(BaseModel):
     """Typed output from the Implementation SubAgent after Cursor edits."""
@@ -211,12 +211,9 @@ class ExecutionStep(BaseModel):
 
     step_id: int
     action: Literal["READ", "EDIT", "VERIFY", "RUN_TESTS"]
-    file: str = Field(default="", description="Legacy file path — prefer where")
-    target: str = Field(default="", description="Legacy target — prefer what")
-    reason: str = Field(default="", description="Legacy reason — prefer why")
-    why: str = Field(default="", description="Why this step is needed")
-    where: str = Field(default="", description="File path for this step")
-    what: str = Field(default="", description="What to do at this location")
+    file: str = Field(default="", description="File path for this step")
+    target: str = Field(default="", description="What to do at this location")
+    reason: str = Field(default="", description="Why this step is needed")
     step_validate: str = Field(
         default="",
         alias="validate",
@@ -242,32 +239,37 @@ class ExecutionStep(BaseModel):
         default=None, ge=1, description="Optional line range end for READ step"
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _map_legacy_fields(cls, data: Any) -> Any:
+        """Map legacy where/what/why keys to file/target/reason for backward compatibility."""
+        if not isinstance(data, dict):
+            return data
+        mapped = dict(data)
+        if mapped.get("where") and not mapped.get("file"):
+            mapped["file"] = mapped["where"]
+        if mapped.get("what") and not mapped.get("target"):
+            mapped["target"] = mapped["what"]
+        if mapped.get("why") and not mapped.get("reason"):
+            mapped["reason"] = mapped["why"]
+        for legacy in ("where", "what", "why"):
+            mapped.pop(legacy, None)
+        return mapped
+
     @model_validator(mode="after")
-    def _sync_and_validate(self) -> ExecutionStep:
-        if self.file and not self.where:
-            self.where = self.file
-        elif self.where and not self.file:
-            self.file = self.where
-        if self.target and not self.what:
-            self.what = self.target
-        elif self.what and not self.target:
-            self.target = self.what
-        if self.reason and not self.why:
-            self.why = self.reason
-        elif self.why and not self.reason:
-            self.reason = self.why
+    def _validate(self) -> ExecutionStep:
         if not self.step_validate:
             if self.action == "VERIFY":
-                self.step_validate = self.what or "Verify expected outcome"
+                self.step_validate = self.target or "Verify expected outcome"
             else:
-                self.step_validate = f"Confirm {self.action} completed on {self.where or 'target'}"
+                self.step_validate = f"Confirm {self.action} completed on {self.file or 'target'}"
 
-        if not self.where:
-            raise ValueError(f"step {self.step_id}: missing required field 'where' (file path)")
-        if not self.what:
-            raise ValueError(f"step {self.step_id}: missing required field 'what'")
-        if not self.why:
-            raise ValueError(f"step {self.step_id}: missing required field 'why'")
+        if not self.file:
+            raise ValueError(f"step {self.step_id}: missing required field 'file' (file path)")
+        if not self.target:
+            raise ValueError(f"step {self.step_id}: missing required field 'target'")
+        if not self.reason:
+            raise ValueError(f"step {self.step_id}: missing required field 'reason'")
         if self.action == "EDIT" and not self.new_string:
             raise ValueError(f"step {self.step_id}: EDIT requires new_string")
         if self.action == "VERIFY" and not self.intent_marker and not self.step_validate:

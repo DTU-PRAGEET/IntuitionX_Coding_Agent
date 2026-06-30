@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
@@ -15,7 +14,6 @@ from src.integrations.cursor.gateway import get_cursor_gateway
 from src.agents.orchestrator.tools.jira import (
     fetch_jira_ticket,
     is_ticket_done,
-    mock_security_jira_ticket,
 )
 from src.agents.planner.agent import run_planner
 from src.agents.research.agent import _report_to_output
@@ -24,87 +22,13 @@ from src.agents.research.memory import InMemoryResearchMemory
 from src.agents.research.tools.file_discovery import extract_anchors
 from src.agents.research.tools.repo_profile import profile_repository
 from src.core.logging import configure_logging, get_logger
-from src.core.schemas import ExecutionPlan, ExecutionStep, ResearchReport, RoutingDecision
+from src.core.schemas import ExecutionPlan, ResearchReport, RoutingDecision
 from src.core.state import JiraTicket, ResearchOutput
 from src.core.token_usage import start_pipeline_tracking, stop_pipeline_tracking
 from src.tools.base import emit_event
 
 _log = get_logger("graph")
 _orch_log = get_logger("orchestrator")
-
-MOCK_SECURITY_FIXTURE = (
-    Path(__file__).resolve().parent / "fixtures/user_search_controller_vulnerable.py"
-)
-MOCK_SECURITY_TARGET = Path("src/agents/planner/fixtures/demo/UserSearchController.py")
-
-
-def _reset_mock_security_fixture(repo_path: str) -> None:
-    """Restore demo SQLi fixture so --mock-security runs are repeatable."""
-    root = Path(repo_path)
-    source = MOCK_SECURITY_FIXTURE
-    target = root / MOCK_SECURITY_TARGET
-    if not source.is_file():
-        _orch_log.warning("mock_fixture_missing", path=str(source))
-        return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-    _orch_log.info("mock_fixture_reset", path=str(target))
-
-
-def build_mock_security_plan(ticket_id: str, repo_path: str) -> ExecutionPlan:
-    """Deterministic ExecutionPlan for mock-security demo — full grounded patches."""
-    demo_rel = str(MOCK_SECURITY_TARGET)
-    source_path = Path(repo_path) / demo_rel
-    content = source_path.read_text(encoding="utf-8")
-    match = re.search(r"(def search_users[\s\S]*?)(?=\n\ndef |\Z)", content)
-    old_string = match.group(1).rstrip() if match else content
-    new_string = (
-        'def search_users(query: str) -> list[dict[str, Any]]:\n'
-        '    """Search users — safe parameterized SQL pattern for demo."""\n'
-        '    sql = "SELECT * FROM users WHERE name LIKE ?"\n'
-        '    params = (f"%{query}%",)\n'
-        '    return [{"sql": sql, "params": params, "query": query}]'
-    )
-    return ExecutionPlan(
-        ticket_id=ticket_id,
-        root_hypothesis="Fix SQL injection by parameterizing UserSearchController search query",
-        files_to_change=[demo_rel],
-        execution_steps=[
-            ExecutionStep(
-                step_id=1,
-                action="READ",
-                where=demo_rel,
-                what="Read demo target before edit",
-                why="Ground old_string from disk",
-                validate="File read succeeds",
-            ),
-            ExecutionStep(
-                step_id=2,
-                action="EDIT",
-                where=demo_rel,
-                what="Replace f-string SQL with parameterized query",
-                why="Remove SQL injection vulnerability",
-                validate='grep for LIKE ?',
-                old_string=old_string,
-                new_string=new_string,
-                intent_marker="LIKE ?",
-                change="Parameterize SQL and bind query via params tuple",
-            ),
-            ExecutionStep(
-                step_id=3,
-                action="VERIFY",
-                where=demo_rel,
-                what="Confirm parameterized query present",
-                why="Ensure fix applied",
-                validate='grep for LIKE ?; grep for params =',
-                intent_marker="LIKE ?",
-            ),
-        ],
-        write_tests=False,
-        create_files=False,
-        risk_level="high",
-        flags=["mock_security_deterministic_plan"],
-    )
 
 StageName = Literal["research", "planner", "executor", "orchestrator"]
 
@@ -168,16 +92,9 @@ def _log_stage_failed(stage: StageName, error: str) -> None:
 def resolve_routing(
     ticket: JiraTicket,
     *,
-    mock_security: bool = False,
     llm: BaseChatModel | None = None,
 ) -> RoutingDecision:
-    """Deterministic or LLM routing — mock security tickets always use FULL."""
-    if mock_security:
-        return RoutingDecision(
-            routing_route="FULL",
-            risk_level="HIGH",
-            reasoning="Mock security ticket — forced FULL pipeline for demo",
-        )
+    """Deterministic or LLM routing."""
     if is_ticket_done(ticket):
         return RoutingDecision(
             routing_route="EXIT",
@@ -194,7 +111,6 @@ def run_pipeline(
     ticket_id: str,
     repo_path: str,
     *,
-    mock_security: bool = False,
     user_prompt: str = "",
     dry_run: bool = False,
     with_gates: bool = False,
@@ -212,7 +128,6 @@ def run_pipeline(
         result = _run_pipeline_body(
             ticket_id,
             repo_path,
-            mock_security=mock_security,
             user_prompt=user_prompt,
             dry_run=dry_run,
             with_gates=with_gates,
@@ -236,7 +151,6 @@ def _run_pipeline_body(
     ticket_id: str,
     repo_path: str,
     *,
-    mock_security: bool = False,
     user_prompt: str = "",
     dry_run: bool = False,
     with_gates: bool = False,
@@ -246,20 +160,14 @@ def _run_pipeline_body(
     llm_orchestrator: BaseChatModel | None = None,
 ) -> PipelineResult:
 
-    if mock_security and not dry_run:
-        _reset_mock_security_fixture(repo_path)
-
     try:
-        if mock_security:
-            ticket = mock_security_jira_ticket(ticket_id)
-        else:
-            ticket = fetch_jira_ticket(ticket_id)
+        ticket = fetch_jira_ticket(ticket_id)
     except Exception as e:
         _log_stage_failed("orchestrator", str(e))
         raise PipelineError("orchestrator", f"Failed to load ticket {ticket_id!r}: {e}") from e
 
     profile = profile_repository(repo_path)
-    decision = resolve_routing(ticket, mock_security=mock_security, llm=llm_orchestrator)
+    decision = resolve_routing(ticket, llm=llm_orchestrator)
     _orch_log.info(
         "routing",
         route=decision.routing_route,
@@ -322,15 +230,6 @@ def _run_pipeline_body(
                 llm=llm_research,
             )
             research_output = _report_to_output(report)
-            if mock_security and not research_output.get("affected_files"):
-                demo_path = str(MOCK_SECURITY_TARGET)
-                research_output["affected_files"] = [
-                    {
-                        "path": demo_path,
-                        "reason": "Mock security demo target (injected — research omitted path)",
-                        "evidence_strength": "strong",
-                    }
-                ]
         except Exception as e:
             _log_stage_failed("research", str(e))
             raise PipelineError("research", str(e)) from e
@@ -361,16 +260,12 @@ def _run_pipeline_body(
     _log_node_start("planner", on_progress)
     try:
         report_model = ResearchReport.model_validate(dict(research_output))
-        if mock_security:
-            plan = build_mock_security_plan(ticket_id, repo_path)
-            _orch_log.info("mock_security_deterministic_plan", steps=len(plan.execution_steps))
-        else:
-            plan = run_planner(
-                report_model,
-                repo_path,
-                routing_route=decision.routing_route,
-                llm=llm_planner,
-            )
+        plan = run_planner(
+            report_model,
+            repo_path,
+            routing_route=decision.routing_route,
+            llm=llm_planner,
+        )
     except Exception as e:
         _log_stage_failed("planner", str(e))
         raise PipelineError("planner", str(e)) from e

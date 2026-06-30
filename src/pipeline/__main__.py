@@ -17,12 +17,7 @@ _log = get_logger("pipeline_cli")
 def main(argv: list[str] | None = None) -> int:
     configure_logging()
     parser = argparse.ArgumentParser(description="Run full Jira solver pipeline")
-    parser.add_argument("--ticket", default="SEC-4421", help="Jira ticket id")
-    parser.add_argument(
-        "--mock-security",
-        action="store_true",
-        help="Use built-in sample security ticket",
-    )
+    parser.add_argument("--ticket", default="PLAT-1234", help="Jira ticket id")
     parser.add_argument(
         "--repo-path",
         default=None,
@@ -51,7 +46,6 @@ def main(argv: list[str] | None = None) -> int:
         result = run_pipeline(
             args.ticket,
             repo_path,
-            mock_security=args.mock_security,
             user_prompt=args.prompt,
             dry_run=args.dry_run,
             with_gates=args.with_gates,

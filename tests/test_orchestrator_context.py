@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 
-from src.agents.orchestrator.tools.jira import mock_security_jira_ticket
 from src.core.orchestrator_context import build_orchestrator_routing_context
+from tests.helpers import make_security_ticket
 
 
 def _long_ticket():
-    ticket = mock_security_jira_ticket("SEC-CTX-1")
+    ticket = make_security_ticket("SEC-CTX-1")
     ticket["comments"] = [
         {"author": f"user{i}", "body": "x" * 500, "created": "2026-01-01"}
         for i in range(10)

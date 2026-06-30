@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.agents.orchestrator.tools.jira import mock_security_jira_ticket
 from src.core.schemas import FixPlan, FixTarget
 from src.core.skill_registry import SkillRegistry, default_skills_root
+from tests.helpers import make_security_ticket
 
 SKILLS_ROOT = default_skills_root()
 
@@ -29,7 +29,7 @@ def test_registry_loads_skill_sections():
 
 def test_select_research_base_skill():
     reg = SkillRegistry(SKILLS_ROOT)
-    ticket = mock_security_jira_ticket("SEC-SK1")
+    ticket = make_security_ticket("SEC-SK1")
     selected = reg.select("research", ticket=ticket)
     names = [s.name for s in selected]
     assert "research" in names
@@ -37,7 +37,7 @@ def test_select_research_base_skill():
 
 def test_select_implement_security_skill_for_sast_ticket():
     reg = SkillRegistry(SKILLS_ROOT)
-    ticket = mock_security_jira_ticket("SEC-SK2")
+    ticket = make_security_ticket("SEC-SK2")
     fix = FixPlan(
         ticket_id="SEC-SK2",
         root_cause="SQL injection",

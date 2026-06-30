@@ -5,7 +5,7 @@ from langchain_core.tools import tool
 
 @tool
 def web_search(query: str) -> str:
-    """Search the web for error messages, API docs, or library references."""
+    """Web search for CVE/docs references. Args: query."""
     try:
         from duckduckgo_search import DDGS
 

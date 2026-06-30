@@ -621,3 +621,7 @@ User / API
 | Executor | `ExecutionPlan` (in) | `ExecutionOutput` |
 | Cursor plan (intended) | `FixPlan` | `fix_plan` in AgentContext |
 | Cursor implement (intended) | `FixPlan` (in), `PatchResult` (out) | patch in AgentContext |
+
+
+
+

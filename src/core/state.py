@@ -45,6 +45,7 @@ class JiraTicket(TypedDict):
     comments: list[JiraComment]
     ticket_history_summary: dict
     flags: list[str]
+    vulnerability_category: str
 
 
 class Hypothesis(TypedDict):

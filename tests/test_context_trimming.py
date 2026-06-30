@@ -22,8 +22,8 @@ FIXTURE_REPORT = REPO_ROOT / "src/agents/planner/fixtures/mock_research_report.j
 
 def _ticket() -> dict:
     return {
-        "issue_id": "SEC-4421",
-        "title": "SQL injection in UserSearchController",
+        "issue_id": "PLAT-1234",
+        "title": "SQL injection in ExampleHandler",
         "issue_type": "Security",
         "status": "In Progress",
         "priority_raw": "High",
@@ -38,22 +38,23 @@ def _ticket() -> dict:
         "dependencies": [],
         "attachments": [{"name": "scan.pdf", "type": "application/pdf"}],
         "comments": [{"author": "pen.test", "body": "exploit POC here", "created": "2026-01-01"}],
-        "ticket_history_summary": {"mock": True},
+        "ticket_history_summary": {},
         "flags": [],
+        "vulnerability_category": "Injection",
     }
 
 
 def _previous_attempt_with_full_plan() -> dict:
     return {
         "attempt_id": "a1",
-        "ticket_id": "SEC-4421",
+        "ticket_id": "PLAT-1234",
         "phase_failed": "IMPLEMENTATION",
         "error_type": "execution_error",
         "error_summary": "old_string mismatch on edit step",
         "plan_hash": "deadbeef",
         "timestamp": "2026-01-01T00:00:00Z",
         "plan_used": {
-            "ticket_id": "SEC-4421",
+            "ticket_id": "PLAT-1234",
             "root_hypothesis": "SQLi",
             "files_to_change": ["dao/user.py", "dao/other.py"],
             "self_healing_notes": ["NOTE_SENTINEL_should_not_leak"],
@@ -61,9 +62,9 @@ def _previous_attempt_with_full_plan() -> dict:
                 {
                     "step_id": 2,
                     "action": "EDIT",
-                    "where": "dao/user.py",
-                    "what": "fix",
-                    "why": "security",
+                    "file": "dao/user.py",
+                    "target": "fix",
+                    "reason": "security",
                     "old_string": "OLD_STRING_SENTINEL_should_not_leak",
                     "new_string": "NEW_STRING_SENTINEL_should_not_leak",
                 }
@@ -78,7 +79,7 @@ def _previous_attempt_with_full_plan() -> dict:
 def test_compact_ticket_drops_noise_keeps_essentials():
     compact = compact_ticket_for_planner(_ticket())
     assert compact is not None
-    assert compact["ticket_id"] == "SEC-4421"
+    assert compact["ticket_id"] == "PLAT-1234"
     assert compact["acceptance_criteria"]
     assert len(compact["problem_statement"]) <= 600
     # Noise the planner never needs to plan a fresh change.

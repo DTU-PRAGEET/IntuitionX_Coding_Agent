@@ -1,26 +1,26 @@
 {
-  "ticket_id": "SEC-4421",
-  "research_summary": "SQL injection in UserSearchController.search_users: the query parameter is concatenated directly into SQL without parameterization.",
+  "ticket_id": "PLAT-1234",
+  "research_summary": "Issue in example handler: user input may be concatenated into a query without parameterization.",
   "hypotheses": [
     {
       "rank": 1,
-      "hypothesis": "Unparameterized SQL string built from user input in search_users",
+      "hypothesis": "Unparameterized query string built from user input in handler",
       "evidence_strength": "strong",
       "evidence": [
-        "grep match: f-string SQL in UserSearchController.py",
-        "Jira CVE-2024-12345 references UserSearchController"
+        "grep match: string formatting in handler.py",
+        "Jira ticket references handler module"
       ]
     }
   ],
   "affected_files": [
     {
-      "path": "src/agents/planner/fixtures/demo/UserSearchController.py",
-      "reason": "Contains vulnerable SQL concatenation in search_users",
+      "path": "src/example/handler.py",
+      "reason": "Contains vulnerable query construction in handler",
       "evidence_strength": "strong"
     }
   ],
-  "affected_modules": ["auth"],
-  "module_blast_radius": ["user-search-api"],
+  "affected_modules": ["payments"],
+  "module_blast_radius": ["payment-api"],
   "architectural_risk": "high",
   "issue_type_assessment": "code_bug",
   "flags": ["Mock research report for Planner standalone verification"]

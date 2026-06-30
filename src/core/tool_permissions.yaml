@@ -1,5 +1,9 @@
 orchestrator: []
 research:
+  - load_skill
+  - read
+  - ls
+  - bash
   - cursor_search
   - web_search
   - repo_profile

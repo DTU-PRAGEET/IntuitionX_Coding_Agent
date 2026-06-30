@@ -55,6 +55,7 @@ def compact_ticket_for_planner(ticket: JiraTicket | None) -> dict[str, Any] | No
         "acceptance_criteria": _compact_acceptance(ticket.get("acceptance_criteria") or []),
         "priority": ticket.get("priority_normalized") or ticket.get("priority_raw", ""),
         "labels": (ticket.get("labels") or [])[:12],
+        "vulnerability_category": ticket.get("vulnerability_category") or "",
     }
 
 

@@ -51,6 +51,7 @@ def test_issue_to_jira_ticket_parses_github_repo_link():
     assert ticket["repo_links"] == ["DTU-PRAGEET/Testing-Security-demo"]
     assert ticket["ticket_history_summary"]["github_repo"] == "DTU-PRAGEET/Testing-Security-demo"
     assert ticket["ticket_history_summary"]["target_branch"] == "master"
+    assert "vulnerability_category" in ticket
 
 
 def test_issue_to_jira_ticket_without_assignee_in_property_holder():

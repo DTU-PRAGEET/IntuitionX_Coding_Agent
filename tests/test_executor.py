@@ -64,18 +64,18 @@ def test_run_executor_write_and_edit(tmp_path):
             ExecutionStep(
                 step_id=1,
                 action="EDIT",
-                where="hello.txt",
-                what="Create file",
-                why="Setup",
+                file="hello.txt",
+                target="Create file",
+                reason="Setup",
                 validate="exists",
                 new_string="Hello, world!\n",
             ),
             ExecutionStep(
                 step_id=2,
                 action="EDIT",
-                where="hello.txt",
-                what="Update greeting",
-                why="Patch",
+                file="hello.txt",
+                target="Update greeting",
+                reason="Patch",
                 validate="updated",
                 old_string="Hello, world!\n",
                 new_string="Hello, Executor!\n",
@@ -100,9 +100,9 @@ def test_run_executor_edit_failure(tmp_path):
             ExecutionStep(
                 step_id=1,
                 action="EDIT",
-                where="hello.txt",
-                what="bad patch",
-                why="fail demo",
+                file="hello.txt",
+                target="bad patch",
+                reason="fail demo",
                 validate="n/a",
                 old_string="NOT_IN_FILE",
                 new_string="replacement\n",
@@ -122,23 +122,23 @@ def test_verify_ignores_planner_validate_fragments_when_edit_patterns_exist(tmp_
     from src.agents.executor.agent import _execute_verify
     from src.agents.executor.tools.builder import build_executor_tools
 
-    target = tmp_path / "UserSearchController.py"
+    target = tmp_path / "handler.py"
     target.write_text(
         '    sql = "SELECT * FROM users WHERE name LIKE ?"\n'
         '    cursor.execute(sql, (f"%{query}%",))\n',
         encoding="utf-8",
     )
     plan = ExecutionPlan(
-        ticket_id="SEC-4421",
+        ticket_id="PLAT-1234",
         root_hypothesis="SQLi fix",
-        files_to_change=["UserSearchController.py"],
+        files_to_change=["handler.py"],
         execution_steps=[
             ExecutionStep(
                 step_id=1,
                 action="EDIT",
-                where="UserSearchController.py",
-                what="Parameterize SQL",
-                why="fix",
+                file="handler.py",
+                target="Parameterize SQL",
+                reason="fix",
                 validate="patched",
                 old_string='sql = f"SELECT * FROM users WHERE name LIKE \'%{query}%\'"\n    cursor.execute(sql)',
                 new_string=(
@@ -149,9 +149,9 @@ def test_verify_ignores_planner_validate_fragments_when_edit_patterns_exist(tmp_
             ExecutionStep(
                 step_id=2,
                 action="VERIFY",
-                where="UserSearchController.py",
-                what="Confirm fix",
-                why="Ensure fix applied",
+                file="handler.py",
+                target="Confirm fix",
+                reason="Ensure fix applied",
                 validate=(
                     'cursor.execute("SELECT * FROM users WHERE name LIKE ?",; '
                     'f"%{query}%");; '
@@ -172,7 +172,7 @@ def test_verify_ignores_planner_validate_fragments_when_edit_patterns_exist(tmp_
 
 def test_verify_requires_all_validate_patterns(tmp_path):
     """VERIFY must match every pattern in validate — not stop after the first hit."""
-    target = tmp_path / "UserSearchController.py"
+    target = tmp_path / "handler.py"
     target.write_text(
         'sql = "SELECT * FROM users WHERE name LIKE ?"\n'
         'params = (f"%{query}%",)\n'
@@ -180,16 +180,16 @@ def test_verify_requires_all_validate_patterns(tmp_path):
         encoding="utf-8",
     )
     plan = ExecutionPlan(
-        ticket_id="SEC-4421",
+        ticket_id="PLAT-1234",
         root_hypothesis="SQLi fix",
-        files_to_change=["UserSearchController.py"],
+        files_to_change=["handler.py"],
         execution_steps=[
             ExecutionStep(
                 step_id=1,
                 action="VERIFY",
-                where="UserSearchController.py",
-                what="Confirm full parameterized query fix",
-                why="Ensure parameters are passed to execute",
+                file="handler.py",
+                target="Confirm full parameterized query fix",
+                reason="Ensure parameters are passed to execute",
                 validate=(
                     'grep for sql = "SELECT * FROM users WHERE name LIKE ?"; '
                     "grep for cursor.execute(sql, params)"
@@ -203,7 +203,7 @@ def test_verify_requires_all_validate_patterns(tmp_path):
 
 
 def test_verify_passes_when_full_fix_applied(tmp_path):
-    target = tmp_path / "UserSearchController.py"
+    target = tmp_path / "handler.py"
     target.write_text(
         'sql = "SELECT * FROM users WHERE name LIKE ?"\n'
         'params = (f"%{query}%",)\n'
@@ -211,16 +211,16 @@ def test_verify_passes_when_full_fix_applied(tmp_path):
         encoding="utf-8",
     )
     plan = ExecutionPlan(
-        ticket_id="SEC-4421",
+        ticket_id="PLAT-1234",
         root_hypothesis="SQLi fix",
-        files_to_change=["UserSearchController.py"],
+        files_to_change=["handler.py"],
         execution_steps=[
             ExecutionStep(
                 step_id=1,
                 action="VERIFY",
-                where="UserSearchController.py",
-                what="Confirm parameterized query and execute call",
-                why="Ensure fix applied",
+                file="handler.py",
+                target="Confirm parameterized query and execute call",
+                reason="Ensure fix applied",
                 validate=(
                     'grep for sql = "SELECT * FROM users WHERE name LIKE ?"; '
                     "grep for cursor.execute(sql, params)"
@@ -239,7 +239,7 @@ def test_verify_checks_prior_edit_new_and_old_strings(tmp_path):
     from src.agents.executor.agent import _execute_verify
     from src.agents.executor.tools.builder import build_executor_tools
 
-    target = tmp_path / "UserSearchController.py"
+    target = tmp_path / "handler.py"
     target.write_text(
         'sql = "SELECT * FROM users WHERE name LIKE ?"\n'
         'params = (f"%{query}%",)\n'
@@ -247,16 +247,16 @@ def test_verify_checks_prior_edit_new_and_old_strings(tmp_path):
         encoding="utf-8",
     )
     plan = ExecutionPlan(
-        ticket_id="SEC-4421",
+        ticket_id="PLAT-1234",
         root_hypothesis="SQLi fix",
-        files_to_change=["UserSearchController.py"],
+        files_to_change=["handler.py"],
         execution_steps=[
             ExecutionStep(
                 step_id=1,
                 action="EDIT",
-                where="UserSearchController.py",
-                what="Parameterize SQL",
-                why="fix",
+                file="handler.py",
+                target="Parameterize SQL",
+                reason="fix",
                 validate="patched",
                 old_string='sql = f"SELECT * FROM users WHERE name LIKE \'%{query}%\'"\ncursor.execute(sql)',
                 new_string=(
@@ -268,9 +268,9 @@ def test_verify_checks_prior_edit_new_and_old_strings(tmp_path):
             ExecutionStep(
                 step_id=2,
                 action="VERIFY",
-                where="UserSearchController.py",
-                what="Confirm fix complete",
-                why="Ensure execute uses params",
+                file="handler.py",
+                target="Confirm fix complete",
+                reason="Ensure execute uses params",
                 validate="grep for parameterized query",
             ),
         ],
@@ -287,23 +287,23 @@ def test_verify_checks_prior_edit_new_and_old_strings(tmp_path):
 
 
 def test_edit_applies_full_planned_patch(tmp_path):
-    target = tmp_path / "UserSearchController.py"
+    target = tmp_path / "handler.py"
     target.write_text(
         'sql = f"SELECT * FROM users WHERE name LIKE \'%{query}%\'"\n'
         'cursor.execute(sql)\n',
         encoding="utf-8",
     )
     plan = ExecutionPlan(
-        ticket_id="SEC-4421",
+        ticket_id="PLAT-1234",
         root_hypothesis="SQLi fix",
-        files_to_change=["UserSearchController.py"],
+        files_to_change=["handler.py"],
         execution_steps=[
             ExecutionStep(
                 step_id=1,
                 action="EDIT",
-                where="UserSearchController.py",
-                what="Parameterize SQL",
-                why="fix",
+                file="handler.py",
+                target="Parameterize SQL",
+                reason="fix",
                 validate="patched",
                 old_string=(
                     'sql = f"SELECT * FROM users WHERE name LIKE \'%{query}%\'"\n'
@@ -328,7 +328,7 @@ def test_edit_applies_full_planned_patch(tmp_path):
 
 def test_fallback_noop_accepted_when_intent_already_satisfied(tmp_path):
     """When fallback edit is a no-op but file is already fixed, accept by intent."""
-    target = tmp_path / "UserSearchController.py"
+    target = tmp_path / "handler.py"
     target.write_text(
         'def search_users(query: str) -> list[dict[str, Any]]:\n'
         '    sql = "SELECT * FROM users WHERE name LIKE ?"\n'
@@ -337,16 +337,16 @@ def test_fallback_noop_accepted_when_intent_already_satisfied(tmp_path):
         encoding="utf-8",
     )
     plan = ExecutionPlan(
-        ticket_id="SEC-4421",
+        ticket_id="PLAT-1234",
         root_hypothesis="SQLi fix",
-        files_to_change=["UserSearchController.py"],
+        files_to_change=["handler.py"],
         execution_steps=[
             ExecutionStep(
                 step_id=1,
                 action="EDIT",
-                where="UserSearchController.py",
-                what="Parameterize SQL",
-                why="fix",
+                file="handler.py",
+                target="Parameterize SQL",
+                reason="fix",
                 validate='grep for LIKE ?; !f"SELECT * FROM users WHERE name LIKE \'%{query}%\'"',
                 old_string="truncated-prefix-that-wont-match",
                 new_string='sql = "SELECT * FROM users WHERE name LIKE ?"\nparams = (f"%{query}%",)',
@@ -354,9 +354,9 @@ def test_fallback_noop_accepted_when_intent_already_satisfied(tmp_path):
             ExecutionStep(
                 step_id=2,
                 action="VERIFY",
-                where="UserSearchController.py",
-                what="verify",
-                why="verify",
+                file="handler.py",
+                target="verify",
+                reason="verify",
                 validate='grep for LIKE ?; !f"SELECT * FROM users WHERE name LIKE \'%{query}%\'"',
             ),
         ],
@@ -375,23 +375,23 @@ def test_fallback_noop_accepted_when_intent_already_satisfied(tmp_path):
     assert result.steps_completed == 2
 
     """LLM fallback that only changes the SQL string must fail completeness check."""
-    target = tmp_path / "UserSearchController.py"
+    target = tmp_path / "handler.py"
     target.write_text(
         'sql = f"SELECT * FROM users WHERE name LIKE \'%{query}%\'"\n'
         'cursor.execute(sql)\n',
         encoding="utf-8",
     )
     plan = ExecutionPlan(
-        ticket_id="SEC-4421",
+        ticket_id="PLAT-1234",
         root_hypothesis="SQLi fix",
-        files_to_change=["UserSearchController.py"],
+        files_to_change=["handler.py"],
         execution_steps=[
             ExecutionStep(
                 step_id=1,
                 action="EDIT",
-                where="UserSearchController.py",
-                what="Parameterize SQL",
-                why="fix",
+                file="handler.py",
+                target="Parameterize SQL",
+                reason="fix",
                 validate="patched",
                 old_string="NOT_IN_FILE",
                 new_string=(
@@ -481,3 +481,65 @@ def test_executor_dry_run_cli():
     payload = json.loads(result.stdout)
     assert payload["dry_run"] is True
     assert payload["ticket_id"] == "EXEC-DEMO-1"
+
+
+def test_executor_allows_read_verify_on_out_of_scope_files(tmp_path):
+    """Verify-only plan steps may touch files outside files_to_change."""
+    change_file = tmp_path / "change.py"
+    change_file.write_text("a = 1\n", encoding="utf-8")
+    verify_file = tmp_path / "verify_only.py"
+    verify_file.write_text("weak_hash = True\n", encoding="utf-8")
+
+    plan = ExecutionPlan(
+        ticket_id="VERIFY-ONLY-1",
+        root_hypothesis="patch one file; verify another without editing",
+        files_to_change=["change.py"],
+        create_files=False,
+        risk_level="medium",
+        execution_steps=[
+            ExecutionStep(
+                step_id=1,
+                action="READ",
+                file="verify_only.py",
+                target="ground weak hash usage",
+                reason="verify-only hypothesis",
+                validate="file readable",
+            ),
+            ExecutionStep(
+                step_id=2,
+                action="VERIFY",
+                file="verify_only.py",
+                target="confirm weak hash still present",
+                reason="verify-only mitigation",
+                validate="file exists",
+            ),
+        ],
+    )
+    result = run_executor(plan, str(tmp_path), gateway=_test_gateway(tmp_path))
+    assert result.steps_completed == 2
+
+
+def test_executor_blocks_edit_on_out_of_scope_file(tmp_path):
+    target = tmp_path / "forbidden.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+    plan = ExecutionPlan(
+        ticket_id="BLOCK-EDIT-1",
+        root_hypothesis="must not edit outside whitelist",
+        files_to_change=["other.py"],
+        create_files=False,
+        risk_level="high",
+        execution_steps=[
+            ExecutionStep(
+                step_id=1,
+                action="EDIT",
+                file="forbidden.py",
+                target="patch",
+                reason="disallowed",
+                validate="patched",
+                old_string="x = 1\n",
+                new_string="x = 2\n",
+            ),
+        ],
+    )
+    with pytest.raises(RuntimeError, match="not in files_to_change"):
+        run_executor(plan, str(tmp_path), gateway=_test_gateway(tmp_path))

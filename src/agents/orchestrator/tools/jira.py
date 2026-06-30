@@ -6,11 +6,14 @@ import re
 from typing import Any
 
 from src.agents.orchestrator.tools.jira_client import (
+    JiraCredentialsError,
     create_jira_client,
     credentials_configured,
-    fetch_ticket_by_key,
 )
+
+__all__ = ["JiraCredentialsError", "fetch_jira_ticket", "is_ticket_done"]
 from src.agents.orchestrator.tools.jira_schema import JiraTicketRaw, enrich_security_ticket
+from src.core.config import settings
 from src.core.github_links import extract_repo_links_from_text, extract_target_branch
 from src.core.logging import get_logger
 from src.core.state import JiraAttachment, JiraComment, JiraDependency, JiraTicket
@@ -84,6 +87,26 @@ def _field_text(field_obj: Any, default: str = "") -> str:
     if isinstance(field_obj, str):
         return field_obj
     return str(field_obj)
+
+
+def _extract_vulnerability_category(issue: Any, enrichment_vulnerability_type: str = "") -> str:
+    """Read Vulnerability Category from Jira custom field or enrichment fallback."""
+    field_id = (settings.jira_vulnerability_category_field or "").strip()
+    if field_id:
+        raw_val = _issue_field(issue, field_id)
+        if raw_val:
+            if isinstance(raw_val, str):
+                return raw_val.strip()
+            if isinstance(raw_val, dict):
+                return (_field_name(raw_val, "") or raw_val.get("value") or "").strip()
+            if isinstance(raw_val, list) and raw_val:
+                first = raw_val[0]
+                if isinstance(first, dict):
+                    return (_field_name(first, "") or first.get("value") or "").strip()
+                return str(first).strip()
+    if enrichment_vulnerability_type:
+        return enrichment_vulnerability_type.strip()
+    return ""
 
 
 AC_KEYWORDS = [
@@ -267,6 +290,9 @@ def _issue_to_jira_ticket(issue: Any, client: Any) -> JiraTicket:
     target_branch = extract_target_branch(description)
 
     issue_type = _field_name(_issue_field(issue, "issuetype"), "Unknown")
+    vulnerability_category = _extract_vulnerability_category(
+        issue, enrichment.vulnerability_type or ""
+    )
 
     return JiraTicket(
         issue_id=_issue_key(issue),
@@ -292,96 +318,23 @@ def _issue_to_jira_ticket(issue: Any, client: Any) -> JiraTicket:
             "target_branch": target_branch,
         },
         flags=flags,
+        vulnerability_category=vulnerability_category,
     )
 
 
 def fetch_jira_ticket(ticket_id: str) -> JiraTicket:
     """Fetch and normalize Jira issue — Tier 1 + Tier 2 + security enrichment."""
     if not credentials_configured():
-        _log.info("using_mock", ticket_id=ticket_id, reason="credentials_not_configured")
-        return _mock_jira_ticket(ticket_id)
-
-    try:
-        client = create_jira_client()
-        issue = client.issue(ticket_id, expand="changelog")
-        return _issue_to_jira_ticket(issue, client)
-    except Exception as e:
-        _log.error("fetch_failed", ticket_id=ticket_id, error=str(e))
-        ticket = _mock_jira_ticket(ticket_id)
-        ticket["flags"] = list(ticket.get("flags", [])) + [f"Jira fetch failed: {e}"]
-        return ticket
-
-
-def mock_security_jira_ticket(ticket_id: str = "SEC-4421") -> JiraTicket:
-    """Sample security ticket for standalone Research Agent verification."""
-    description = """## Security Finding
-SQL injection vulnerability in UserSearchController.searchUsers endpoint.
-
-CVE-2024-12345 (High severity)
-
-Affected component: UserSearchController
-Demo file in this repo: src/agents/planner/fixtures/demo/UserSearchController.py
-Repository: platform/auth-service
-
-The `query` parameter is concatenated directly into SQL without parameterization.
-Pen test report: attacker can extract user records via `' OR 1=1 --`.
-
-Acceptance criteria:
-- Parameterize all SQL queries in UserSearchController
-- Add input validation for search query length
-- No regression in existing search API tests
-"""
-    raw_enrichment = enrich_security_ticket(
-        JiraTicketRaw(key=ticket_id, summary="SQL injection in UserSearchController", description=description)
-    )
-    return JiraTicket(
-        issue_id=ticket_id,
-        title="SQL injection in UserSearchController.searchUsers",
-        issue_type="Security",
-        status="In Progress",
-        priority_raw="High",
-        priority_normalized="P1",
-        module="auth",
-        problem_statement=description,
-        acceptance_criteria=[
-            "Parameterize all SQL queries in UserSearchController",
-            "Add input validation for search query length",
-        ],
-        assignee="security.team",
-        reporter="pen.test",
-        labels=["security", "sql-injection", "cve"],
-        repo_links=["platform/auth-service"],
-        dependencies=[],
-        attachments=[],
-        comments=[],
-        ticket_history_summary={"mock": True, "security_enrichment": raw_enrichment.model_dump()},
-        flags=["Mock security ticket for local Research Agent runs."],
-    )
-
-
-def _mock_jira_ticket(ticket_id: str) -> JiraTicket:
-    """Fallback when Jira credentials are not configured (local dev)."""
-    return JiraTicket(
-        issue_id=ticket_id,
-        title=f"Mock ticket {ticket_id}",
-        issue_type="Bug",
-        status="In Progress",
-        priority_raw="Medium",
-        priority_normalized="P2",
-        module="payments",
-        problem_statement="Mock problem statement for local development.",
-        acceptance_criteria=["Fix should not break existing flows"],
-        assignee="dev.user",
-        reporter="qa.user",
-        labels=["mock"],
-        repo_links=[],
-        dependencies=[],
-        attachments=[],
-        comments=[],
-        ticket_history_summary={},
-        flags=["Jira credentials not configured — using mock data."],
-    )
+        raise JiraCredentialsError(
+            "Jira credentials not configured — set JIRA_SERVER_URL, JIRA_EMAIL, JIRA_API_TOKEN"
+        )
+    client = create_jira_client()
+    issue = client.issue(ticket_id, expand="changelog")
+    return _issue_to_jira_ticket(issue, client)
 
 
 def is_ticket_done(ticket: JiraTicket) -> bool:
     return ticket["status"].lower() in DONE_STATUSES
+
+
+

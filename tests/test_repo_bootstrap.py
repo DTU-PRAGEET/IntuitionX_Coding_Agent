@@ -75,11 +75,11 @@ def test_sanitize_research_report_strips_not_accessible_blocker(tmp_path: Path) 
 
 
 def test_research_agent_fails_fast_when_repo_missing(tmp_path: Path) -> None:
-    from src.agents.orchestrator.tools.jira import mock_security_jira_ticket
     from src.agents.research.research_agent import ResearchAgent
+    from tests.helpers import make_security_ticket
 
     missing = tmp_path / "does-not-exist"
-    ticket = mock_security_jira_ticket("SEC-MISS")
+    ticket = make_security_ticket("SEC-MISS")
     agent = ResearchAgent(str(missing))
 
     try:

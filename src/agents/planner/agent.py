@@ -18,18 +18,19 @@ from src.core.llm import TaskComplexity, get_llm
 from src.core.logging import configure_logging, get_logger
 from src.core.runner_utils import llm_content, invoke_tracked
 from src.core.plan_validation import (
-    align_old_string_to_disk,
+    align_old_string_in_content,
     is_truncated_patch,
     validate_edit_patches,
     validate_execution_plan,
 )
+from src.core.file_paths import extract_repo_file_paths_from_texts
 from src.core.planner_context import (
     compact_ticket_for_planner,
     research_handoff_for_planner,
     retry_summary_for_planner,
 )
 from src.core.prompt_builder import PromptBuilder
-from src.core.skill_registry import module_skills_dir
+from src.core.skill_registry import format_domain_skills_for_prompt, module_skills_dir
 from src.core.repo_snapshot import git_repo_snapshot, log_edit_patch, log_repo_snapshot
 from src.core.schemas import ExecutionPlan, ResearchReport
 from src.core.state import AgentState, PlanOutput
@@ -39,29 +40,10 @@ _log = get_logger("planner")
 
 SKILLS_DIR = module_skills_dir("planner")
 MAX_VERIFICATION_CALLS = 3
+_MAX_GROUNDED_FILES = 12
+_TOTAL_GROUNDING_CHAR_BUDGET = 32_000
+_PER_FILE_GROUNDING_CHAR_CAP = 16_000
 _INVALID_WHERE = frozenset({".", ""})
-_DEBUG_LOG = Path(__file__).resolve().parents[3] / ".cursor" / "debug-5343a0.log"
-_DEBUG_SESSION = "5343a0"
-
-
-def _planner_debug(hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
-    # #region agent log
-    try:
-        payload = {
-            "sessionId": _DEBUG_SESSION,
-            "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-            "location": location,
-            "message": message,
-            "data": data,
-            "hypothesisId": hypothesis_id,
-            "runId": "pre-fix",
-        }
-        _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with _DEBUG_LOG.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload, default=str) + "\n")
-    except OSError:
-        pass
-    # #endregion
 
 
 def _missing_plan_fields(data: dict[str, Any]) -> list[str]:
@@ -98,14 +80,14 @@ def _step_file_paths(steps: list[dict[str, Any]], repo_path: str) -> list[str]:
     repo_root = repo_path.rstrip("/")
     paths: list[str] = []
     for step in steps:
-        where = (step.get("where") or step.get("file") or "").strip()
-        if not where or where in _INVALID_WHERE:
+        file_path = (step.get("file") or step.get("where") or "").strip()
+        if not file_path or file_path in _INVALID_WHERE:
             continue
-        if where == repo_root or where.rstrip("/") == repo_root:
+        if file_path == repo_root or file_path.rstrip("/") == repo_root:
             continue
-        if where.startswith("/"):
+        if file_path.startswith("/"):
             continue
-        paths.append(where)
+        paths.append(file_path)
     return list(dict.fromkeys(paths))
 
 
@@ -117,12 +99,6 @@ def _coerce_execution_plan_payload(
     """Fill required ExecutionPlan fields the LLM often omits."""
     out = dict(data)
     before_missing = _missing_plan_fields(out)
-    _planner_debug(
-        "H1",
-        "planner/agent.py:_coerce_execution_plan_payload",
-        "coerce_before",
-        {"missing": before_missing, "step_count": len(out.get("execution_steps") or [])},
-    )
 
     out.setdefault("ticket_id", report.ticket_id)
     out.setdefault("implementation_constraints", [])
@@ -155,12 +131,6 @@ def _coerce_execution_plan_payload(
             out["files_to_change"] = _step_file_paths(steps, repo_path)
 
     after_missing = _missing_plan_fields(out)
-    _planner_debug(
-        "H1",
-        "planner/agent.py:_coerce_execution_plan_payload",
-        "coerce_after",
-        {"missing": after_missing, "filled_root_hypothesis": bool(out.get("root_hypothesis")), "filled_risk_level": out.get("risk_level")},
-    )
     return out
 
 
@@ -178,7 +148,7 @@ def _parse_execution_plan(raw: str, report: ResearchReport, repo_path: str) -> E
 
 
 def _normalize_plan_paths(plan: ExecutionPlan, report: ResearchReport, repo_path: str) -> ExecutionPlan:
-    """Repair common LLM mistakes: where='.' and empty files_to_change."""
+    """Repair common LLM mistakes: file='.' and empty files_to_change."""
     candidates = _research_file_paths(report)
     if not plan.files_to_change and candidates:
         plan.files_to_change = list(dict.fromkeys(candidates))
@@ -190,9 +160,8 @@ def _normalize_plan_paths(plan: ExecutionPlan, report: ResearchReport, repo_path
         default_file = plan.files_to_change[0]
 
     for step in plan.execution_steps:
-        where = step.where or step.file
-        if not _is_valid_step_path(where, repo_path) and default_file:
-            step.where = default_file
+        file_path = step.file
+        if not _is_valid_step_path(file_path, repo_path) and default_file:
             step.file = default_file
     return plan
 
@@ -207,12 +176,12 @@ def _validate_plan_executable(plan: ExecutionPlan, report: ResearchReport, repo_
     if not plan.execution_steps:
         raise ValueError("Planner produced empty execution_steps")
     for step in plan.execution_steps:
-        where = step.where or step.file
+        file_path = step.file
         if step.action == "RUN_TESTS":
             continue
-        if not _is_valid_step_path(where, repo_path):
+        if not _is_valid_step_path(file_path, repo_path):
             raise ValueError(
-                f"Planner step {step.step_id} has invalid where={where!r} "
+                f"Planner step {step.step_id} has invalid file={file_path!r} "
                 f"(must be a file path, not '.' or repo root)"
             )
 
@@ -255,15 +224,22 @@ def build_planner_prompt(
             "Produce the ExecutionPlan JSON with required top-level fields: "
             "ticket_id, root_hypothesis, risk_level (low|medium|high), files_to_change, "
             "execution_steps. Every step MUST include step_id (1-based), action, "
-            "why, where, what, validate. Include top-level files_to_change listing "
+            "file, target, reason, validate. Include top-level files_to_change listing "
             "every affected file path that will be READ or EDIT. "
             "Use actions READ|EDIT|VERIFY|RUN_TESTS only. "
             "Every EDIT step MUST include old_string, new_string, and intent_marker. "
             "Every EDIT must be preceded by READ and followed by VERIFY on the same file. "
-            "Copy old_string EXACTLY from AFFECTED FILE CONTENTS below."
+            "AFFECTED FILE CONTENTS below contains current on-disk contents for every "
+            "candidate file from research. Produce concrete READ→EDIT→VERIFY steps for "
+            "every file that needs a change. If a needed file is not shown, use the read "
+            "tool to ground it — do NOT downgrade to READ→VERIFY for missing contents. "
+            "Copy old_string EXACTLY from AFFECTED FILE CONTENTS when present."
             f"{file_contents}"
         ),
     )
+    domain_skills = format_domain_skills_for_prompt("planner", ticket)
+    if domain_skills:
+        prompt = f"{prompt}\n\n{domain_skills}"
     return prompt
 
 
@@ -279,26 +255,67 @@ def load_research_report(path: Path) -> ResearchReport:
         raise ValueError(f"Invalid ResearchReport in {path}: {e}") from e
 
 
-def _affected_file_contents(report: ResearchReport, repo_path: str) -> str:
-    """Load affected file snippets so the planner can copy exact old_string values."""
+def _grounding_candidate_paths(report: ResearchReport, repo_path: str) -> list[str]:
+    """Union affected_files paths with paths cited in hypothesis evidence and summary."""
     root = Path(repo_path)
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    for rel in _research_file_paths(report):
+        if rel and rel not in seen:
+            seen.add(rel)
+            ordered.append(rel)
+
+    evidence_texts = [report.research_summary or ""]
+    for hypothesis in report.hypotheses:
+        evidence_texts.extend(hypothesis.evidence)
+    for rel in extract_repo_file_paths_from_texts(evidence_texts, repo_path):
+        if rel not in seen:
+            seen.add(rel)
+            ordered.append(rel)
+
+    return [rel for rel in ordered if (root / rel).is_file()]
+
+
+def _affected_file_contents(report: ResearchReport, repo_path: str) -> str:
+    """Load current on-disk contents for every grounding candidate (budgeted)."""
+    root = Path(repo_path)
+    candidates = _grounding_candidate_paths(report, repo_path)
     blocks: list[str] = []
-    for rel in _research_file_paths(report)[:3]:
+    omitted: list[str] = []
+    total_chars = 0
+
+    for rel in candidates:
+        if len(blocks) >= _MAX_GROUNDED_FILES:
+            omitted.extend(candidates[len(blocks) :])
+            break
         full = root / rel
-        if not full.is_file():
-            continue
         try:
             text = full.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
-        blocks.append(f"### {rel}\n```\n{text[:4000]}\n```")
-    if not blocks:
+        snippet = text[:_PER_FILE_GROUNDING_CHAR_CAP]
+        if total_chars + len(snippet) > _TOTAL_GROUNDING_CHAR_BUDGET:
+            omitted.append(rel)
+            omitted.extend(candidates[len(blocks) + 1 :])
+            break
+        total_chars += len(snippet)
+        blocks.append(f"### {rel}\n```\n{snippet}\n```")
+
+    if not blocks and not omitted:
         return ""
-    return (
+
+    header = (
         "\n## AFFECTED FILE CONTENTS (copy old_string EXACTLY from these blocks)\n"
-        + "\n".join(blocks)
-        + "\n"
+        "These are fresh on-disk contents for every candidate file from research.\n"
     )
+    if omitted:
+        header += (
+            "Files omitted due to budget (use the read tool to ground edits): "
+            + ", ".join(omitted)
+            + "\n"
+        )
+    return header + "\n".join(blocks) + "\n"
 
 
 def _validate_plan_files(plan: ExecutionPlan, repo_path: str | None) -> list[str]:
@@ -312,37 +329,13 @@ def _validate_plan_files(plan: ExecutionPlan, repo_path: str | None) -> list[str
     return flags
 
 
-MOCK_SECURITY_DEMO_FIX = (
-    'def search_users(query: str) -> list[dict[str, Any]]:\n'
-    '    """Search users — safe parameterized SQL pattern for demo."""\n'
-    '    sql = "SELECT * FROM users WHERE name LIKE ?"\n'
-    '    params = (f"%{query}%",)\n'
-    '    return [{"sql": sql, "params": params, "query": query}]'
-)
-
-
-def _apply_demo_sqli_patch(step, content: str) -> bool:
-    """Ground EDIT step to full demo SQLi fix when file still has vulnerable pattern."""
-    match = re.search(r"(def search_users[\s\S]*?)(?=\n\ndef |\Z)", content)
-    if not match:
-        return False
-    body = match.group(1)
-    if 'f"SELECT' not in body and "LIKE '%{query}" not in body:
-        return False
-    step.old_string = body.rstrip()
-    step.new_string = MOCK_SECURITY_DEMO_FIX
-    if not step.intent_marker:
-        step.intent_marker = "LIKE ?"
-    return True
-
-
 def _ground_edit_patches_from_disk(plan: ExecutionPlan, repo_path: str) -> ExecutionPlan:
     """Replace hallucinated or truncated old_string/new_string with disk-backed patches."""
     root = Path(repo_path)
     for step in plan.execution_steps:
         if step.action != "EDIT":
             continue
-        path = step.where or step.file
+        path = step.file
         if not path:
             continue
         full = root / path
@@ -354,10 +347,10 @@ def _ground_edit_patches_from_disk(plan: ExecutionPlan, repo_path: str) -> Execu
             continue
 
         if step.old_string:
-            aligned = align_old_string_to_disk(step.old_string, content)
+            aligned = align_old_string_in_content(step.old_string, content)
             if aligned != step.old_string:
                 _log.info(
-                    "grounded_old_string_newlines",
+                    "grounded_old_string_snippet",
                     step_id=step.step_id,
                     path=path,
                     old_len=len(step.old_string),
@@ -376,14 +369,10 @@ def _ground_edit_patches_from_disk(plan: ExecutionPlan, repo_path: str) -> Execu
             and step.old_string == step.new_string
         )
         if identical:
-            if _apply_demo_sqli_patch(step, content):
-                _log.info("grounded_identical_patch", step_id=step.step_id, path=path)
             continue
 
         if step.old_string and step.old_string in content:
-            if truncated and _apply_demo_sqli_patch(step, content):
-                _log.info("grounded_truncated_patch", step_id=step.step_id, path=path)
-            elif truncated:
+            if truncated:
                 _log.warning(
                     "truncated_patch_ungrounded",
                     step_id=step.step_id,
@@ -392,9 +381,6 @@ def _ground_edit_patches_from_disk(plan: ExecutionPlan, repo_path: str) -> Execu
                     new_len=len(step.new_string or ""),
                 )
             continue
-
-        if _apply_demo_sqli_patch(step, content):
-            _log.info("grounded_edit_patch", step_id=step.step_id, path=path)
     return plan
 
 
@@ -412,7 +398,7 @@ def _verify_plan_with_tools(
     for step in plan.execution_steps:
         if calls >= max_calls:
             break
-        path = step.where or step.file
+        path = step.file
         if not path:
             continue
         if not _is_valid_step_path(path, registry.cwd):
@@ -424,7 +410,7 @@ def _verify_plan_with_tools(
                 raw_content = (Path(registry.cwd) / path).read_text(encoding="utf-8")
             except OSError:
                 raw_content = ""
-            check_old = align_old_string_to_disk(step.old_string, raw_content)
+            check_old = align_old_string_in_content(step.old_string, raw_content)
             count = raw_content.count(check_old)
             _log.info(
                 "verification",
@@ -466,7 +452,7 @@ def _log_plan_edit_steps(plan: ExecutionPlan, *, phase: str) -> None:
             _log,
             phase=phase,
             step_id=step.step_id,
-            file_path=step.where or step.file,
+            file_path=step.file,
             old_string=step.old_string,
             new_string=step.new_string,
         )

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from src.core.plan_validation import align_old_string_to_disk, is_truncated_patch, validate_edit_patches
+from src.core.plan_validation import (
+    align_old_string_in_content,
+    align_old_string_to_disk,
+    is_truncated_patch,
+    validate_edit_patches,
+)
 from src.core.schemas import ExecutionPlan, ExecutionStep
 
 
@@ -15,17 +20,17 @@ def _edit_plan(old: str, new: str, *, path: str = "foo.py") -> ExecutionPlan:
             ExecutionStep(
                 step_id=1,
                 action="READ",
-                where=path,
-                what="read",
-                why="ground",
+                file=path,
+                target="read",
+                reason="ground",
                 validate="ok",
             ),
             ExecutionStep(
                 step_id=2,
                 action="EDIT",
-                where=path,
-                what="edit",
-                why="fix",
+                file=path,
+                target="edit",
+                reason="fix",
                 validate="ok",
                 old_string=old,
                 new_string=new,
@@ -34,9 +39,9 @@ def _edit_plan(old: str, new: str, *, path: str = "foo.py") -> ExecutionPlan:
             ExecutionStep(
                 step_id=3,
                 action="VERIFY",
-                where=path,
-                what="verify",
-                why="check",
+                file=path,
+                target="verify",
+                reason="check",
                 validate="ok",
                 intent_marker="fixed",
             ),
@@ -94,5 +99,63 @@ def test_validate_passes_after_newline_alignment(tmp_path):
     content = "class X:\n    pass\n\n\n"
     target.write_text(content, encoding="utf-8")
     plan = _edit_plan(content + "\n", content.replace("pass", "fixed"), path="student.py")
+    hard, _soft = validate_edit_patches(plan, str(tmp_path))
+    assert hard == []
+
+
+def test_align_snippet_trailing_newline():
+    """Reproduce SPACE-129069: LLM snippet with one extra trailing newline."""
+    file_content = (
+        "    @staticmethod\n"
+        "    async def create(conn: Connection, name: str):\n"
+        '        q = ("INSERT INTO students (name) "\n'
+        '             "VALUES (\'%(name)s\')" % {\'name\': name})\n'
+        "        async with conn.cursor() as cur:\n"
+        "            await cur.execute(q)\n"
+        "\n"
+        "\n"
+    )
+    old_llm = file_content + "\n"  # one extra trailing newline
+    assert old_llm not in file_content
+    assert align_old_string_in_content(old_llm, file_content) == file_content
+
+
+def test_validate_passes_after_snippet_newline_alignment(tmp_path):
+    target = tmp_path / "student.py"
+    on_disk = (
+        "    @staticmethod\n"
+        "    async def create(conn: Connection, name: str):\n"
+        '        q = ("INSERT INTO students (name) "\n'
+        '             "VALUES (\'%(name)s\')" % {\'name\': name})\n'
+        "        async with conn.cursor() as cur:\n"
+        "            await cur.execute(q)\n"
+        "\n"
+        "\n"
+        "class Other:\n"
+        "    pass\n"
+    )
+    target.write_text(on_disk, encoding="utf-8")
+    old_llm = (
+        "    @staticmethod\n"
+        "    async def create(conn: Connection, name: str):\n"
+        '        q = ("INSERT INTO students (name) "\n'
+        '             "VALUES (\'%(name)s\')" % {\'name\': name})\n'
+        "        async with conn.cursor() as cur:\n"
+        "            await cur.execute(q)\n"
+        "\n"
+        "\n"
+        "\n"
+    )
+    new_string = (
+        "    @staticmethod\n"
+        "    async def create(conn: Connection, name: str):\n"
+        '        q = "INSERT INTO students (name) VALUES (%s)"\n'
+        "        async with conn.cursor() as cur:\n"
+        "            await cur.execute(q, (name,))\n"
+        "\n"
+        "\n"
+        "\n"
+    )
+    plan = _edit_plan(old_llm, new_string, path="student.py")
     hard, _soft = validate_edit_patches(plan, str(tmp_path))
     assert hard == []

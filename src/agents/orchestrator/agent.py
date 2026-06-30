@@ -21,7 +21,7 @@ from src.core.orchestrator_context import build_orchestrator_routing_context
 from src.core.plan_validation import validate_execution_plan
 from src.core.skill_registry import module_skills_dir
 from src.memory.cache import get_failed_attempts
-from src.agents.orchestrator.tools.jira import fetch_jira_ticket, is_ticket_done, mock_security_jira_ticket
+from src.agents.orchestrator.tools.jira import fetch_jira_ticket, is_ticket_done
 from src.agents.research.tools.repo_profile import profile_repository
 
 _log = get_logger("orchestrator")
@@ -81,21 +81,6 @@ def run_orchestrator_routing(
         response = invoke_tracked(llm, routing_prompt, agent="orchestrator")
         return parse_llm_json(llm_content(response), RoutingDecision)
     except Exception as e:
-        # #region agent log
-        from src.core.debug_log import agent_debug
-
-        agent_debug(
-            "orchestrator",
-            "orchestrator/agent.py:run_orchestrator_routing",
-            "routing_llm_error",
-            {
-                "error_type": type(e).__name__,
-                "error": str(e)[:500],
-                "llm_class": type(llm).__name__,
-            },
-            hypothesis_id="H1",
-        )
-        # #endregion
         _log.error("routing_failed", error=str(e))
         raise RuntimeError(f"Orchestrator routing failed for ticket={ticket['issue_id']!r}: {e}") from e
 
@@ -105,12 +90,7 @@ def orchestrator_node(state: AgentState) -> AgentState:
     ticket_id = state["jira_ticket_id"]
     previous = get_failed_attempts(ticket_id)
     user_prompt = state.get("user_prompt", "") or ""
-    mock_security = "[mock-security]" in user_prompt
-    if mock_security:
-        user_prompt = user_prompt.replace("[mock-security]", "").strip()
-        ticket = mock_security_jira_ticket(ticket_id)
-    else:
-        ticket = fetch_jira_ticket(ticket_id)
+    ticket = fetch_jira_ticket(ticket_id)
 
     # Integration gate: DONE ticket (not routing logic)
     if is_ticket_done(ticket):
@@ -125,30 +105,17 @@ def orchestrator_node(state: AgentState) -> AgentState:
         }
 
     repo_path, git_target_branch = _resolve_repo_path({**state, "jira_ticket": ticket})
-    if mock_security and repo_path:
-        from src.pipeline.runner import _reset_mock_security_fixture
-
-        _reset_mock_security_fixture(repo_path)
     profile = profile_repository(repo_path) if repo_path else None
 
     try:
         sync_trace_context_from_state(state, prompt_version=PROMPT_VERSIONS["orchestrator"])
-        if mock_security:
-            from src.core.schemas import RoutingDecision
-
-            decision = RoutingDecision(
-                routing_route="FULL",
-                risk_level="HIGH",
-                reasoning="Mock security ticket — forced FULL pipeline for demo",
-            )
-        else:
-            decision = run_orchestrator_routing(
-                ticket,
-                repo_path=repo_path,
-                repo_profile=profile,
-                previous_attempts=previous,
-                user_prompt=user_prompt,
-            )
+        decision = run_orchestrator_routing(
+            ticket,
+            repo_path=repo_path,
+            repo_profile=profile,
+            previous_attempts=previous,
+            user_prompt=user_prompt,
+        )
     except Exception as e:
         return {
             **state,

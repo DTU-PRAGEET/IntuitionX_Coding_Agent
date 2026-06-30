@@ -24,9 +24,9 @@ def test_executor_rejects_identical_patch_without_edit_tool(tmp_path):
             ExecutionStep(
                 step_id=1,
                 action="EDIT",
-                where="f.py",
-                what="noop",
-                why="bad plan",
+                file="f.py",
+                target="noop",
+                reason="bad plan",
                 validate="n/a",
                 old_string="unchanged",
                 new_string="unchanged",
@@ -61,9 +61,9 @@ def test_executor_snapshot_mismatch_raises(tmp_path):
             ExecutionStep(
                 step_id=1,
                 action="READ",
-                where="f.py",
-                what="read",
-                why="r",
+                file="f.py",
+                target="read",
+                reason="r",
                 validate="ok",
             ),
         ],
@@ -112,17 +112,17 @@ def test_executor_accepts_successful_cursor_edit_without_llm_fallback(tmp_path):
             ExecutionStep(
                 step_id=1,
                 action="READ",
-                where="sqli/app.py",
-                what="read app",
-                why="context",
+                file="sqli/app.py",
+                target="read app",
+                reason="context",
                 validate="ok",
             ),
             ExecutionStep(
                 step_id=2,
                 action="EDIT",
-                where="sqli/app.py",
-                what="Enable autoescape",
-                why="XSS fix",
+                file="sqli/app.py",
+                target="Enable autoescape",
+                reason="XSS fix",
                 validate="autoescape=True",
                 old_string=old_file,
                 new_string=new_file,
@@ -200,9 +200,9 @@ def test_executor_accepts_reformatted_cursor_edit_via_sha_delta(tmp_path):
             ExecutionStep(
                 step_id=2,
                 action="EDIT",
-                where="sqli/app.py",
-                what="Enable autoescape",
-                why="XSS fix",
+                file="sqli/app.py",
+                target="Enable autoescape",
+                reason="XSS fix",
                 validate="autoescape=True",
                 old_string=old_file,
                 new_string=planned_new_file,
@@ -229,3 +229,65 @@ def test_executor_accepts_reformatted_cursor_edit_via_sha_delta(tmp_path):
     assert "autoescape=True" in written
     assert "autoescape=False" not in written
     assert sha256_text(written) != sha256_text(planned_new_file)
+
+
+def test_executor_accepts_minimal_patch_with_shared_context_lines(tmp_path):
+    """Regression: partial old/new blocks share context lines (SPACE-129069 style)."""
+    old_block = (
+        "    setup_jinja(app, loader=PackageLoader('sqli', 'templates'),\n"
+        "                context_processors=[csrf_processor, auth_user_processor],\n"
+        "                autoescape=False)\n"
+    )
+    new_block = (
+        "    setup_jinja(app, loader=PackageLoader('sqli', 'templates'),\n"
+        "                context_processors=[csrf_processor, auth_user_processor],\n"
+        "                autoescape=True)  # intent:SPACE-129069-enable-autoescape\n"
+    )
+    file_body = (
+        "from aiohttp_jinja2 import setup as setup_jinja\n"
+        "from jinja2.loaders import PackageLoader\n\n"
+        f"{new_block}"
+        "    setup_database(app)\n"
+    )
+    target = tmp_path / "sqli" / "app.py"
+    target.parent.mkdir(parents=True)
+    target.write_text(file_body, encoding="utf-8")
+
+    plan = ExecutionPlan(
+        ticket_id="SPACE-129069",
+        root_hypothesis="Enable Jinja autoescape",
+        files_to_change=["sqli/app.py"],
+        execution_steps=[
+            ExecutionStep(
+                step_id=1,
+                action="READ",
+                file="sqli/app.py",
+                target="read app",
+                reason="context",
+                validate="ok",
+            ),
+            ExecutionStep(
+                step_id=2,
+                action="EDIT",
+                file="sqli/app.py",
+                target="Enable autoescape",
+                reason="XSS fix",
+                validate="autoescape=True",
+                intent_marker="intent:SPACE-129069-enable-autoescape",
+                old_string=old_block,
+                new_string=new_block,
+            ),
+        ],
+        risk_level="medium",
+    )
+    mock_llm = MagicMock()
+    result = run_executor(
+        plan,
+        str(tmp_path),
+        llm=mock_llm,
+        gateway=LocalPatchCursorGateway(tmp_path),
+    )
+    assert result.steps_completed == 2
+    assert "autoescape=True" in target.read_text(encoding="utf-8")
+    assert "autoescape=False" not in target.read_text(encoding="utf-8")
+    mock_llm.invoke.assert_not_called()

@@ -93,9 +93,9 @@ def fix_plan_to_plan_output(fix_plan: FixPlan) -> dict:
             {
                 "step_id": i,
                 "action": "READ",
-                "where": target.file_path,
-                "what": f"Read lines {target.start_line}-{target.end_line} before fix",
-                "why": target.rationale,
+                "file": target.file_path,
+                "target": f"Read lines {target.start_line}-{target.end_line} before fix",
+                "reason": target.rationale,
                 "validate": "File read succeeds",
             }
         )

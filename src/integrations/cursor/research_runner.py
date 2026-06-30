@@ -5,7 +5,7 @@ from __future__ import annotations
 from src.core.schemas import AffectedFile, Hypothesis, ResearchReport
 from src.core.state import JiraTicket, ResearchOutput
 
-_DEMO_PATH = "src/agents/planner/fixtures/demo/UserSearchController.py"
+_DRY_RUN_PATH = "src/example/handler.py"
 
 
 def mock_research_report(ticket: JiraTicket) -> ResearchReport:
@@ -14,25 +14,25 @@ def mock_research_report(ticket: JiraTicket) -> ResearchReport:
     return ResearchReport(
         ticket_id=ticket_id,
         research_summary=(
-            "Mock Cursor research: SQL injection likely from string concatenation in user search. "
-            "cursor_search would target search/SQL patterns; demo fixture path provided for local runs."
+            "Mock Cursor research: dry-run report with placeholder affected file. "
+            "Real runs use cursor_search against the repository."
         ),
         hypotheses=[
             Hypothesis(
                 rank=1,
-                hypothesis="User input concatenated into SQL in search handler",
+                hypothesis="Issue likely in handler code path referenced by ticket",
                 evidence_strength="moderate",
-                evidence=["Ticket describes SQLi in user search endpoint", f"Candidate: {_DEMO_PATH}"],
+                evidence=["Dry-run placeholder hypothesis", f"Candidate: {_DRY_RUN_PATH}"],
             )
         ],
         affected_files=[
             AffectedFile(
-                path=_DEMO_PATH,
-                reason="Named in security ticket / demo fixture for SQLi pattern",
+                path=_DRY_RUN_PATH,
+                reason="Dry-run placeholder affected file",
                 evidence_strength="moderate",
             )
         ],
-        affected_modules=[ticket.get("module") or "auth"],
+        affected_modules=[ticket.get("module") or "unknown"],
         module_blast_radius=[],
         architectural_risk="medium",
         issue_type_assessment="code_bug",

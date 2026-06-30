@@ -1,86 +1,133 @@
 ---
 name: executor
 description: >
-  Use this skill after Gate 2 (Plan approval). Executes the approved ExecutionPlan
-  step by step: reads files from disk, applies edits ONLY via CursorGateway.edit(),
-  and verifies every edit via intent_marker. ALWAYS follow Read → Cursor Edit → Verify.
-  Never use write/edit tools directly — all file mutations go through CursorAgent.
+  Use this skill after Gate 2 (Plan approval). Executes the approved ExecutionPlan by batching all file mutations into a single CursorGateway.edit() call. Reads and verification use local read/bash tools only. Cursor is called once and only once per pipeline run.
 tool_budget: 15
 recursion_limit: 8
 module: executor
 agents: [implement, executor]
 ---
 
-<!-- CHANGELOG (2026-06-26): Rewrote for CursorGateway.edit() as sole edit path; removed write/edit tool references; added decision flow, edge cases, ExecutionResult completion criteria. -->
+<!-- CHANGELOG (2026-06-29): Enforced single consolidated Cursor call; batched payload structure. -->
 
 # Executor Agent
 
 ## Role & Scope
+
 Applies code changes exactly as specified in `ExecutionPlan`. Does NOT re-research.
-Does NOT modify the plan. All **file mutations** go through `CursorGateway.edit()`.
-Reads and verification use local `read` tool / disk reads only.
+Does NOT modify the plan. All **file mutations** go through **one** `CursorGateway.edit()` call.
 
-## CRITICAL: Read → Cursor Edit → Verify Triad
+---
 
-For every EDIT step, the runner enforces:
+## Cursor Call Rule (Non-Negotiable)
 
-1. **READ** — fresh read from disk before edit (mandatory)
-2. **EDIT** — `CursorGateway.edit(instruction, files=[path], metadata={old_string, new_string, ...})`
-3. **VERIFY** — `intent_marker` and validate patterns must appear in file
+**Cursor is called once and only once. All edits are batched into a single call.**
 
-One LLM fallback maximum per EDIT step (LOW tier); then stop.
+- Collect every EDIT step from `execution_steps` before invoking Cursor
+- Pass the full plan to Cursor in one consolidated payload
+- Do NOT call Cursor per file, per fix, or per EDIT step
+- Do NOT make incremental or iterative Cursor calls after the first
+
+Local tools (`read`, `bash`) are used for READ steps, pre-edit grounding, and VERIFY steps.
+
+---
+
+## Single-Call Workflow
+
+### Phase 1 — Pre-flight (local tools only)
+
+1. Confirm `planner_snapshot_head` matches current repo HEAD — STOP on mismatch
+2. Execute all **READ** steps sequentially via `read` tool; cache file contents
+3. Validate each EDIT step's `old_string` against cached reads
+4. Skip EDIT steps where fix intent is already satisfied (record in `plan_deviations`)
+
+### Phase 2 — Consolidated Cursor edit (exactly one call)
+
+Build one instruction and invoke `CursorGateway.edit()` **once**:
+
+```json
+{
+  "instruction": "<imperative summary of all changes across all files>",
+  "files": ["path/to/file1.py", "path/to/file2.jinja2"],
+  "metadata": {
+    "ticket_id": "<from plan>",
+    "edits": [
+      {
+        "step_id": 2,
+        "file": "path/to/file1.py",
+        "old_string": "<exact from plan>",
+        "new_string": "<exact from plan>",
+        "intent_marker": "<from plan>",
+        "change": "<human-readable summary>"
+      },
+      {
+        "step_id": 5,
+        "file": "path/to/file2.jinja2",
+        "old_string": "...",
+        "new_string": "...",
+        "intent_marker": "...",
+        "change": "..."
+      }
+    ],
+    "create_files": false,
+    "risk_level": "high"
+  }
+}
+```
+
+**Instruction template:**
+
+```
+Apply ALL of the following edits atomically in one pass. Do not stop after the first file.
+
+Ticket: {ticket_id}
+Risk: {risk_level}
+
+For each edit in metadata.edits[]:
+  1. Open edit.file
+  2. Replace edit.old_string with edit.new_string (exact match)
+  3. Confirm edit.intent_marker appears in the result
+
+Edits to apply:
+- [step {step_id}] {file}: {change}
+- ...
+
+If an old_string is not found, report which step failed — do not partially apply remaining edits without confirmation.
+```
+
+| Condition | Next action |
+|-----------|-------------|
+| Cursor returns success | → Phase 3 |
+| Cursor partial failure | ONE LLM fallback re-packaging all remaining edits → **still only 1 Cursor retry total** |
+| Cursor fails entirely | STOP; return ExecutionResult with error |
+
+### Phase 3 — Verify (local tools only)
+
+1. Execute all **VERIFY** steps via `read` + substring checks
+2. Run **RUN_TESTS** steps if present
+3. Emit **ExecutionResult**
+
+---
 
 ## Tool Budget
-- **Hard limit:** 15 steps (deterministic runner, no ReAct loop)
+
+- **Hard limit:** 15 steps (deterministic runner)
+- **Cursor calls:** **1** (max 1 retry on total failure — still counts as single batched attempt)
 - **Allowed tools:** `read`, `bash` (reads/verify only); `write`/`edit` are **forbidden**
-- EDIT fallback LLM: LOW tier, max 2 attempts per EDIT step
 
-## Decision Flow (Follow In Order)
-
-The runner processes `execution_steps` sequentially. For each step:
-
-### READ step
-1. Execute `read` tool with `where`, `read_start_line`, `read_end_line`
-2. | Failure | Next action |
-   |---------|-------------|
-   | File not found | → STOP; return failure in ExecutionResult |
-   | Success | → next step |
-
-### EDIT step
-1. **Pre-read** — `_read_file_snippet` from disk (even if READ step preceded)
-2. Log pre-edit hash and `old_string` presence
-3. | Condition | Next action |
-   |-----------|-------------|
-   | `create_files=true` and no `old_string` | → `CursorGateway.edit()` with create instruction |
-   | `old_string == new_string` | → Check intent already satisfied; accept or fail |
-   | Normal patch | → `CursorGateway.edit()` with plan old/new strings |
-4. Post-edit: validate completeness and intent
-5. | Primary edit failed/incomplete | Next action |
-   |-------------------------------|-------------|
-   | Fix intent already satisfied | Accept with `plan_deviations` note |
-   | Otherwise | → LLM fallback → `CursorGateway.edit()` with fallback old/new (max 2 tries) |
-6. | Still failing after fallback | → STOP pipeline; record error |
-
-### VERIFY step
-1. Check `intent_marker` via `verify_intent_marker`
-2. Resolve required/forbidden patterns from prior EDIT steps + `validate` field
-3. Read file content; grep-style substring checks
-4. | Failure | → STOP |
-   | Success | → next step |
-
-### RUN_TESTS step
-1. Invoke `run_tests_for_file` for `where` path
-2. Exit code 2 = skipped (OK); 0 = pass; else fail
+---
 
 ## Quick Reference: Dispatch
 
 | Task | Backend |
 |------|---------|
-| Read file | `read` tool / `Path.read_text` |
-| Apply edit | **`CursorGateway.edit()`** — NOT local edit/write tools |
-| Verify edit | `verify_intent_marker` + pattern checks |
+| Read file | `read` tool |
+| Apply ALL edits | **One `CursorGateway.edit()`** with consolidated `metadata.edits[]` |
+| Verify edit | `read` + `verify_intent_marker` + pattern checks |
 | Run tests | `run_tests_for_file` script |
 | Git / PR | `create_worktree`, `show_diff`, `stage_commit_push`, `create_github_pr` |
+
+---
 
 ## Output Contract (Completion Criteria)
 
@@ -89,33 +136,41 @@ Runner returns **`ExecutionResult`** when ALL steps succeed:
 ```json
 {
   "ticket_id": "...",
-  "changed_files": ["path/from/EDIT/steps"],
-  "steps_completed": <int matching execution_steps length>,
+  "changed_files": ["paths from EDIT steps"],
+  "steps_completed": "<int matching execution_steps length>",
   "step_results": [{"step_id", "action", "file", "ok", "output", "deviations"}],
-  "plan_deviations": ["human-readable notes when fallback or intent-shortcut used"]
+  "plan_deviations": ["notes when fallback or intent-shortcut used"],
+  "cursor_calls": 1
 }
 ```
 
 **Record `plan_deviations` when:**
-- Plan `old_string` not in fresh read but edit succeeded
-- LLM fallback used
+- Plan `old_string` not in fresh read but batched edit succeeded
+- LLM fallback used on consolidated payload
 - Fix intent satisfied without exact patch match
-- Primary edit no-op but intent validated
+- EDIT steps skipped because intent already validated
 
 **You are DONE** when all steps complete OR first failure raises (no silent skip).
+
+---
 
 ## Failure Modes
 
 | Failure | Next action |
 |---------|-------------|
-| `OLD_STRING_NOT_FOUND` after Cursor edit | Re-READ; LLM fallback once; load `references/edit_patterns.md` on 2nd failure |
+| `OLD_STRING_NOT_FOUND` in batched edit | Re-READ all affected files; rebuild consolidated payload; one retry |
 | Cursor gateway dry_run | No file mutation; validation may pass with `dry_run` flag |
-| Snapshot mismatch (`planner_snapshot_head` ≠ executor HEAD) | STOP before any EDIT |
+| Snapshot mismatch | STOP before Cursor call |
 | VERIFY intent_marker missing | STOP; report mismatch |
-| Repository snapshot drift | STOP with RuntimeError |
+| Second Cursor call attempted | STOP — violates single-call rule |
+
+---
 
 ## Anti-Patterns (NEVER)
-- NEVER call `write` or `edit` tools — use `CursorGateway.edit()` only
+
+- NEVER call Cursor more than once per pipeline run (one batched call + at most one retry)
+- NEVER call `CursorGateway.edit()` per file or per EDIT step
+- NEVER call `write` or `edit` tools — use consolidated `CursorGateway.edit()` only
 - NEVER construct `old_string` from Jira or research memory without fresh read
-- NEVER skip READ before EDIT
+- NEVER skip READ before building consolidated payload
 - NEVER retry same failed patch without re-READ

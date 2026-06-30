@@ -7,9 +7,9 @@
     {
       "step_id": 1,
       "action": "EDIT",
-      "where": "hello.txt",
-      "what": "Create hello.txt with initial content",
-      "why": "Setup file for subsequent edit demo",
+      "file": "hello.txt",
+      "target": "Create hello.txt with initial content",
+      "reason": "Setup file for subsequent edit demo",
       "validate": "File exists and contains Hello, world!",
       "new_string": "Hello, world!\n",
       "change": "Create hello.txt via write"
@@ -17,9 +17,9 @@
     {
       "step_id": 2,
       "action": "EDIT",
-      "where": "hello.txt",
-      "what": "Update greeting text",
-      "why": "Demonstrate edit patch application",
+      "file": "hello.txt",
+      "target": "Update greeting text",
+      "reason": "Demonstrate edit patch application",
       "validate": "File contains Hello, Executor!",
       "old_string": "Hello, world!\n",
       "new_string": "Hello, Executor!\n",
@@ -28,9 +28,9 @@
     {
       "step_id": 3,
       "action": "EDIT",
-      "where": "app.py",
-      "what": "Create minimal app module",
-      "why": "Second file write demo",
+      "file": "app.py",
+      "target": "Create minimal app module",
+      "reason": "Second file write demo",
       "validate": "app.py defines VERSION",
       "new_string": "VERSION = \"1.0.0\"\n",
       "change": "Create app.py"
@@ -38,9 +38,9 @@
     {
       "step_id": 4,
       "action": "VERIFY",
-      "where": "hello.txt",
-      "what": "Hello, Executor!",
-      "why": "Confirm greeting edit persisted",
+      "file": "hello.txt",
+      "target": "Hello, Executor!",
+      "reason": "Confirm greeting edit persisted",
       "validate": "grep for Hello, Executor!"
     }
   ],
@@ -50,5 +50,3 @@
   "self_healing_notes": [],
   "flags": ["Mock execution plan for Executor standalone verification"]
 }
-
-

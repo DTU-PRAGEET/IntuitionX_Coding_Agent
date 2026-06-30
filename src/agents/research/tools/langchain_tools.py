@@ -14,7 +14,7 @@ def make_repo_profile_tool(repo_path: str):
 
     @tool
     def repo_profile() -> str:
-        """Profile repository layout (Java/Gradle vs Python, modules, package roots)."""
+        """Return repo layout JSON (type, modules, package roots). No arguments."""
         profile = profile_repository(repo_path)
         return json.dumps(dict(profile), indent=2)
 

@@ -71,7 +71,7 @@ _RUN_PREFIX = (
     "Run the following shell command in the repository workspace and report the output.\n\n"
 )
 
-_DEMO_SEARCH_PATH = "src/agents/planner/fixtures/demo/UserSearchController.py"
+_DRY_RUN_SEARCH_PATH = "src/example/handler.py"
 
 
 def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -117,10 +117,10 @@ def mock_search_response(query: str) -> CursorSearchResponse:
     if any(term in q for term in ("sql", "injection", "sqli", "search", "auth", "user")):
         hits.append(
             CursorSearchHit(
-                path=_DEMO_SEARCH_PATH,
+                path=_DRY_RUN_SEARCH_PATH,
                 confidence="medium",
-                summary="Demo fixture for SQL injection in user search handler",
-                snippets=["searchUsers method builds SQL via string concatenation"],
+                summary="Dry-run search hit for query pattern match",
+                snippets=["handler method builds query via string concatenation"],
             )
         )
     if not hits:
@@ -399,6 +399,9 @@ class LocalPatchCursorGateway(CursorGateway):
         metadata: dict[str, Any] | None = None,
     ) -> CursorEditResult:
         meta = metadata or {}
+        batched_edits = meta.get("edits")
+        if batched_edits:
+            return self._apply_batched_edits(instruction, batched_edits)
         old_s = meta.get("old_string") or ""
         new_s = meta.get("new_string") or ""
         create_file = bool(meta.get("create_file"))
@@ -453,86 +456,72 @@ class LocalPatchCursorGateway(CursorGateway):
             changed_files=changed,
         )
 
+    def _apply_batched_edits(
+        self, instruction: str, edits: list[dict[str, Any]]
+    ) -> CursorEditResult:
+        """Apply an ordered list of edits in a single call (consolidated executor payload)."""
+        changed: list[str] = []
+        errors: list[str] = []
+        for edit in edits:
+            rel = edit.get("file") or ""
+            old_s = edit.get("old_string") or ""
+            new_s = edit.get("new_string") or ""
+            create_file = bool(edit.get("create_file"))
+            if not rel:
+                errors.append("edit missing file path")
+                continue
+            fp = (self._cwd / rel).resolve()
+            try:
+                fp.relative_to(self._cwd)
+            except ValueError:
+                errors.append(f"path escapes workspace: {rel}")
+                continue
+            if create_file and not old_s and new_s:
+                fp.parent.mkdir(parents=True, exist_ok=True)
+                fp.write_text(new_s, encoding="utf-8")
+                changed.append(rel)
+                continue
+            if not fp.is_file():
+                errors.append(f"file not found: {rel}")
+                continue
+            if not old_s or not new_s:
+                errors.append(f"missing old_string/new_string for {rel}")
+                continue
+            content = fp.read_text(encoding="utf-8")
+            if old_s not in content:
+                errors.append(f"old_string not found in {rel}")
+                continue
+            fp.write_text(content.replace(old_s, new_s, 1), encoding="utf-8")
+            changed.append(rel)
+
+        if errors and not changed:
+            joined = "; ".join(errors)
+            return CursorEditResult(
+                status="failed", text=joined, stderr=joined, exit_code=1, changed_files=changed
+            )
+        stat, full = _git_diff_capture(self._cwd)
+        return CursorEditResult(
+            status="success" if changed else "failed",
+            text=(instruction[:500] if changed else "; ".join(errors)),
+            stderr="" if changed else "; ".join(errors),
+            exit_code=0 if changed else 1,
+            git_diff_stat=stat,
+            git_diff_full=full,
+            changed_files=sorted(dict.fromkeys(changed)),
+        )
+
     def run(self, command: str, *, timeout: int = 30) -> CursorGatewayResult:
         return CursorGatewayResult(status="success", text="", method="run")
 
 
-def mock_sec4421_search_response(query: str) -> CursorSearchResponse:
-    """High-fidelity canned Cursor search for the SEC-4421 SQL-injection ticket.
-
-    Returns the same shape a real Cursor search would, but never touches the SDK.
-    """
-    return CursorSearchResponse(
-        query=query,
-        hits=[
-            CursorSearchHit(
-                path=_DEMO_SEARCH_PATH,
-                confidence="high",
-                summary=(
-                    "search_users() builds SQL by f-string concatenation of the "
-                    "`query` parameter — classic SQL injection (CVE-2024-12345)."
-                ),
-                snippets=[
-                    "L8: sql = f\"SELECT * FROM users WHERE name LIKE '%{query}%'\"",
-                    "L6: def search_users(query: str) -> list[dict[str, Any]]:",
-                ],
-            ),
-        ],
-        flags=["mock_cursor_sec4421"],
-    )
-
-
-class MockCursorGateway(LocalPatchCursorGateway):
-    """Explicit Cursor mock — realistic SEC-4421 responses, never calls the Cursor SDK.
-
-    `edit` is inherited from LocalPatchCursorGateway (applies real metadata-driven
-    string patches locally), so the Executor still produces genuine diffs. `search`
-    and `ask` return canned SEC-4421 content so the Research agent's LLM has
-    realistic tool output to reason over.
-    """
-
-    def ask(self, prompt: str, *, context: str | None = None) -> CursorGatewayResult:
-        _log.info("cursor_gateway_mock", method="ask", cwd=str(self._cwd))
-        return CursorGatewayResult(
-            status="success",
-            text=(
-                "[mock cursor] The SQL injection lives in "
-                f"{_DEMO_SEARCH_PATH}:search_users — the `query` arg is interpolated "
-                "into the SQL string. Fix: use a parameterized query."
-            ),
-            method="ask",
-        )
-
-    def search(self, query: str, *, path: str = ".") -> CursorGatewayResult:
-        _log.info("cursor_gateway_mock", method="search", query=query[:80], path=path)
-        response = mock_sec4421_search_response(query)
-        return CursorGatewayResult(
-            status="success",
-            text=json.dumps(response.model_dump(), indent=2),
-            method="search",
-            search_response=response,
-        )
-
-    def run(self, command: str, *, timeout: int = 30) -> CursorGatewayResult:
-        _log.info("cursor_gateway_mock", method="run", command=command[:80])
-        return CursorGatewayResult(
-            status="success",
-            text=f"[mock cursor] (not executed) {command}",
-            method="run",
-        )
-
-
 def get_cursor_gateway(
-    cwd: Path | str, *, dry_run: bool = False, mock: bool = False
+    cwd: Path | str, *, dry_run: bool = False
 ) -> CursorGateway:
-    """Factory — returns Mock / DryRun / CliCursorGateway.
+    """Factory — returns DryRun / CliCursorGateway.
 
-    mock=True  -> MockCursorGateway: realistic SEC-4421 responses, no Cursor SDK call.
     dry_run=True -> DryRunCursorGateway: empty/dry results, no Cursor SDK call.
     otherwise -> CliCursorGateway: real Cursor SDK (only if CURSOR_API_KEY is set).
     """
-    if mock:
-        return MockCursorGateway(cwd)
     if dry_run:
         return DryRunCursorGateway(cwd)
     return CliCursorGateway(cwd, dry_run=False)

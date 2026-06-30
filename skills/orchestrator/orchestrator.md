@@ -1,17 +1,12 @@
 ---
 name: orchestrator
 description: >
-  Use this skill at pipeline entry. Takes a parsed Jira ticket and decides the
-  route (FULL, SKIP_RESEARCH, MICRO, or EXIT), assigns risk level, and emits a
-  structured RoutingDecision. ALWAYS use this skill before invoking any downstream
-  agent. Never route without it.
+  Use this skill at pipeline entry. Takes a parsed Jira ticket and decides the route (FULL, SKIP_RESEARCH, MICRO, or EXIT), assigns risk level, and emits a structured RoutingDecision. ALWAYS use this skill before invoking any downstream agent. Never route without it.
 tool_budget: 5
 recursion_limit: 3
 module: orchestrator
 agents: [orchestrator]
 ---
-
-<!-- CHANGELOG (2026-06-26): Added numbered decision flow with explicit next-action at every branch, edge-case handling, and unambiguous RoutingDecision completion criteria. -->
 
 # Orchestrator Agent
 

@@ -6,10 +6,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from src.agents.orchestrator.tools.jira import mock_security_jira_ticket
-from src.agents.executor.sub_agent import CursorImplementSubAgent
-from src.agents.planner.sub_agent import CursorPlanSubAgent
-from src.agents.research.sub_agent import CursorResearchSubAgent
 from src.core.agent_context import AgentContext
 from src.core.logging import get_logger
 from src.core.schemas import FixPlan, RoutingDecision
@@ -100,9 +96,9 @@ class StubPlannerAgent(SubAgent):
                 {
                     "step_id": 1,
                     "action": "READ",
-                    "where": target,
-                    "what": "Read target file",
-                    "why": "Stub step",
+                    "file": target,
+                    "target": "Read target file",
+                    "reason": "Stub step",
                     "validate": "File exists",
                 }
             ],
@@ -230,59 +226,3 @@ class PipelineOrchestrator:
         for agent in (self.research, self.planner, self.implement):
             if hasattr(agent, "_gateway") and agent._gateway is None:
                 agent._gateway = gateway  # type: ignore[attr-defined]
-
-
-def run_dummy_loop(ticket_id: str = "STUB-001") -> OrchestratorResult:
-    """CLI entry — milestone 1.2 stub loop."""
-    ticket = mock_security_jira_ticket(ticket_id)
-    return PipelineOrchestrator().run(ticket)
-
-
-def run_m14_chain(
-    ticket_id: str = "SEC-M14",
-    *,
-    repo_path: str | None = None,
-    dry_run: bool = True,
-) -> OrchestratorResult:
-    """Milestone 1.4 — full Cursor research + plan + implement chain."""
-    ticket = mock_security_jira_ticket(ticket_id)
-    if repo_path is None:
-        repo_path = str(Path(__file__).resolve().parents[2])
-    gateway = get_cursor_gateway(Path(repo_path), dry_run=dry_run)
-    return PipelineOrchestrator(
-        research=CursorResearchSubAgent(repo_path=repo_path, dry_run=dry_run, gateway=gateway),
-        planner=CursorPlanSubAgent(repo_path=repo_path, dry_run=dry_run, gateway=gateway),
-        implement=CursorImplementSubAgent(repo_path=repo_path, dry_run=dry_run, gateway=gateway),
-        cursor_gateway=gateway,
-    ).run(ticket, repo_path=repo_path)
-
-
-def run_m13_chain(
-    ticket_id: str = "SEC-M13",
-    *,
-    repo_path: str | None = None,
-    dry_run: bool = True,
-) -> OrchestratorResult:
-    """Milestone 1.3 — Cursor research + plan sub-agents, end-to-end typed chain."""
-    ticket = mock_security_jira_ticket(ticket_id)
-    if repo_path is None:
-        repo_path = str(Path(__file__).resolve().parents[2])
-    gateway = get_cursor_gateway(Path(repo_path), dry_run=dry_run)
-    return PipelineOrchestrator(
-        research=CursorResearchSubAgent(repo_path=repo_path, dry_run=dry_run, gateway=gateway),
-        planner=CursorPlanSubAgent(repo_path=repo_path, dry_run=dry_run, gateway=gateway),
-        implement=StubImplementAgent(),
-        cursor_gateway=gateway,
-    ).run(ticket, repo_path=repo_path)
-
-
-if __name__ == "__main__":
-    from src.core.logging import configure_logging
-
-    configure_logging()
-    result = run_m13_chain()
-    print(f"success={result.success} route={result.routing_route}")
-    print(f"research_files={len(result.research.get('affected_files', []))}")
-    print(f"fix_plan_targets={len(result.fix_plan.get('targets', []))}")
-    print(f"fix_type={result.fix_plan.get('primary_fix_type')}")
-    print(f"patch_status={result.patch.get('status')}")

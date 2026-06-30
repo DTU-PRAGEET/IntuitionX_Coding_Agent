@@ -18,6 +18,7 @@ from src.agents.orchestrator.tools.jira_client import (
     create_jira_client,
     credentials_configured,
 )
+from src.core.config import settings
 from src.core.logging import get_logger
 from src.core.state import JiraTicket
 
@@ -27,6 +28,8 @@ JIRA_FETCH_FIELDS = (
     "summary,description,status,issuetype,priority,labels,components,"
     "comment,attachment,issuelinks,assignee,reporter"
 )
+if settings.jira_vulnerability_category_field:
+    JIRA_FETCH_FIELDS = f"{JIRA_FETCH_FIELDS},{settings.jira_vulnerability_category_field}"
 
 
 class ParsedJiraTicket(BaseModel):
@@ -40,6 +43,7 @@ class ParsedJiraTicket(BaseModel):
     repo_links: list[str] = Field(default_factory=list)
     labels: list[str] = Field(default_factory=list)
     module: str = "not_specified"
+    vulnerability_category: str = ""
     raw_summary: str = ""
     raw_description: str = ""
 
@@ -93,6 +97,7 @@ def fetch_ticket_by_id(ticket_id: str) -> tuple[JiraTicket, dict[str, Any], Pars
         repo_links=list(ticket.get("repo_links", [])),
         labels=list(ticket.get("labels", [])),
         module=ticket.get("module", "not_specified"),
+        vulnerability_category=ticket.get("vulnerability_category") or "",
         raw_summary=ticket.get("title", "") or "",
         raw_description=ticket.get("problem_statement") or "",
     )

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from src.agents.executor.tools import git_worktree as gw_mod
 from src.agents.executor.tools.git_worktree import (
     create_worktree,
+    make_branch_name,
     resolve_base_branch,
     stage_commit_push,
 )
@@ -17,13 +20,22 @@ def test_resolve_base_branch_prefers_existing_remote(tmp_path):
         assert resolve_base_branch(str(tmp_path), preferred="develop") == "main"
 
 
-def test_reused_worktree_resets_when_dirty(tmp_path):
-    worktree = tmp_path / "space_129068"
-    worktree.mkdir()
-    with patch("src.agents.executor.tools.git_worktree._run_git") as mock_git, patch(
-        "src.agents.executor.tools.git_worktree._current_branch",
-        return_value="fix/space-129068",
-    ), patch(
+def test_make_branch_name_includes_run_timestamp():
+    import re
+
+    name = make_branch_name("SPACE-129069", description="stored reflected xss")
+    assert name.startswith("fix/space-129069-stored-reflected-x")
+    assert re.search(r"-\d{8}-\d{4}$", name)
+
+
+def test_reused_worktree_checks_out_new_branch(tmp_path):
+    worktree_root = tmp_path / "worktrees"
+    worktree = worktree_root / "space_129068"
+    worktree.mkdir(parents=True)
+    patched_settings = SimpleNamespace(**{**vars(gw_mod.settings), "worktree_base": str(worktree_root)})
+    with patch("src.agents.executor.tools.git_worktree.settings", patched_settings), patch(
+        "src.agents.executor.tools.git_worktree._run_git",
+    ) as mock_git, patch(
         "src.agents.executor.tools.git_worktree.resolve_base_branch",
         return_value="main",
     ), patch(
@@ -35,11 +47,22 @@ def test_reused_worktree_resets_when_dirty(tmp_path):
             {"head": "abc123", "branch": "fix/x", "status_short": " M f.py", "repo_path": str(worktree), "cwd": "", "diff_stat": "", "is_git": True},
             {"head": "def456", "branch": "fix/x", "status_short": "", "repo_path": str(worktree), "cwd": "", "diff_stat": "", "is_git": True},
         ],
+    ), patch(
+        "src.agents.executor.tools.git_worktree.make_branch_name",
+        return_value="fix/space-129068-20260629-1800",
     ):
         mock_git.return_value.returncode = 0
         mock_git.return_value.stdout = ""
         info = create_worktree(str(tmp_path), "SPACE-129068", planner_snapshot_head="def456")
+
     assert info["status"] == "reset"
+    assert info["branch_name"] == "fix/space-129068-20260629-1800"
+    checkout_calls = [
+        call.args[0]
+        for call in mock_git.call_args_list
+        if call.args and call.args[0][:2] == ["checkout", "-B"]
+    ]
+    assert checkout_calls == [["checkout", "-B", "fix/space-129068-20260629-1800"]]
 
 
 def test_stage_commit_push_reports_no_changes_without_remote_branch(tmp_path):
