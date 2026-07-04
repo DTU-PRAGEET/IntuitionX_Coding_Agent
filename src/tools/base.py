@@ -22,10 +22,12 @@ _log = get_logger("tool_base")
 
 
 def register_event_handler(handler: Callable[[str, dict], None]) -> None:
+    """Register Event Handler for this module."""
     _event_handlers.append(handler)
 
 
 def emit_event(event_type: str, payload: dict) -> None:
+    """Emit event."""
     for handler in _event_handlers:
         try:
             handler(event_type, payload)
@@ -37,9 +39,11 @@ class ResultBuffer:
     """Truncate tool output and spill full content to a temp log file."""
 
     def __init__(self, limit: int = TRUNCATE_LIMIT):
+        """Initialize ResultBuffer with the provided arguments."""
         self.limit = limit
 
     def process(self, raw: str, tool_name: str) -> tuple[str, bool, Optional[str]]:
+        """Process for ResultBuffer."""
         head = truncate_head(raw, max_lines=2000, max_bytes=self.limit)
         if not head.truncated and len(raw) <= self.limit:
             return raw, False, None
@@ -58,6 +62,7 @@ def audit_tool(func: Callable) -> Callable:
 
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs) -> ToolResult:
+        """Wrapper for this module."""
         tool_name = getattr(self, "name", func.__name__)
         log = get_logger(tool_name)
         log.info("invoke", args={k: str(v)[:200] for k, v in kwargs.items()})
@@ -103,15 +108,18 @@ class ToolDefinition(ABC):
     input_schema: Type[BaseModel] = BaseModel
 
     def __init__(self, cwd: str):
+        """Initialize ToolDefinition with the provided arguments."""
         self.cwd = str(Path(cwd).resolve())
         if not Path(self.cwd).exists():
             Path(self.cwd).mkdir(parents=True, exist_ok=True)
         self._buffer = ResultBuffer()
 
     def resolve_path(self, path: str) -> Path:
+        """Resolve Path for ToolDefinition."""
         return resolve_path_sandbox(path, self.cwd)
 
     def _wrap_output(self, raw: str, exit_code: int = 0, is_error: bool = False) -> ToolResult:
+        """Wrap Output for ToolDefinition."""
         output, truncated, log_path = self._buffer.process(raw, self.name)
         return ToolResult(
             output=output,
@@ -124,4 +132,5 @@ class ToolDefinition(ABC):
 
     @abstractmethod
     def execute(self, **kwargs: Any) -> ToolResult:
+        """Run the tool with validated arguments and return a structured result."""
         ...

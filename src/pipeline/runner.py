@@ -22,6 +22,7 @@ from src.agents.research.memory import InMemoryResearchMemory
 from src.agents.research.tools.file_discovery import extract_anchors
 from src.agents.research.tools.repo_profile import profile_repository
 from src.core.logging import configure_logging, get_logger
+from src.core.orchestrator_context import apply_orchestrator_ticket_analysis
 from src.core.schemas import ExecutionPlan, ResearchReport, RoutingDecision
 from src.core.state import JiraTicket, ResearchOutput
 from src.core.token_usage import start_pipeline_tracking, stop_pipeline_tracking
@@ -37,6 +38,7 @@ class PipelineError(Exception):
     """Pipeline stopped at a stage with localized context."""
 
     def __init__(self, stage: StageName, message: str) -> None:
+        """Initialize PipelineError with the provided arguments."""
         self.stage = stage
         self.message = message
         super().__init__(f"[orchestrator] stage_failed={stage} error={message}")
@@ -44,6 +46,8 @@ class PipelineError(Exception):
 
 @dataclass
 class PipelineResult:
+    """End-to-end pipeline outcome from `run_pipeline` / graph runner.
+    Bundles routing, ResearchOutput, ExecutionPlan, ExecutionResult, and token_usage."""
     success: bool
     routing_route: str
     ticket_id: str
@@ -61,12 +65,14 @@ PipelineProgressCallback = Callable[[str, dict[str, Any]], None]
 
 
 def _emit_progress(event: str, payload: dict[str, Any], on_progress: PipelineProgressCallback | None) -> None:
+    """Emit Progress for this module."""
     emit_event(f"pipeline_{event}", payload)
     if on_progress:
         on_progress(event, payload)
 
 
 def _log_node_start(node: str, on_progress: PipelineProgressCallback | None = None) -> None:
+    """Log Node Start for this module."""
     _log.info("node_start", node=node)
     _emit_progress("node_start", {"node": node}, on_progress)
 
@@ -77,6 +83,7 @@ def _log_handoff(
     payload_shape: str,
     on_progress: PipelineProgressCallback | None = None,
 ) -> None:
+    """Log Handoff for this module."""
     _log.info("handoff", source=source, target=target, payload_shape=payload_shape)
     _emit_progress(
         "handoff",
@@ -86,6 +93,7 @@ def _log_handoff(
 
 
 def _log_stage_failed(stage: StageName, error: str) -> None:
+    """Log Stage Failed for this module."""
     _orch_log.error("stage_failed", stage=stage, error=error)
 
 
@@ -160,6 +168,7 @@ def _run_pipeline_body(
     llm_orchestrator: BaseChatModel | None = None,
 ) -> PipelineResult:
 
+    """Run Pipeline Body for this module."""
     try:
         ticket = fetch_jira_ticket(ticket_id)
     except Exception as e:
@@ -168,11 +177,14 @@ def _run_pipeline_body(
 
     profile = profile_repository(repo_path)
     decision = resolve_routing(ticket, llm=llm_orchestrator)
+    apply_orchestrator_ticket_analysis(ticket, decision)
     _orch_log.info(
         "routing",
         route=decision.routing_route,
         risk_level=decision.risk_level,
         reason=decision.reasoning[:200],
+        vulnerability_category=decision.vulnerability_category,
+        recommended_security_skill=decision.recommended_security_skill,
     )
     _emit_progress(
         "routing",

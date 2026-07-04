@@ -51,6 +51,7 @@ def apply_edit(
     *,
     dry_run: bool = False,
 ) -> tuple[bool, str, int]:
+    """Apply edit."""
     root = Path(repo_path)
     resolved = root / file_path
     if not resolved.exists():
@@ -92,6 +93,7 @@ def apply_edit(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for this module."""
     parser = argparse.ArgumentParser(description="Apply single str_replace edit")
     parser.add_argument("--repo", required=True)
     parser.add_argument("--file", required=True)

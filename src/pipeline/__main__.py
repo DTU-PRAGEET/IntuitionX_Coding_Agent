@@ -15,6 +15,7 @@ _log = get_logger("pipeline_cli")
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for this module."""
     configure_logging()
     parser = argparse.ArgumentParser(description="Run full Jira solver pipeline")
     parser.add_argument("--ticket", default="PLAT-1234", help="Jira ticket id")

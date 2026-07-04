@@ -16,10 +16,13 @@ from src.core.runner_utils import llm_content, invoke_tracked, parse_llm_json
 from src.core.schemas import RoutingDecision
 from src.core.state import AgentState, JiraTicket
 from src.core.tracing import PROMPT_VERSIONS, apply_trace_metadata, sync_trace_context_from_state
-from src.core.prompt_builder import PromptBuilder
-from src.core.orchestrator_context import build_orchestrator_routing_context
+from src.core.skill_manager import PromptBuilder, module_skills_dir
+from src.core.orchestrator_context import (
+    apply_orchestrator_ticket_analysis,
+    build_orchestrator_routing_context,
+    sanitize_routing_decision,
+)
 from src.core.plan_validation import validate_execution_plan
-from src.core.skill_registry import module_skills_dir
 from src.memory.cache import get_failed_attempts
 from src.agents.orchestrator.tools.jira import fetch_jira_ticket, is_ticket_done
 from src.agents.research.tools.repo_profile import profile_repository
@@ -79,13 +82,15 @@ def run_orchestrator_routing(
     )
     try:
         response = invoke_tracked(llm, routing_prompt, agent="orchestrator")
-        return parse_llm_json(llm_content(response), RoutingDecision)
+        decision = parse_llm_json(llm_content(response), RoutingDecision)
+        return sanitize_routing_decision(decision)
     except Exception as e:
         _log.error("routing_failed", error=str(e))
         raise RuntimeError(f"Orchestrator routing failed for ticket={ticket['issue_id']!r}: {e}") from e
 
 
 def orchestrator_node(state: AgentState) -> AgentState:
+    """Orchestrator Node for this module."""
     now = datetime.now(timezone.utc).isoformat()
     ticket_id = state["jira_ticket_id"]
     previous = get_failed_attempts(ticket_id)
@@ -116,6 +121,7 @@ def orchestrator_node(state: AgentState) -> AgentState:
             previous_attempts=previous,
             user_prompt=user_prompt,
         )
+        apply_orchestrator_ticket_analysis(ticket, decision)
     except Exception as e:
         return {
             **state,

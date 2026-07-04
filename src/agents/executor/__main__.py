@@ -17,6 +17,7 @@ _log = get_logger("executor_cli")
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for this module."""
     configure_logging()
     parser = argparse.ArgumentParser(description="Run Executor Agent standalone")
     parser.add_argument(

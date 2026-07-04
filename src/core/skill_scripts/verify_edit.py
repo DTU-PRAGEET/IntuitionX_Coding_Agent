@@ -27,6 +27,7 @@ from src.tools.edit_diff import normalize_to_lf, strip_bom
 
 
 def verify_intent_marker(repo_path: str, file_path: str, intent_marker: str) -> tuple[bool, str, int]:
+    """Verify Intent Marker for this module."""
     resolved = Path(repo_path) / file_path
     if not resolved.exists():
         return False, f"VERIFY_FAIL: FILE_NOT_FOUND in {file_path}", 2
@@ -40,6 +41,7 @@ def verify_intent_marker(repo_path: str, file_path: str, intent_marker: str) -> 
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for this module."""
     parser = argparse.ArgumentParser(description="Verify edit via intent marker")
     parser.add_argument("--repo", required=True)
     parser.add_argument("--file", required=True)

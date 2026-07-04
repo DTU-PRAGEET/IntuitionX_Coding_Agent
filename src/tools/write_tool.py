@@ -14,6 +14,7 @@ class WriteTool(ToolDefinition):
 
     @audit_tool
     def execute(self, path: str, content: str) -> ToolResult:
+        """Execute for WriteTool."""
         try:
             resolved = self.resolve_path(path)
         except ValueError as e:

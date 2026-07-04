@@ -19,6 +19,8 @@ _path_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 
 @dataclass
 class BudgetState:
+    """Per-agent/thread tool-call counter persisted under AGENT_BUDGET_DIR.
+    Updated by `check_and_decrement`; read by research `cursor_search` budget checks."""
     agent: str
     thread_id: str
     hard_limit: int
@@ -26,13 +28,16 @@ class BudgetState:
 
     @property
     def remaining(self) -> int:
+        """Remaining for BudgetState."""
         return max(0, self.hard_limit - self.calls_made)
 
     @property
     def abort(self) -> bool:
+        """Abort for BudgetState."""
         return self.calls_made >= max(0, self.hard_limit - 2)
 
     def to_dict(self) -> dict[str, Any]:
+        """To Dict for BudgetState."""
         return {
             "agent": self.agent,
             "thread_id": self.thread_id,
@@ -44,29 +49,37 @@ class BudgetState:
 
 
 def _budget_path(agent: str, thread_id: str, budget_dir: Path | None = None) -> Path:
+    """Budget Path for this module."""
     root = budget_dir or DEFAULT_BUDGET_DIR
     return root / f"agent_budget_{agent}_{thread_id}.json"
 
 
 def _lock_for(path: Path) -> threading.Lock:
+    """Lock For for this module."""
     return _path_locks[str(path.resolve())]
 
 
 class BudgetTracker:
+    """File-backed budget tracker with per-path locking for concurrent tool calls.
+    Used by `skill_scripts/budget` CLI and `agents/research/tools/cursor_search.py`."""
     def __init__(self, agent: str, thread_id: str, hard_limit: int, budget_dir: Path | None = None):
+        """Initialize BudgetTracker with the provided arguments."""
         self._path = _budget_path(agent, thread_id, budget_dir)
         self._state = BudgetState(agent=agent, thread_id=thread_id, hard_limit=hard_limit)
 
     def init(self) -> dict[str, Any]:
+        """Init for BudgetTracker."""
         with _lock_for(self._path):
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._write_state(self._state)
             return self._state.to_dict()
 
     def _read_raw(self) -> str:
+        """Read Raw for BudgetTracker."""
         return self._path.read_text(encoding="utf-8") if self._path.exists() else ""
 
     def _load_unlocked(self) -> BudgetState:
+        """Load Unlocked for BudgetTracker."""
         if not self._path.exists():
             raise FileNotFoundError(f"Budget not initialized: {self._path}")
         raw = self._read_raw().strip()
@@ -81,11 +94,13 @@ class BudgetTracker:
         )
 
     def _write_state(self, state: BudgetState) -> None:
+        """Write State for BudgetTracker."""
         tmp = self._path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(state.to_dict(), indent=2), encoding="utf-8")
         tmp.replace(self._path)
 
     def check_and_decrement(self) -> dict[str, Any]:
+        """Check And Decrement for BudgetTracker."""
         with _lock_for(self._path):
             state = self._load_unlocked()
             state.calls_made += 1
@@ -99,6 +114,7 @@ def init_budget(
     hard_limit: int,
     budget_dir: Path | None = None,
 ) -> dict[str, Any]:
+    """Init Budget for this module."""
     return BudgetTracker(agent, thread_id, hard_limit, budget_dir).init()
 
 
@@ -108,11 +124,13 @@ def check_and_decrement(
     hard_limit: int | None = None,
     budget_dir: Path | None = None,
 ) -> dict[str, Any]:
+    """Check and decrement."""
     tracker = BudgetTracker(agent, thread_id, hard_limit or 15, budget_dir)
     return tracker.check_and_decrement()
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for this module."""
     parser = argparse.ArgumentParser(description="Agent tool-call budget tracker")
     sub = parser.add_subparsers(dest="command", required=True)
 

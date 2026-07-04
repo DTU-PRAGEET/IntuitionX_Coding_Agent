@@ -8,6 +8,7 @@ from src.core.state import AgentState, PlanOutput, ResearchOutput
 
 
 def format_gate1_request(state: AgentState) -> str:
+    """Format gate1 request."""
     research: ResearchOutput | None = state.get("research_output")
     ticket_id = state["jira_ticket_id"]
     risk = (state.get("risk_level") or "MEDIUM").upper()
@@ -49,6 +50,7 @@ def format_gate1_request(state: AgentState) -> str:
 
 
 def format_gate2_request(state: AgentState) -> str:
+    """Format gate2 request."""
     plan: PlanOutput | None = state.get("plan_output")
     ticket_id = state["jira_ticket_id"]
     risk = (plan.get("risk_level", "medium") if plan else "medium").upper()
@@ -90,6 +92,7 @@ def format_gate2_request(state: AgentState) -> str:
 
 
 def format_micro_confirm(state: AgentState) -> str:
+    """Format micro confirm."""
     plan: PlanOutput | None = state.get("plan_output")
     ticket_id = state["jira_ticket_id"]
 

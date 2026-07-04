@@ -17,10 +17,13 @@ from src.integrations.llm.sprinklr_router import (
 
 
 class _CaptureTransport(httpx.BaseTransport):
+    """Test httpx transport that records the last request and returns a fake 200 completion."""
     def __init__(self) -> None:
+        """Initialize _CaptureTransport with the provided arguments."""
         self.last_request: httpx.Request | None = None
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
+        """Handle Request for _CaptureTransport."""
         self.last_request = request
         payload = {
             "object": "chat-completion",
@@ -34,15 +37,19 @@ class _CaptureTransport(httpx.BaseTransport):
 
 
 class _ErrorTransport(httpx.BaseTransport):
+    """Test httpx transport that returns a configurable error status/body for router failures."""
     def __init__(self, status_code: int, body: str) -> None:
+        """Initialize _ErrorTransport with the provided arguments."""
         self.status_code = status_code
         self.body = body
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
+        """Handle Request for _ErrorTransport."""
         return httpx.Response(self.status_code, content=self.body.encode(), request=request)
 
 
 def test_sprinklr_transport_rewrites_path_and_injects_body():
+    """Test Sprinklr Transport Rewrites Path And Injects Body for this module."""
     capture = _CaptureTransport()
     transport = SprinklrRouterTransport(
         transport=capture,
@@ -71,6 +78,7 @@ def test_sprinklr_transport_rewrites_path_and_injects_body():
 
 
 def test_sprinklr_transport_strips_authorization_header():
+    """Test Sprinklr Transport Strips Authorization Header for this module."""
     capture = _CaptureTransport()
     transport = SprinklrRouterTransport(
         transport=capture,
@@ -97,6 +105,7 @@ def test_sprinklr_transport_strips_authorization_header():
 
 
 def test_sprinklr_transport_curl_contract_body():
+    """Test Sprinklr Transport Curl Contract Body for this module."""
     capture = _CaptureTransport()
     transport = SprinklrRouterTransport(
         transport=capture,
@@ -130,6 +139,7 @@ def test_sprinklr_transport_curl_contract_body():
 
 
 def test_sprinklr_transport_normalizes_response_object():
+    """Test Sprinklr Transport Normalizes Response Object for this module."""
     capture = _CaptureTransport()
     transport = SprinklrRouterTransport(
         transport=capture,
@@ -148,6 +158,7 @@ def test_sprinklr_transport_normalizes_response_object():
 
 
 def test_sprinklr_transport_returns_json_error_on_403():
+    """Test Sprinklr Transport Returns Json Error On 403 for this module."""
     transport = SprinklrRouterTransport(
         transport=_ErrorTransport(403, "<!doctype html><title>403</title>403 Forbidden"),
         extra_body={"client_identifier": "dev"},
@@ -176,6 +187,7 @@ def test_sprinklr_transport_returns_json_error_on_403():
     clear=False,
 )
 def test_create_sprinklr_chat_model_invokes_router():
+    """Test Create Sprinklr Chat Model Invokes Router for this module."""
     capture = _CaptureTransport()
     with patch(
         "src.integrations.llm.sprinklr_router.SprinklrRouterTransport",
@@ -201,6 +213,7 @@ def test_create_sprinklr_chat_model_invokes_router():
     clear=False,
 )
 def test_sprinklr_tracking_params_json_override():
+    """Test Sprinklr Tracking Params Json Override for this module."""
     from src.integrations.llm import sprinklr_router
 
     extra = sprinklr_router._sprinklr_extra_body()
@@ -209,6 +222,7 @@ def test_sprinklr_tracking_params_json_override():
 
 @patch.dict("os.environ", {"SPRINKLR_LLM_TRACKING_PARAMS": "not-json"}, clear=False)
 def test_sprinklr_tracking_params_json_invalid():
+    """Test Sprinklr Tracking Params Json Invalid for this module."""
     from src.integrations.llm import sprinklr_router
 
     with pytest.raises(ValueError, match="SPRINKLR_LLM_TRACKING_PARAMS"):

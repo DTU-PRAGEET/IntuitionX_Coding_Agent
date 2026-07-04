@@ -6,7 +6,7 @@ from pathlib import Path
 
 from src.core.logging import get_logger
 from src.core.schemas import FixPlan, PatchResult
-from src.core.skill_registry import LoadedSkill, SkillRegistry
+from src.core.skill_manager import LoadedSkill, SkillRegistry
 from src.core.state import ResearchOutput
 from src.integrations.cursor.gateway import CursorGateway, get_cursor_gateway
 

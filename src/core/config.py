@@ -17,6 +17,8 @@ elif _env_file.exists():
 
 @dataclass(frozen=True)
 class Settings:
+    """Frozen env-backed config singleton (`settings`) — LLM, Jira, Redis, Cursor, git.
+    Loaded from `.env.local` / `.env` at import; read across agents, API, and integrations."""
     llm_provider: str = os.getenv("LLM_PROVIDER", "local")
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
@@ -60,6 +62,7 @@ class Settings:
 
     cursor_api_key: str = os.getenv("CURSOR_API_KEY", "")
     cursor_model: str = os.getenv("CURSOR_MODEL", "composer-2.5")
+    cursor_max_edit_attempts: int = int(os.getenv("CURSOR_MAX_EDIT_ATTEMPTS", "2"))
 
     langchain_tracing: bool = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
     langchain_project: str = os.getenv("LANGCHAIN_PROJECT", "sprinklr-jira-solver-dev")

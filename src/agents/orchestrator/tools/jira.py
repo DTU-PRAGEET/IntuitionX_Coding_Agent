@@ -22,6 +22,7 @@ _log = get_logger("jira")
 
 
 def _raw_fields(issue: Any) -> dict[str, Any]:
+    """Raw Fields for this module."""
     raw = getattr(issue, "raw", None)
     if isinstance(raw, dict):
         fields = raw.get("fields")
@@ -42,6 +43,7 @@ def _issue_field(issue: Any, name: str, default: Any = None) -> Any:
 
 
 def _field_name(field_obj: Any, default: str = "Unknown") -> str:
+    """Field Name for this module."""
     if not field_obj:
         return default
     if isinstance(field_obj, dict):
@@ -50,6 +52,7 @@ def _field_name(field_obj: Any, default: str = "Unknown") -> str:
 
 
 def _user_name(user_obj: Any, default: str = "not_specified") -> str:
+    """User Name for this module."""
     if not user_obj:
         return default
     if isinstance(user_obj, dict):
@@ -58,18 +61,21 @@ def _user_name(user_obj: Any, default: str = "not_specified") -> str:
 
 
 def _issue_key(issue: Any) -> str:
+    """Issue Key for this module."""
     if isinstance(issue, dict):
         return issue.get("key") or issue.get("issue_id") or "UNKNOWN"
     return getattr(issue, "key", None) or "UNKNOWN"
 
 
 def _link_related_issue(link: Any) -> Any | None:
+    """Link Related Issue for this module."""
     if isinstance(link, dict):
         return link.get("outwardIssue") or link.get("inwardIssue")
     return getattr(link, "outwardIssue", None) or getattr(link, "inwardIssue", None)
 
 
 def _link_relationship(link: Any) -> str:
+    """Link Relationship for this module."""
     if isinstance(link, dict):
         link_type = link.get("type") or {}
         if isinstance(link_type, dict):
@@ -82,6 +88,7 @@ def _link_relationship(link: Any) -> str:
 
 
 def _field_text(field_obj: Any, default: str = "") -> str:
+    """Field Text for this module."""
     if not field_obj:
         return default
     if isinstance(field_obj, str):
@@ -89,24 +96,34 @@ def _field_text(field_obj: Any, default: str = "") -> str:
     return str(field_obj)
 
 
-def _extract_vulnerability_category(issue: Any, enrichment_vulnerability_type: str = "") -> str:
-    """Read Vulnerability Category from Jira custom field or enrichment fallback."""
+def _extract_vulnerability_category(issue: Any) -> tuple[str, str]:
+    """Read Vulnerability Category from Jira custom field only.
+
+    Returns (category, source) where source is ``jira_field`` or ``unset``.
+    Heuristic text parsing is intentionally not used here — the orchestrator LLM
+    classifies the ticket after fetch when the Jira field is absent.
+    """
     field_id = (settings.jira_vulnerability_category_field or "").strip()
     if field_id:
         raw_val = _issue_field(issue, field_id)
         if raw_val:
             if isinstance(raw_val, str):
-                return raw_val.strip()
+                return raw_val.strip(), "jira_field"
             if isinstance(raw_val, dict):
-                return (_field_name(raw_val, "") or raw_val.get("value") or "").strip()
+                value = (_field_name(raw_val, "") or raw_val.get("value") or "").strip()
+                if value:
+                    return value, "jira_field"
             if isinstance(raw_val, list) and raw_val:
                 first = raw_val[0]
                 if isinstance(first, dict):
-                    return (_field_name(first, "") or first.get("value") or "").strip()
-                return str(first).strip()
-    if enrichment_vulnerability_type:
-        return enrichment_vulnerability_type.strip()
-    return ""
+                    value = (_field_name(first, "") or first.get("value") or "").strip()
+                    if value:
+                        return value, "jira_field"
+                else:
+                    value = str(first).strip()
+                    if value:
+                        return value, "jira_field"
+    return "", "unset"
 
 
 AC_KEYWORDS = [
@@ -136,12 +153,14 @@ DONE_STATUSES = {"done", "resolved", "closed"}
 
 
 def _normalize_priority(raw: str | None) -> str:
+    """Normalize Priority for this module."""
     if not raw:
         return "P3"
     return PRIORITY_MAP.get(raw.lower(), "P3")
 
 
 def _extract_acceptance_criteria(text: str) -> list[str]:
+    """Extract Acceptance Criteria for this module."""
     if not text:
         return []
     criteria: list[str] = []
@@ -172,12 +191,14 @@ def _extract_acceptance_criteria(text: str) -> list[str]:
 
 
 def _compress_comments(comments: list[Any], assignee: str, reporter: str) -> list[JiraComment]:
+    """Compress Comments for this module."""
     keyword_pattern = re.compile(
         r"root cause|rca|blocker|workaround|dependency|fix", re.I
     )
     kept: dict[str, JiraComment] = {}
 
     def add(c: Any) -> None:
+        """Add for this module."""
         author = getattr(c.author, "displayName", "unknown")
         body = getattr(c, "body", "") or ""
         created = str(getattr(c, "created", ""))
@@ -212,6 +233,7 @@ def _compress_comments(comments: list[Any], assignee: str, reporter: str) -> lis
 
 
 def _extract_repo_links(issue: Any) -> list[str]:
+    """Extract Repo Links for this module."""
     description = _field_text(_issue_field(issue, "description"))
     links = extract_repo_links_from_text(description)
     for _field_name, val in _raw_fields(issue).items():
@@ -290,9 +312,7 @@ def _issue_to_jira_ticket(issue: Any, client: Any) -> JiraTicket:
     target_branch = extract_target_branch(description)
 
     issue_type = _field_name(_issue_field(issue, "issuetype"), "Unknown")
-    vulnerability_category = _extract_vulnerability_category(
-        issue, enrichment.vulnerability_type or ""
-    )
+    vulnerability_category, vulnerability_category_source = _extract_vulnerability_category(issue)
 
     return JiraTicket(
         issue_id=_issue_key(issue),
@@ -314,6 +334,7 @@ def _issue_to_jira_ticket(issue: Any, client: Any) -> JiraTicket:
         ticket_history_summary={
             "fetched": True,
             "security_enrichment": enrichment.model_dump(),
+            "vulnerability_category_source": vulnerability_category_source,
             "github_repo": repo_links[0] if repo_links else enrichment.repository,
             "target_branch": target_branch,
         },
@@ -334,6 +355,7 @@ def fetch_jira_ticket(ticket_id: str) -> JiraTicket:
 
 
 def is_ticket_done(ticket: JiraTicket) -> bool:
+    """Is Ticket Done for this module."""
     return ticket["status"].lower() in DONE_STATUSES
 
 

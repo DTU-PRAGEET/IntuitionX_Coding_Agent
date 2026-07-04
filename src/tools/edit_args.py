@@ -9,6 +9,7 @@ from src.tools.edit_diff import EditError, EditReplacement
 
 
 def _coerce_text(value: Any, field_name: str) -> str:
+    """Coerce Text for this module."""
     if isinstance(value, str):
         return value
     if isinstance(value, list):
@@ -22,6 +23,7 @@ def _coerce_text(value: Any, field_name: str) -> str:
 
 
 def _parse_edit_item(raw: Any, index: int) -> EditReplacement:
+    """Parse Edit Item for this module."""
     if not isinstance(raw, dict):
         raise EditError(f"edits[{index}] must be an object with old_string/new_string")
 

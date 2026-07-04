@@ -26,11 +26,13 @@ class CursorPlanSubAgent(SubAgent):
         dry_run: bool = False,
         gateway: CursorGateway | None = None,
     ):
+        """Initialize CursorPlanSubAgent with the provided arguments."""
         self._repo_path = repo_path
         self._dry_run = dry_run
         self._gateway = gateway
 
     def run(self, context: AgentContext) -> AgentContext:
+        """Run for CursorPlanSubAgent."""
         research: ResearchOutput | None = context.metadata.get("research_output")
         repo_path = self._repo_path or context.metadata.get("repo_path")
 

@@ -18,6 +18,7 @@ class BashTool(ToolDefinition):
 
     @audit_tool
     def execute(self, command: str, timeout: int = 30) -> ToolResult:
+        """Execute for BashTool."""
         if not os.path.exists(self.cwd):
             return self._wrap_output(f"Error: cwd does not exist: {self.cwd}", 1, True)
         try:

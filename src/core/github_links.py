@@ -12,6 +12,7 @@ _BRANCH_RE = re.compile(r"(?i)\bbranch\s*:\s*(\S+)")
 
 
 def github_slug(owner: str, repo: str) -> str:
+    """Github Slug for this module."""
     return f"{owner}/{repo}"
 
 

@@ -29,17 +29,24 @@ class ToolResult(BaseModel):
 
 
 class ReadInput(BaseModel):
+    """Args schema for the read tool — file path plus optional line window.
+    Validated by `tools/read_tool.py` (input_schema) before `read_file` runs.
+    Used by executor/planner/research agents via the shared ToolRegistry."""
     path: str = Field(description="Relative path within workspace root")
     start_line: int = Field(default=1, ge=1)
     end_line: Optional[int] = Field(default=None, ge=1)
 
 
 class WriteInput(BaseModel):
+    """Args schema for write tool — full file create/overwrite.
+    Consumed by `tools/write_tool.py`; surfaced to LLM agents through ToolRegistry."""
     path: str = Field(description="Relative path within workspace root")
     content: str = Field(description="Full file content to write")
 
 
 class EditReplacementInput(BaseModel):
+    """One old_text/new_text pair inside an EditInput.edits[] batch.
+    Parsed from LLM `oldText`/`newText` aliases; applied by `tools/edit_tool.py` + `edit_diff.py`."""
     model_config = {"populate_by_name": True}
 
     old_string: str = Field(
@@ -50,6 +57,8 @@ class EditReplacementInput(BaseModel):
 
 
 class EditInput(BaseModel):
+    """Args schema for targeted file edits (batch or legacy single replacement).
+    Validated in `tools/edit_tool.py`; fuzzy matching delegated to `tools/edit_diff.py`."""
     model_config = {"populate_by_name": True}
 
     path: str = Field(description="Relative path within workspace root")
@@ -74,6 +83,7 @@ class EditInput(BaseModel):
 
     @model_validator(mode="after")
     def _require_at_least_one_edit(self) -> EditInput:
+        """Require At Least One Edit for EditInput."""
         has_edits = bool(self.edits)
         has_legacy = self.old_string is not None or self.new_string is not None
         if not has_edits and not has_legacy:
@@ -84,17 +94,23 @@ class EditInput(BaseModel):
 
 
 class BashInput(BaseModel):
+    """Args schema for sandboxed shell commands in the workspace cwd.
+    Enforced by `tools/bash_tool.py` with timeout caps from config."""
     command: str = Field(description="Shell command to run in workspace cwd")
     timeout: int = Field(default=30, ge=1, le=300)
 
 
 class FindInput(BaseModel):
+    """Args schema for glob file discovery under a repo-relative root.
+    Used by `tools/find_tool.py` before agents read candidate paths."""
     pattern: str = Field(description="Glob pattern e.g. **/*.java")
     path: str = Field(default=".", description="Search root relative to workspace")
     limit: int = Field(default=1000, ge=1, le=5000)
 
 
 class GrepInput(BaseModel):
+    """Args schema for regex search with optional glob filter.
+    Implemented in `tools/grep_tool.py`; outputs truncated via `tools/truncate.py`."""
     pattern: str = Field(description="Regex pattern to search")
     path: str = Field(default=".", description="File or directory relative to workspace")
     glob_pattern: str = Field(default="**/*", description="Glob filter when searching directory")
@@ -102,6 +118,8 @@ class GrepInput(BaseModel):
 
 
 class LsInput(BaseModel):
+    """Args schema for directory listing within the workspace sandbox.
+    Used by `tools/ls_tool.py` during research and executor tool loops."""
     path: str = Field(default=".", description="Directory to list relative to workspace")
     limit: int = Field(default=500, ge=1, le=5000)
 
@@ -132,6 +150,9 @@ class SkillManifest(BaseModel):
 
 
 class Hypothesis(BaseModel):
+    """Ranked root-cause guess with evidence strength — element of ResearchReport.
+    Produced by research structured output (`agents/research/deep_runner.py`).
+    Mirrors TypedDict `Hypothesis` in `core/state.py` for LangGraph state."""
     rank: int
     hypothesis: str
     evidence_strength: Literal["strong", "moderate", "weak"]
@@ -139,12 +160,17 @@ class Hypothesis(BaseModel):
 
 
 class AffectedFile(BaseModel):
+    """File implicated by research with reason and evidence strength.
+    Filled by ResearchReport; feeds semantic planner via `integrations/cursor/semantic_plan_runner.py`."""
     path: str
     reason: str
     evidence_strength: Literal["strong", "moderate", "weak"]
 
 
 class ResearchReport(BaseModel):
+    """Pydantic research output — hypotheses, affected files, blast radius, risk.
+    LLM response_format in `agents/research/deep_runner.py`; validated before planner handoff.
+    Converted from `ResearchOutput` via `plan_runner.research_output_to_report`."""
     ticket_id: str
     research_summary: str
     hypotheses: list[Hypothesis] = Field(min_length=1, max_length=10)
@@ -168,8 +194,22 @@ FixType = Literal[
     "other",
 ]
 
+TargetType = Literal[
+    "function",
+    "method",
+    "class",
+    "variable",
+    "assignment",
+    "import",
+    "block",
+    "file",
+]
+
 
 class FixTarget(BaseModel):
+    """One file/line span to fix inside a FixPlan (fix_type + rationale).
+    Built by planner `run_cursor_plan` / `mock_fix_plan` in `integrations/cursor/plan_runner.py`.
+    Consumed by `implement_runner` and `skill_manager._matches_fix_plan`."""
     file_path: str
     start_line: int = Field(ge=1)
     end_line: int = Field(ge=1)
@@ -178,6 +218,9 @@ class FixTarget(BaseModel):
 
 
 class FixPlan(BaseModel):
+    """Planner contract: root cause, primary_fix_type, and FixTarget list (no patch diffs).
+    Emitted by `agents/planner/sub_agent.CursorPlanSubAgent`; consumed by `agents/executor/sub_agent` → `PatchResult`.
+    Also stored on `AgentContext.fix_plan` and passed to `CursorGateway.edit()`."""
     ticket_id: str
     root_cause: str
     primary_fix_type: FixType
@@ -207,6 +250,9 @@ class PatchResult(BaseModel):
 
 
 class ExecutionStep(BaseModel):
+    """One READ/EDIT/VERIFY/RUN_TESTS step inside an ExecutionPlan.
+    Authored by `agents/planner/agent.py`; executed in `agents/executor/agent.py`.
+    Legacy where/what/why keys are normalized in the model validator."""
     model_config = {"populate_by_name": True}
 
     step_id: int
@@ -227,10 +273,31 @@ class ExecutionStep(BaseModel):
         default=None, description="Human-readable change — executor LLM fallback"
     )
     old_string: Optional[str] = Field(
-        default=None, description="Planner-produced patch: exact text to replace"
+        default=None, description="Legacy patch: exact text to replace (deprecated)"
     )
     new_string: Optional[str] = Field(
-        default=None, description="Planner-produced patch: replacement text"
+        default=None, description="Legacy patch: replacement text (deprecated)"
+    )
+    target_type: Optional[TargetType] = Field(
+        default=None, description="Semantic target kind for EDIT steps"
+    )
+    target_name: Optional[str] = Field(
+        default=None, description="Symbol or identifier to edit"
+    )
+    approximate_line: Optional[int] = Field(
+        default=None, ge=1, description="Optional line hint for target resolution"
+    )
+    instruction: Optional[str] = Field(
+        default=None, description="Actionable edit directive for EDIT steps"
+    )
+    parent_name: Optional[str] = Field(
+        default=None, description="Enclosing class/module/function for disambiguation"
+    )
+    occurrence_index: Optional[int] = Field(
+        default=None, ge=0, description="0-based index when symbol repeats"
+    )
+    end_line: Optional[int] = Field(
+        default=None, ge=1, description="End line for block targets"
     )
     read_start_line: Optional[int] = Field(
         default=None, ge=1, description="Optional line range start for READ step"
@@ -258,6 +325,7 @@ class ExecutionStep(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> ExecutionStep:
+        """Validate for ExecutionStep."""
         if not self.step_validate:
             if self.action == "VERIFY":
                 self.step_validate = self.target or "Verify expected outcome"
@@ -270,14 +338,29 @@ class ExecutionStep(BaseModel):
             raise ValueError(f"step {self.step_id}: missing required field 'target'")
         if not self.reason:
             raise ValueError(f"step {self.step_id}: missing required field 'reason'")
-        if self.action == "EDIT" and not self.new_string:
-            raise ValueError(f"step {self.step_id}: EDIT requires new_string")
+        if self.action == "EDIT":
+            has_semantic = bool(self.instruction and self.target_type)
+            has_legacy_patch = bool(self.new_string)
+            if not has_semantic and not has_legacy_patch:
+                raise ValueError(
+                    f"step {self.step_id}: EDIT requires semantic fields "
+                    "(instruction + target_type) or legacy new_string"
+                )
+            if has_semantic and not self.intent_marker:
+                raise ValueError(f"step {self.step_id}: semantic EDIT requires intent_marker")
+            if self.target_type == "block" and not self.end_line:
+                raise ValueError(
+                    f"step {self.step_id}: block target requires end_line"
+                )
         if self.action == "VERIFY" and not self.intent_marker and not self.step_validate:
             raise ValueError(f"step {self.step_id}: VERIFY requires intent_marker or validate")
         return self
 
 
 class ExecutionPlan(BaseModel):
+    """Step-based plan with semantic EDIT steps — planner output for the executor.
+    Built in `agents/planner/agent.py`; validated by `core/plan_validation.py`.
+    Stored as `plan_output` on LangGraph AgentState and AgentContext metadata."""
     ticket_id: str
     root_hypothesis: str
     files_to_change: list[str] = Field(default_factory=list)
@@ -299,12 +382,26 @@ class ExecutionPlan(BaseModel):
 
 
 class RoutingDecision(BaseModel):
+    """Orchestrator route: FULL / SKIP_RESEARCH / MICRO / EXIT plus risk tier.
+    Parsed in `agents/orchestrator/agent.py`; sanitized in `core/orchestrator_context.py`.
+    Drives branching in `pipeline/runner.py` and eval routing targets."""
     routing_route: Literal["FULL", "SKIP_RESEARCH", "MICRO", "EXIT"]
     risk_level: Literal["LOW", "MEDIUM", "HIGH"]
     reasoning: str
+    vulnerability_category: Optional[str] = Field(
+        default=None,
+        description="OWASP-style category inferred from ticket text (e.g. Cryptographic Failures)",
+    )
+    recommended_security_skill: Optional[str] = Field(
+        default=None,
+        description="Canonical security skill stem for research (e.g. cryptographic-failures)",
+    )
 
 
 class FailedAttemptRecord(BaseModel):
+    """Self-healing failure record — phase, error summary, optional plan hash/snapshot.
+    Persisted via `memory/cache.save_failed_attempt` from executor and API CI/CD webhook.
+    Surfaced on retry through orchestrator context and `AgentState.previous_attempts`."""
     attempt_id: str
     ticket_id: str
     phase_failed: Literal["IMPLEMENTATION", "CICD", "PLANNING_REJECTED", "RESEARCH", "ORCHESTRATOR"]
@@ -316,5 +413,7 @@ class FailedAttemptRecord(BaseModel):
 
 
 class ApprovalDecision(BaseModel):
+    """HITL resume payload: APPROVE / REJECT / REVISE with optional feedback.
+    Posted to `api/main.approve_workflow` to resume a paused LangGraph thread."""
     status: Literal["APPROVE", "REJECT", "REVISE"]
     feedback: Optional[str] = None

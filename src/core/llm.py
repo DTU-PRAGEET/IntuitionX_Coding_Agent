@@ -7,6 +7,8 @@ from langchain_core.language_models import BaseChatModel
 
 
 class LLMProvider(str, Enum):
+    """LLM_PROVIDER env values — selects backend in `get_llm()`.
+    Maps to model matrix and integration packages (Ollama, Anthropic, Sprinklr router)."""
     LOCAL = "local"
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
@@ -16,6 +18,8 @@ class LLMProvider(str, Enum):
 
 
 class TaskComplexity(str, Enum):
+    """Complexity tier passed to `get_llm()` for model selection within a provider.
+    Used by orchestrator/research/planner agents when choosing chat models."""
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
@@ -56,6 +60,7 @@ _MODEL_MATRIX = {
 
 
 def get_llm(complexity: TaskComplexity = TaskComplexity.MEDIUM) -> BaseChatModel:
+    """Return llm."""
     provider = LLMProvider(os.getenv("LLM_PROVIDER", "local"))
     if provider == LLMProvider.OPENROUTER and os.getenv("OPENROUTER_MODEL"):
         model_name = os.getenv("OPENROUTER_MODEL", "")

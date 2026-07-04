@@ -23,6 +23,7 @@ class ReadTool(ToolDefinition):
         start_line: int = 1,
         end_line: Optional[int] = None,
     ) -> ToolResult:
+        """Execute for ReadTool."""
         try:
             resolved = self.resolve_path(path)
         except ValueError as e:

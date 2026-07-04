@@ -8,7 +8,7 @@ from pathlib import Path
 from src.core.logging import get_logger
 from src.core.runner_utils import parse_llm_json
 from src.core.schemas import FixPlan, FixTarget, ResearchReport
-from src.core.skill_registry import SkillRegistry, get_skill_registry
+from src.core.skill_manager import SkillRegistry, get_skill_registry
 from src.core.state import ResearchOutput
 from src.integrations.cursor.gateway import CursorGateway, get_cursor_gateway
 
@@ -29,6 +29,7 @@ _FIXPLAN_JSON_SCHEMA = """
 
 
 def _build_plan_prompt(research: ResearchOutput, repo_path: str) -> str:
+    """Build Plan Prompt for this module."""
     compact = {
         "ticket_id": research.get("ticket_id"),
         "research_summary": (research.get("research_summary") or "")[:800],

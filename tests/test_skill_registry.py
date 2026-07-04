@@ -5,13 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.core.schemas import FixPlan, FixTarget
-from src.core.skill_registry import SkillRegistry, default_skills_root
+from src.core.skill_manager import SkillRegistry, default_skills_root
 from tests.helpers import make_security_ticket
 
 SKILLS_ROOT = default_skills_root()
 
 
 def test_registry_discovers_reference_skills():
+    """Test Registry Discovers Reference Skills for this module."""
     reg = SkillRegistry(SKILLS_ROOT)
     names = {s.name for s in reg.all_skills()}
     assert "java-sast-fixes" in names
@@ -20,6 +21,7 @@ def test_registry_discovers_reference_skills():
 
 
 def test_registry_loads_skill_sections():
+    """Test Registry Loads Skill Sections for this module."""
     reg = SkillRegistry(SKILLS_ROOT)
     skill = reg.get("java-sast-fixes")
     assert skill is not None
@@ -28,6 +30,7 @@ def test_registry_loads_skill_sections():
 
 
 def test_select_research_base_skill():
+    """Test Select Research Base Skill for this module."""
     reg = SkillRegistry(SKILLS_ROOT)
     ticket = make_security_ticket("SEC-SK1")
     selected = reg.select("research", ticket=ticket)
@@ -36,6 +39,7 @@ def test_select_research_base_skill():
 
 
 def test_select_implement_security_skill_for_sast_ticket():
+    """Test Select Implement Security Skill For Sast Ticket for this module."""
     reg = SkillRegistry(SKILLS_ROOT)
     ticket = make_security_ticket("SEC-SK2")
     fix = FixPlan(
@@ -60,6 +64,7 @@ def test_select_implement_security_skill_for_sast_ticket():
 
 
 def test_format_for_prompt_includes_guidance():
+    """Test Format For Prompt Includes Guidance for this module."""
     reg = SkillRegistry(SKILLS_ROOT)
     skill = reg.get("java-sast-fixes")
     assert skill is not None

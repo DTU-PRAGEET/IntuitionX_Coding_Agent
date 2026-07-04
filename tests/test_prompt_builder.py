@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.core.prompt_builder import PromptBuilder
-from src.core.skill_registry import module_skills_dir
+from src.core.skill_manager import PromptBuilder, module_skills_dir
 from tests.helpers import make_security_ticket
 
 ORCH_SKILLS = module_skills_dir("orchestrator")
@@ -13,6 +12,7 @@ RESEARCH_SKILLS = module_skills_dir("research")
 
 
 def test_build_orchestrator_prompt_once():
+    """Test Build Orchestrator Prompt Once for this module."""
     prompt, manifest = PromptBuilder.build(
         "orchestrator",
         ORCH_SKILLS,
@@ -25,12 +25,14 @@ def test_build_orchestrator_prompt_once():
 
 
 def test_build_system_only_no_context():
+    """Test Build System Only No Context for this module."""
     body, manifest = PromptBuilder.build_system_only(RESEARCH_SKILLS)
     assert manifest.tool_budget == 12
     assert "## CONTEXT" not in body
 
 
 def test_research_includes_security_reference():
+    """Test Research Includes Security Reference for this module."""
     ticket = make_security_ticket("SEC-1")
     prompt, _ = PromptBuilder.build(
         "research",

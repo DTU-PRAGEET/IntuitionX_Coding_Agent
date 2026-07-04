@@ -8,6 +8,7 @@ from src.core.schemas import ExecutionPlan, ExecutionStep
 
 
 def test_validate_edit_intent_accepts_parameterized_sql(tmp_path):
+    """Test Validate Edit Intent Accepts Parameterized Sql for this module."""
     target = tmp_path / "handler.py"
     target.write_text(
         'def search_users(query: str):\n'
@@ -28,8 +29,10 @@ def test_validate_edit_intent_accepts_parameterized_sql(tmp_path):
                 target="fix",
                 reason="fix",
                 validate="patched",
-                old_string="ignored",
-                new_string='cursor.execute(sql, (f"%{query}%",))',
+                target_type="assignment",
+                target_name="sql",
+                instruction="Use parameterized query with LIKE ?",
+                intent_marker="LIKE ?",
             ),
             ExecutionStep(
                 step_id=2,
@@ -52,6 +55,7 @@ def test_validate_edit_intent_accepts_parameterized_sql(tmp_path):
 
 
 def test_extract_grep_patterns_strips_backticks():
+    """Test Extract Grep Patterns Strips Backticks for this module."""
     required, forbidden = _extract_grep_patterns_from_validate(
         'grep for `sql = "SELECT * FROM users WHERE name LIKE ?"`; '
         "!`LIKE '%{query}%'`"
@@ -61,6 +65,7 @@ def test_extract_grep_patterns_strips_backticks():
 
 
 def test_validate_edit_intent_skips_sql_heuristics_for_non_sql_edits(tmp_path):
+    """Test Validate Edit Intent Skips Sql Heuristics For Non Sql Edits for this module."""
     target = tmp_path / "sqli" / "app.py"
     target.parent.mkdir(parents=True)
     target.write_text(
@@ -79,11 +84,11 @@ def test_validate_edit_intent_skips_sql_heuristics_for_non_sql_edits(tmp_path):
                 target="autoescape",
                 reason="XSS fix",
                 validate="autoescape=True",
+                target_type="block",
+                approximate_line=1,
+                end_line=1,
+                instruction="Enable autoescape in setup_jinja",
                 intent_marker="intent:SPACE-129069-enable-autoescape",
-                old_string="setup_jinja(app, autoescape=False)\n",
-                new_string=(
-                    "setup_jinja(app, autoescape=True)  # intent:SPACE-129069-enable-autoescape\n"
-                ),
             ),
         ],
         risk_level="medium",

@@ -1,0 +1,204 @@
+[
+  {
+    "case_id": "G-14",
+    "title": "DOM XSS in search results (Juice Shop)",
+    "repo": {
+      "slug": "juice-shop",
+      "url": "https://github.com/juice-shop/juice-shop",
+      "commit_sha": "d9e533960bccf5d20d37f9d6422a7114ed8abe6b",
+      "target_branch": "master"
+    },
+    "language": "typescript",
+    "vuln_class": "XSS",
+    "owasp_category": "A03:2021",
+    "cwe": "CWE-79",
+    "severity_label": "Medium",
+    "difficulty": "medium",
+    "ticket": {
+      "title": "Search term is rendered as trusted HTML in the search results",
+      "problem_statement": "The search results component takes the q query parameter and binds it into the view as trusted HTML (the value is passed through a sanitizer bypass and rendered via [innerHTML]). A search term containing an <iframe>/<script> payload executes in the user's browser (DOM-based XSS). The search term must be rendered as text, not bypassed HTML.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "High",
+      "priority_normalized": "P1",
+      "module": "search",
+      "labels": [
+        "security",
+        "xss",
+        "dom-xss"
+      ],
+      "repo_links": [
+        "https://github.com/juice-shop/juice-shop"
+      ],
+      "acceptance_criteria": [
+        "A search term containing HTML/script is shown as literal text",
+        "Normal search terms still render correctly"
+      ],
+      "vulnerability_category": "Injection"
+    },
+    "expected_route": "FULL",
+    "expected_files": [
+      "frontend/src/app/search-result/search-result.component.ts"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "frontend/src/app/search-result/search-result.component.ts",
+        "start": 134,
+        "end": 143
+      }
+    ],
+    "expected_fix_type": "output_encoding",
+    "expected_patch_contains": [],
+    "expected_patch_excludes": [
+      "bypassSecurityTrustHtml"
+    ],
+    "pass_criteria": [
+      "Research identifies SearchResultComponent.filterTable as the DOM XSS sink",
+      "Fix renders the search term as text (no sanitizer bypass / innerHTML)",
+      "bypassSecurityTrustHtml is no longer applied to the query parameter"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "G-15",
+    "title": "Admin section reachable by forced browsing (Juice Shop)",
+    "repo": {
+      "slug": "juice-shop",
+      "url": "https://github.com/juice-shop/juice-shop",
+      "commit_sha": "d9e533960bccf5d20d37f9d6422a7114ed8abe6b",
+      "target_branch": "master"
+    },
+    "language": "typescript",
+    "vuln_class": "BAC",
+    "owasp_category": "A01:2021",
+    "cwe": "CWE-284",
+    "severity_label": "High",
+    "difficulty": "medium",
+    "ticket": {
+      "title": "Administration section is accessible to non-admin users",
+      "problem_statement": "The store's administration section can be reached by a regular customer. Access is gated only by a client-side check that trusts the role claim inside the locally decoded JWT, which is bypassable, and supporting APIs do not re-check the admin role server-side. Admin access must be enforced with a real role check (server-side authorization), not a client-decoded token claim.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "High",
+      "priority_normalized": "P1",
+      "module": "administration",
+      "labels": [
+        "security",
+        "broken-access-control",
+        "forced-browsing"
+      ],
+      "repo_links": [
+        "https://github.com/juice-shop/juice-shop"
+      ],
+      "acceptance_criteria": [
+        "A non-admin (customer) JWT cannot load the admin UI or admin APIs",
+        "Admin users retain access"
+      ],
+      "vulnerability_category": "Broken Access Control"
+    },
+    "expected_route": "FULL",
+    "expected_files": [
+      "frontend/src/app/app.guard.ts",
+      "routes/authenticatedUsers.ts"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "frontend/src/app/app.guard.ts",
+        "start": 47,
+        "end": 60
+      },
+      {
+        "file": "routes/authenticatedUsers.ts",
+        "start": 10,
+        "end": 34
+      }
+    ],
+    "expected_fix_type": "authorization_check",
+    "expected_patch_contains": [],
+    "expected_patch_excludes": [],
+    "pass_criteria": [
+      "Research identifies the AdminGuard client-side role check and the unguarded admin API",
+      "Fix enforces the admin role server-side (not just a client-decoded JWT claim)",
+      "Customer tokens can no longer reach the admin section or its APIs"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "G-16",
+    "title": "Unsigned (alg:none) JWT accepted (Juice Shop)",
+    "repo": {
+      "slug": "juice-shop",
+      "url": "https://github.com/juice-shop/juice-shop",
+      "commit_sha": "d9e533960bccf5d20d37f9d6422a7114ed8abe6b",
+      "target_branch": "master"
+    },
+    "language": "typescript",
+    "vuln_class": "Auth",
+    "owasp_category": "A07:2021",
+    "cwe": "CWE-347",
+    "severity_label": "High",
+    "difficulty": "medium",
+    "ticket": {
+      "title": "JWT verification does not pin the algorithm and accepts unsigned tokens",
+      "problem_statement": "Token verification calls the JWT verify routine without pinning the expected algorithm, so a token using 'alg:none' (no signature) is accepted. An attacker can forge an essentially unsigned token and impersonate any user. Verification must enforce the expected signing algorithm and reject unsigned tokens.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "High",
+      "priority_normalized": "P1",
+      "module": "auth",
+      "labels": [
+        "security",
+        "auth",
+        "jwt"
+      ],
+      "repo_links": [
+        "https://github.com/juice-shop/juice-shop"
+      ],
+      "acceptance_criteria": [
+        "JWT verification pins the signing algorithm",
+        "Unsigned / alg:none tokens are rejected"
+      ],
+      "vulnerability_category": "Broken Authentication"
+    },
+    "expected_route": "FULL",
+    "expected_files": [
+      "lib/insecurity.ts"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "lib/insecurity.ts",
+        "start": 54,
+        "end": 56
+      }
+    ],
+    "expected_fix_type": "enforce_jwt_algorithm",
+    "expected_patch_contains": [
+      "RS256"
+    ],
+    "expected_patch_excludes": [],
+    "pass_criteria": [
+      "Research identifies the verify() routine in lib/insecurity.ts",
+      "Fix pins the JWT algorithm and rejects unsigned tokens",
+      "alg:none tokens are no longer accepted"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  }
+]

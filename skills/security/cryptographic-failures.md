@@ -3,7 +3,7 @@ name: cryptographic-failures
 module: security
 description: Classify and remediate Cryptographic Failures — weak algorithms, hardcoded secrets, cleartext sensitive data
 agents: [research, planner, implement]
-trigger_labels: cryptographic-failures, weak-crypto, hardcoded-secret, sensitive-data, encryption, tls
+trigger_labels: cryptographic-failures, weak-crypto, hardcoded-secret, hardcoded-credentials, secrets, committed-secret, committed-secrets, sensitive-data, encryption, tls
 ---
 
 # Cryptographic Failures (OWASP A02)

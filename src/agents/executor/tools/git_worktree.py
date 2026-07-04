@@ -18,6 +18,7 @@ _BRANCH_MAX_LEN = 63
 
 
 def _remote_branch_exists(repo_path: str, branch: str) -> bool:
+    """Remote Branch Exists for this module."""
     result = _run_git(["ls-remote", "--heads", "origin", branch], repo_path, check=False)
     return bool((result.stdout or "").strip())
 
@@ -41,6 +42,7 @@ def resolve_base_branch(repo_path: str, preferred: str | None = None) -> str:
 
 
 def _current_branch(repo_path: str) -> str | None:
+    """Current Branch for this module."""
     result = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], repo_path, check=False)
     if result.returncode != 0:
         return None
@@ -49,6 +51,7 @@ def _current_branch(repo_path: str) -> str | None:
 
 
 def _run_git(args: list[str], cwd: str, check: bool = True) -> subprocess.CompletedProcess:
+    """Run Git for this module."""
     return subprocess.run(
         ["git"] + args,
         cwd=cwd,
@@ -59,6 +62,7 @@ def _run_git(args: list[str], cwd: str, check: bool = True) -> subprocess.Comple
 
 
 def validate_repository(repo_path: str) -> tuple[bool, str]:
+    """Validate repository."""
     p = Path(repo_path)
     if not p.exists():
         return False, f"Repository path does not exist: {repo_path}"
@@ -81,11 +85,13 @@ def make_branch_name(ticket_id: str, prefix: str = "fix", description: str = "")
 
 
 def _worktree_is_dirty(worktree_path: str) -> bool:
+    """Worktree Is Dirty for this module."""
     status = _run_git(["status", "--porcelain"], worktree_path, check=False)
     return bool((status.stdout or "").strip())
 
 
 def _reset_worktree(worktree_path: str, target_ref: str) -> None:
+    """Reset Worktree for this module."""
     _log.info("worktree_reset", worktree_path=worktree_path, target_ref=target_ref)
     _run_git(["reset", "--hard", target_ref], worktree_path, check=False)
     _run_git(["clean", "-fd"], worktree_path, check=False)
@@ -97,6 +103,7 @@ def _start_ref(
     planner_head: str | None,
     base_branch: str,
 ) -> str:
+    """Start Ref for this module."""
     if planner_head:
         return planner_head
     _run_git(["fetch", "origin", base_branch], repo_path, check=False)
@@ -145,6 +152,7 @@ def _sync_worktree_to_snapshot(
 
 
 def _checkout_new_branch(worktree_path: str, branch_name: str) -> None:
+    """Checkout New Branch for this module."""
     _run_git(["checkout", "-B", branch_name], worktree_path, check=False)
 
 
@@ -215,6 +223,7 @@ def create_worktree(
 
 
 def stage_commit_push(worktree_path: str, branch_name: str, commit_msg: str) -> dict[str, str | bool]:
+    """Stage Commit Push for this module."""
     _run_git(["add", "-A"], worktree_path)
     status = _run_git(["status", "--porcelain"], worktree_path, check=False)
     if not (status.stdout or "").strip():
@@ -242,6 +251,7 @@ def stage_commit_push(worktree_path: str, branch_name: str, commit_msg: str) -> 
 
 
 def show_diff(worktree_path: str, base_branch: str | None = None) -> str:
+    """Show Diff for this module."""
     base = base_branch or settings.git_target_branch
     result = _run_git(["diff", base, "--stat"], worktree_path, check=False)
     stat = result.stdout or result.stderr or ""

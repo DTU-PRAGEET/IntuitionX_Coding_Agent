@@ -26,6 +26,7 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", ".gradle", "build", ".venv",
 
 
 def build_file_index(repo_path: str, *, max_files: int = 5000) -> dict:
+    """Build file index."""
     root = Path(repo_path)
     if not root.is_dir():
         raise ValueError(f"repo path is not a directory: {repo_path}")
@@ -74,6 +75,7 @@ def build_file_index(repo_path: str, *, max_files: int = 5000) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for this module."""
     parser = argparse.ArgumentParser(description="Build repository file index")
     parser.add_argument("--repo", required=True)
     parser.add_argument("--output", default=None, help="Optional output JSON path")

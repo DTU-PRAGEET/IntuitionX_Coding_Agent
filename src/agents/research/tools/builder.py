@@ -55,7 +55,9 @@ def _make_primitive_lc_tools(
 
         def _make_fn(t, tool_name):
             # Closure keeps the tool (and its registry) alive for the agent lifetime.
+            """Make Fn for this module."""
             def fn(**kwargs):
+                """Fn for this module."""
                 if state["calls"] >= call_budget:
                     _log.warning(
                         "primitive_budget_exhausted",

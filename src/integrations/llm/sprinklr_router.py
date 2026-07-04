@@ -19,6 +19,7 @@ class SprinklrRouterError(Exception):
     """Raised when the Sprinklr LLM router rejects or returns an error response."""
 
     def __init__(self, status_code: int, detail: str) -> None:
+        """Initialize SprinklrRouterError with the provided arguments."""
         self.status_code = status_code
         super().__init__(detail)
 
@@ -32,10 +33,12 @@ class SprinklrRouterTransport(httpx.BaseTransport):
         *,
         extra_body: dict[str, Any],
     ) -> None:
+        """Initialize SprinklrRouterTransport with the provided arguments."""
         self._transport = transport or httpx.HTTPTransport()
         self._extra_body = extra_body
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
+        """Handle Request for SprinklrRouterTransport."""
         url_str = str(request.url).replace("/chat/completions", "/chat-completion")
         if not url_str.endswith("/chat-completion"):
             raise SprinklrRouterError(
@@ -81,6 +84,7 @@ class SprinklrRouterTransport(httpx.BaseTransport):
 
 
 def _format_router_error(response: httpx.Response) -> str:
+    """Format Router Error for this module."""
     text = response.text.strip()
     if response.status_code == 403:
         return (
@@ -134,6 +138,7 @@ def _normalize_openai_response(
 
 
 def _sprinklr_extra_body() -> dict[str, Any]:
+    """Sprinklr Extra Body for this module."""
     tracking_feature = os.getenv("SPRINKLR_LLM_TRACKING_FEATURE", "SPRINKLR_JIRA_SOLVER")
     partner_id_raw = os.getenv("SPRINKLR_LLM_PARTNER_ID", "66006006")
     try:

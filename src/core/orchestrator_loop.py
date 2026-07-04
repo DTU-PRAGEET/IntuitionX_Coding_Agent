@@ -30,18 +30,23 @@ class OrchestratorResult:
     phase_failed: str | None = None
 
     def typed_research(self) -> ResearchOutput:
+        """Typed Research for OrchestratorResult."""
         return ResearchOutput(**self.research)  # type: ignore[typeddict-item]
 
     def typed_fix_plan(self) -> FixPlan:
+        """Typed Fix Plan for OrchestratorResult."""
         if not self.fix_plan:
             raise ValueError("fix_plan is empty — cannot validate as FixPlan")
         return FixPlan.model_validate(self.fix_plan)
 
 
 class StubResearchAgent(SubAgent):
+    """Dry-run research stub — emits fixed ResearchOutput without Cursor/LLM.
+    Default chain in `OrchestratorLoop` when real research sub-agent is not wired."""
     name = "research"
 
     def run(self, context: AgentContext) -> AgentContext:
+        """Run for StubResearchAgent."""
         ticket_id = context.metadata.get("ticket_id", "UNKNOWN")
         output = {
             "ticket_id": ticket_id,
@@ -64,9 +69,12 @@ class StubResearchAgent(SubAgent):
 
 
 class StubPlannerAgent(SubAgent):
+    """Dry-run planner stub — writes stub fix_plan + plan_output to AgentContext.
+    Used by milestone 1.2 orchestrator loop tests and local dummy pipelines."""
     name = "planner"
 
     def run(self, context: AgentContext) -> AgentContext:
+        """Run for StubPlannerAgent."""
         ticket_id = context.metadata.get("ticket_id", "UNKNOWN")
         files = context.file_paths or ["src/demo/example.py"]
         target = files[0] if files else "src/demo/example.py"
@@ -111,9 +119,12 @@ class StubPlannerAgent(SubAgent):
 
 
 class StubImplementAgent(SubAgent):
+    """Dry-run implement stub — returns success patch metadata without file edits.
+    Paired with StubPlannerAgent in `core/orchestrator_loop.OrchestratorLoop`."""
     name = "implement"
 
     def run(self, context: AgentContext) -> AgentContext:
+        """Run for StubImplementAgent."""
         plan = context.metadata.get("plan_output") or {}
         output = {
             "status": "success",
@@ -130,6 +141,7 @@ class OrchestratorSubAgent(SubAgent):
     name = "orchestrator"
 
     def run(self, context: AgentContext) -> AgentContext:
+        """Run for OrchestratorSubAgent."""
         decision = RoutingDecision(
             routing_route="FULL",
             risk_level="MEDIUM",
@@ -155,6 +167,7 @@ class PipelineOrchestrator:
         *,
         cursor_gateway: CursorGateway | None = None,
     ):
+        """Initialize PipelineOrchestrator with the provided arguments."""
         self.orchestrator = orchestrator or OrchestratorSubAgent()
         self._cursor_gateway = cursor_gateway
         self.research = research or StubResearchAgent()
@@ -223,6 +236,7 @@ class PipelineOrchestrator:
             )
 
     def _inject_gateway(self, gateway: CursorGateway) -> None:
+        """Inject Gateway for PipelineOrchestrator."""
         for agent in (self.research, self.planner, self.implement):
             if hasattr(agent, "_gateway") and agent._gateway is None:
                 agent._gateway = gateway  # type: ignore[attr-defined]

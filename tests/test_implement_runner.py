@@ -11,6 +11,7 @@ from src.integrations.cursor.implement_runner import (
 
 
 def _sample_fix_plan() -> FixPlan:
+    """Sample Fix Plan for this module."""
     return FixPlan(
         ticket_id="SEC-IMP1",
         root_cause="SQL injection in user search",
@@ -30,6 +31,7 @@ def _sample_fix_plan() -> FixPlan:
 
 
 def test_build_edit_instruction_includes_targets():
+    """Test Build Edit Instruction Includes Targets for this module."""
     plan = _sample_fix_plan()
     text = build_edit_instruction(plan)
     assert "SEC-IMP1" in text
@@ -38,6 +40,7 @@ def test_build_edit_instruction_includes_targets():
 
 
 def test_mock_patch_result_dry_run():
+    """Test Mock Patch Result Dry Run for this module."""
     plan = _sample_fix_plan()
     patch = mock_patch_result(plan, worktree_path="/tmp/wt")
     assert patch.status == "dry_run"
@@ -46,6 +49,7 @@ def test_mock_patch_result_dry_run():
 
 
 def test_validate_patch_success():
+    """Test Validate Patch Success for this module."""
     plan = _sample_fix_plan()
     patch = validate_patch(
         plan,
@@ -60,6 +64,7 @@ def test_validate_patch_success():
 
 
 def test_validate_patch_failure_no_diff():
+    """Test Validate Patch Failure No Diff for this module."""
     plan = _sample_fix_plan()
     patch = validate_patch(
         plan,

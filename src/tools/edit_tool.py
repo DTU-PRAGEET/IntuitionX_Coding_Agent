@@ -32,6 +32,7 @@ class EditTool(ToolDefinition):
 
     @audit_tool
     def execute(self, path: str, **kwargs: Any) -> ToolResult:
+        """Execute for EditTool."""
         try:
             file_path, edits = prepare_edit_arguments(path=path, **kwargs)
             resolved = self.resolve_path(file_path)

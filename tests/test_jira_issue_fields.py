@@ -12,9 +12,11 @@ class _PropertyHolder:
     """Minimal jira-python PropertyHolder stand-in: missing keys raise AttributeError."""
 
     def __init__(self, raw: dict):
+        """Initialize _PropertyHolder with the provided arguments."""
         self._raw = raw
 
     def __getattr__(self, name: str):
+        """Python special method: getattr."""
         if name.startswith("_"):
             raise AttributeError(name)
         if name not in self._raw:
@@ -23,6 +25,7 @@ class _PropertyHolder:
 
 
 def test_issue_to_jira_ticket_parses_github_repo_link():
+    """Test Issue To Jira Ticket Parses Github Repo Link for this module."""
     description = (
         "h2. Repository Link:\n\n"
         "[https://github.com/DTU-PRAGEET/Testing-Security-demo#|smart-link]\n\n"
@@ -55,6 +58,7 @@ def test_issue_to_jira_ticket_parses_github_repo_link():
 
 
 def test_issue_to_jira_ticket_without_assignee_in_property_holder():
+    """Test Issue To Jira Ticket Without Assignee In Property Holder for this module."""
     issue = SimpleNamespace(
         key="SCRUM-5",
         raw={

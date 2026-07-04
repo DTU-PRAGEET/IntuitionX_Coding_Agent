@@ -30,6 +30,7 @@ class JiraEnrichment(BaseModel):
 
     @model_validator(mode="after")
     def _coerce_nulls(self) -> JiraEnrichment:
+        """Coerce Nulls for JiraEnrichment."""
         if self.cve_ids is None:
             self.cve_ids = []
         return self
@@ -39,16 +40,30 @@ _CVE_PATTERN = re.compile(r"CVE-\d{4}-\d{4,}", re.I)
 _SEVERITY_PATTERN = re.compile(r"\b(critical|high|medium|low)\b", re.I)
 _VULN_TYPES = (
     "sql injection",
-    "xss",
+    "hardcoded secret",
+    "committed secret",
     "cross-site scripting",
     "authentication bypass",
     "path traversal",
+    "remote code execution",
+    "xss",
     "ssrf",
     "rce",
-    "remote code execution",
     "idor",
     "csrf",
 )
+
+# Short tokens must match whole words — "rce" is a substring of "source-controlled".
+_SHORT_VULN_TOKENS = frozenset({"xss", "ssrf", "rce", "idor", "csrf"})
+
+
+def _vuln_type_in_text(candidate: str, text: str) -> bool:
+    """Match vulnerability phrases; short tokens use word boundaries."""
+    if " " in candidate:
+        return candidate in text
+    if candidate in _SHORT_VULN_TOKENS:
+        return bool(re.search(rf"\b{re.escape(candidate)}\b", text, re.I))
+    return candidate in text
 
 
 def enrich_security_ticket(raw: JiraTicketRaw) -> JiraEnrichment:
@@ -66,7 +81,7 @@ def enrich_security_ticket(raw: JiraTicketRaw) -> JiraEnrichment:
     vuln_type = None
     lower = text.lower()
     for candidate in _VULN_TYPES:
-        if candidate in lower:
+        if _vuln_type_in_text(candidate, lower):
             vuln_type = candidate
             break
 

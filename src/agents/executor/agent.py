@@ -1,8 +1,8 @@
-"""Executor Agent — deterministic-first step runner with LOW-tier LLM fallback on EDIT."""
+"""Executor Agent — deterministic orchestration with LLM semantic post-edit validation."""
 
 from __future__ import annotations
 
-import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,24 +13,29 @@ from langsmith import traceable
 from pydantic import BaseModel, ValidationError
 
 from src.agents.executor.tools.builder import build_executor_tools
+from src.agents.executor.validation import (
+    PreEditCapture,
+    ValidationResult,
+    build_retry_note,
+    capture_pre_edit,
+    load_validation_policy,
+    read_modified_snippet,
+    validate_edit,
+)
 from src.core.llm import TaskComplexity, get_llm
 from src.core.logging import configure_logging, get_logger
-from src.core.runner_utils import invoke_tracked, llm_content
-from src.core.prompt_builder import PromptBuilder
-from src.core.skill_registry import format_domain_skills_for_prompt, module_skills_dir
+from src.core.file_paths import repair_repo_from_cursor_temp_clone, remap_cursor_path
 from src.core.repo_snapshot import (
     file_content_hash,
-    file_git_diff,
     git_repo_snapshot,
-    log_edit_patch,
     log_repo_snapshot,
-    old_string_in_file,
-    sha256_text,
     snapshots_match,
 )
 from src.core.skill_scripts.run_tests import run_tests_for_file
 from src.core.skill_scripts.verify_edit import verify_intent_marker
+from src.core.plan_validation import sync_files_to_change_from_edit_steps
 from src.core.schemas import ExecutionPlan, ToolResult
+from src.core.semantic_target import ResolvedTarget, is_semantic_edit, resolve_semantic_target
 from src.core.state import AgentState, ExecutionOutput
 from src.core.config import settings
 from src.integrations.cursor.gateway import (
@@ -42,14 +47,16 @@ from src.integrations.cursor.schemas import CursorEditResult
 from src.memory.cache import save_failed_attempt
 from src.tools.path_utils import resolve_path_sandbox
 from src.tools.registry import ToolRegistry
+from src.core.token_usage import reset_tracing_agent, set_tracing_agent
 
 _log = get_logger("executor")
 
-SKILLS_DIR = module_skills_dir("executor")
 _LEGACY_ACTION_MAP = {"LOCATE": "READ", "SEARCH": "READ"}
 
 
 class ExecutionResult(BaseModel):
+    """Executor node output — changed files, per-step tool results, plan deviations.
+    Returned from `run_executor`; attached to PipelineResult.execution."""
     ticket_id: str
     changed_files: list[str]
     steps_completed: int
@@ -58,11 +65,8 @@ class ExecutionResult(BaseModel):
 
 
 def _load_skills(ticket: dict[str, Any] | None = None) -> str:
-    body, _ = PromptBuilder.build_system_only(SKILLS_DIR)
-    domain = format_domain_skills_for_prompt("executor", ticket)
-    if domain:
-        return f"{body}\n\n{domain}"
-    return body
+    """Load Skills for this module."""
+    return load_validation_policy(ticket)
 
 
 def load_execution_plan(path: Path) -> ExecutionPlan:
@@ -78,10 +82,24 @@ def load_execution_plan(path: Path) -> ExecutionPlan:
 
 
 def _step_path(step: dict[str, Any]) -> str:
+    """Step Path for this module."""
     return step.get("file") or step.get("where") or ""
 
 
+def _normalize_executor_plan(plan: ExecutionPlan, repo_path: str) -> ExecutionPlan:
+    """Remap Cursor temp_clone paths and materialize missing checkout files."""
+    repair_repo_from_cursor_temp_clone(repo_path)
+    for step in plan.execution_steps:
+        step.file = remap_cursor_path(step.file, repo_path)
+    if plan.files_to_change:
+        plan.files_to_change = list(
+            dict.fromkeys(remap_cursor_path(f, repo_path) for f in plan.files_to_change)
+        )
+    return sync_files_to_change_from_edit_steps(plan)
+
+
 def _step_to_dict(step: Any) -> dict[str, Any]:
+    """Step To Dict for this module."""
     if hasattr(step, "model_dump"):
         d = step.model_dump(by_alias=True)
     else:
@@ -93,10 +111,12 @@ def _step_to_dict(step: Any) -> dict[str, Any]:
 
 
 def _tool_ok(result: ToolResult) -> tuple[bool, str]:
+    """Tool Ok for this module."""
     return not result.is_error, result.output
 
 
 def _cursor_edit_ok(result: CursorEditResult) -> tuple[bool, str]:
+    """Cursor Edit Ok for this module."""
     if result.dry_run:
         return True, result.text or "dry_run edit (no file mutation)"
     if result.exit_code != 0 or result.status in ("failed", "error"):
@@ -107,35 +127,88 @@ def _cursor_edit_ok(result: CursorEditResult) -> tuple[bool, str]:
     return True, result.text or "edit applied via CursorGateway"
 
 
+def _resolved_target_excerpt(resolved: ResolvedTarget | None, max_lines: int = 30) -> str:
+    """Trim resolved snippet for Cursor edit brief."""
+    if not resolved:
+        return "(target not resolved on disk)"
+    lines = resolved.snippet.splitlines()
+    if len(lines) > max_lines:
+        return "\n".join(lines[:max_lines]) + "\n..."
+    return resolved.snippet
+
+
 def _build_edit_instruction(
     step: dict[str, Any],
     plan: ExecutionPlan,
     *,
-    create_file: bool = False,
-    old_string: str | None = None,
-    new_string: str | None = None,
+    resolved: ResolvedTarget | None = None,
+    retry_note: str = "",
 ) -> str:
+    """Build semantic edit instruction for Cursor."""
     path = _step_path(step)
-    old_s = old_string if old_string is not None else (step.get("old_string") or "")
-    new_s = new_string if new_string is not None else (step.get("new_string") or "")
     parts = [
         f"Ticket: {plan.ticket_id}",
         f"File: {path}",
         f"Reason: {step.get('reason') or step.get('why', '')}",
-        f"Change: {step.get('change') or step.get('target') or step.get('what', '')}",
     ]
+    if is_semantic_edit(step):
+        target_type = step.get("target_type") or "block"
+        target_name = step.get("target_name") or ""
+        approx = step.get("approximate_line")
+        parent = step.get("parent_name")
+        parts.append(
+            f"Target: {target_type} `{target_name}`"
+            + (f" (lines ~{approx})" if approx else "")
+            + (f", parent: {parent}" if parent else "")
+        )
+        parts.append(f"Instruction: {step.get('instruction') or step.get('change') or step.get('target')}")
+        if resolved:
+            parts.append(
+                f"Resolved context (lines {resolved.start_line}-{resolved.end_line} from disk):"
+            )
+            parts.append(_resolved_target_excerpt(resolved))
+    else:
+        parts.append(f"Change: {step.get('change') or step.get('target') or step.get('what', '')}")
+        old_s = step.get("old_string") or ""
+        new_s = step.get("new_string") or ""
+        if old_s or new_s:
+            parts.append("Action: REPLACE the following exact text:")
+            parts.append(old_s)
+            parts.append("WITH:")
+            parts.append(new_s)
     if step.get("intent_marker"):
         parts.append(f"After edit, file MUST contain intent marker: {step['intent_marker']}")
-    if create_file and not old_s and new_s:
-        parts.append("Action: CREATE new file with the following content:")
-        parts.append(new_s)
-    else:
-        parts.append("Action: REPLACE the following exact text:")
-        parts.append(old_s)
-        parts.append("WITH:")
-        parts.append(new_s)
+    if retry_note:
+        parts.append(retry_note)
     parts.append("Apply ONLY this change. Do not modify unrelated files. Preserve code style.")
     return "\n".join(parts)
+
+
+def _semantic_edit_metadata(
+    step: dict[str, Any],
+    plan: ExecutionPlan,
+    *,
+    resolved: ResolvedTarget | None = None,
+) -> dict[str, Any]:
+    """Metadata payload for gateway.edit — semantic fields, no patches."""
+    meta: dict[str, Any] = {
+        "step_id": step.get("step_id"),
+        "ticket_id": plan.ticket_id,
+        "intent_marker": step.get("intent_marker"),
+        "instruction": step.get("instruction"),
+        "target_type": step.get("target_type"),
+        "target_name": step.get("target_name"),
+        "approximate_line": step.get("approximate_line"),
+        "parent_name": step.get("parent_name"),
+        "end_line": step.get("end_line"),
+        "create_file": bool(
+            plan.create_files and step.get("target_type") == "file"
+        ),
+    }
+    if resolved:
+        meta["resolved_start_line"] = resolved.start_line
+        meta["resolved_end_line"] = resolved.end_line
+    return meta
 
 
 def _apply_edit_via_cursor(
@@ -143,34 +216,20 @@ def _apply_edit_via_cursor(
     step: dict[str, Any],
     plan: ExecutionPlan,
     *,
-    create_files: bool,
-    old_string: str | None = None,
-    new_string: str | None = None,
+    repo_path: str,
+    retry_note: str = "",
 ) -> tuple[bool, str]:
+    """Apply semantic edit via CursorGateway."""
     path = _step_path(step)
-    old_s = old_string if old_string is not None else (step.get("old_string") or "")
-    new_s = new_string if new_string is not None else (step.get("new_string") or "")
-    create_file = create_files and not old_s and bool(new_s)
-    instruction = _build_edit_instruction(
-        step,
-        plan,
-        create_file=create_file,
-        old_string=old_s,
-        new_string=new_s,
-    )
-    metadata = {
-        "step_id": step.get("step_id"),
-        "ticket_id": plan.ticket_id,
-        "old_string": old_s,
-        "new_string": new_s,
-        "create_file": create_file,
-        "intent_marker": step.get("intent_marker"),
-    }
+    resolved = resolve_semantic_target(repo_path, step) if is_semantic_edit(step) else None
+    instruction = _build_edit_instruction(step, plan, resolved=resolved, retry_note=retry_note)
+    metadata = _semantic_edit_metadata(step, plan, resolved=resolved)
     result = gateway.edit(instruction, files=[path], metadata=metadata)
     return _cursor_edit_ok(result)
 
 
 def _edit_steps(plan: ExecutionPlan) -> list[dict[str, Any]]:
+    """Edit Steps for this module."""
     return [
         s
         for s in (_step_to_dict(raw) for raw in plan.execution_steps)
@@ -191,7 +250,13 @@ def _independent_edits(plan: ExecutionPlan) -> bool:
     return bool(counts) and all(count == 1 for count in counts.values())
 
 
-def _build_batched_instruction(plan: ExecutionPlan, steps: list[dict[str, Any]]) -> str:
+def _build_batched_instruction(
+    plan: ExecutionPlan,
+    steps: list[dict[str, Any]],
+    *,
+    repo_path: str,
+) -> str:
+    """Build batched semantic edit instruction."""
     parts = [
         f"Apply ALL of the following edits in a single pass for ticket {plan.ticket_id} "
         f"(risk={plan.risk_level}).",
@@ -200,51 +265,36 @@ def _build_batched_instruction(plan: ExecutionPlan, steps: list[dict[str, Any]])
     ]
     for step in steps:
         path = _step_path(step)
-        old_s = step.get("old_string") or ""
-        new_s = step.get("new_string") or ""
+        resolved = resolve_semantic_target(repo_path, step) if is_semantic_edit(step) else None
         parts.append(f"--- [step {step.get('step_id')}] {path} ---")
-        if step.get("reason"):
-            parts.append(f"Reason: {step['reason']}")
-        if step.get("intent_marker"):
-            parts.append(f"After edit, file MUST contain: {step['intent_marker']}")
-        if plan.create_files and not old_s and new_s:
-            parts.append("CREATE new file with content:")
-            parts.append(new_s)
-        else:
-            parts.append("REPLACE the following exact text:")
-            parts.append(old_s)
-            parts.append("WITH:")
-            parts.append(new_s)
+        parts.append(_build_edit_instruction(step, plan, resolved=resolved))
         parts.append("")
     parts.append("Do not modify unrelated files. Preserve code style.")
     return "\n".join(parts)
 
 
-def _apply_batched_edits(gateway: CursorGateway, plan: ExecutionPlan) -> tuple[bool, str]:
-    """Send every EDIT step to Cursor in one consolidated call (single-call contract)."""
+def _apply_batched_edits(
+    gateway: CursorGateway,
+    plan: ExecutionPlan,
+    *,
+    repo_path: str,
+) -> tuple[bool, str]:
+    """Send every EDIT step to Cursor in one consolidated call."""
     steps = _edit_steps(plan)
     if not steps:
         return True, "no edits to batch"
     files = list(dict.fromkeys(_step_path(s) for s in steps if _step_path(s)))
     edits = []
     for step in steps:
-        old_s = step.get("old_string") or ""
-        new_s = step.get("new_string") or ""
-        edits.append(
-            {
-                "step_id": step.get("step_id"),
-                "file": _step_path(step),
-                "old_string": old_s,
-                "new_string": new_s,
-                "create_file": bool(plan.create_files and not old_s and new_s),
-                "intent_marker": step.get("intent_marker"),
-            }
-        )
-    instruction = _build_batched_instruction(plan, steps)
+        resolved = resolve_semantic_target(repo_path, step) if is_semantic_edit(step) else None
+        meta = _semantic_edit_metadata(step, plan, resolved=resolved)
+        edits.append(meta | {"file": _step_path(step)})
+    instruction = _build_batched_instruction(plan, steps, repo_path=repo_path)
     metadata = {
         "ticket_id": plan.ticket_id,
         "create_files": plan.create_files,
         "edits": edits,
+        "semantic": True,
     }
     _log.info("cursor_batched_edit", files=files, edit_count=len(edits))
     result = gateway.edit(instruction, files=files, metadata=metadata)
@@ -255,48 +305,51 @@ def _accept_batched_edit(
     registry: ToolRegistry,
     step: dict[str, Any],
     plan: ExecutionPlan,
+    *,
+    llm: BaseChatModel,
+    validation_policy: str,
+    pre_edit: PreEditCapture,
 ) -> tuple[bool, str, list[str]]:
-    """Validate that the single batched Cursor call already applied this EDIT — no extra call."""
-    old_s = step.get("old_string")
-    new_s = step.get("new_string")
-    if old_s is not None and new_s is not None and old_s == new_s:
-        return False, (
-            f"EDIT step {step.get('step_id')}: old_string identical to new_string"
-        ), []
-    # Whole-file replacement: if the file now hashes to the planned new_string, the batched
-    # edit applied exactly — accept before line-level completeness (which over-rejects when
-    # unchanged lines are shared between old_string and new_string).
-    path = _step_path(step)
-    if new_s:
-        post_hash = file_content_hash(registry.cwd, path)
-        if post_hash and post_hash == sha256_text(new_s):
-            return True, "batched cursor edit applied (sha match)", []
-    complete, msg, errs = _validate_edit_completeness(registry, step)
-    if complete:
-        return True, "applied via single batched cursor call", []
-    deviations: list[str] = []
-    accepted = _try_accept_by_intent(
-        registry,
-        step,
+    """Validate that the batched Cursor call already applied this EDIT."""
+    modified = read_modified_snippet(registry.cwd, step, pre_edit)
+    result = validate_edit(
+        llm,
         plan,
-        deviations,
-        reason="batched cursor edit satisfied fix intent",
+        step,
+        original_snippet=pre_edit.original_snippet,
+        modified_snippet=modified,
+        validation_policy=validation_policy,
+        attempt=1,
     )
-    if accepted:
-        return accepted
-    return False, msg, errs
+    if result.passed:
+        return True, "applied via single batched cursor call", []
+    return False, result.reason, list(result.missing_requirements)
 
 
 def _log_step(step_id: int, action: str, file_path: str) -> None:
+    """Log Step for this module."""
     _log.info("step", step=step_id, action=action, file=file_path)
 
 
 def _log_step_result(step_id: int, ok: bool, output: str) -> None:
+    """Log Step Result for this module."""
     _log.info("result", step=step_id, status="ok" if ok else "failed", output=output[:500])
 
 
 def _resolve_repo_file(registry: ToolRegistry, path: str) -> Path:
+    """Resolve Repo File for this module."""
     return resolve_path_sandbox(path, registry.cwd)
+
+
+def _is_inert_comment_line(line: str) -> bool:
+    """True for comment-only lines that must not trigger forbidden-pattern failures."""
+    stripped = line.lstrip()
+    return (
+        stripped.startswith("#")
+        or stripped.startswith("//")
+        or stripped.startswith("*")
+        or stripped.startswith("<!--")
+    )
 
 
 def _file_contains_fixed(content: str, pattern: str) -> bool:
@@ -306,7 +359,20 @@ def _file_contains_fixed(content: str, pattern: str) -> bool:
     return any(pattern in line for line in content.splitlines())
 
 
+def _file_contains_live_pattern(content: str, pattern: str) -> bool:
+    """Forbidden-pattern check — ignore comment-only lines (e.g. redacted PEM placeholders)."""
+    if not pattern:
+        return False
+    for line in content.splitlines():
+        if _is_inert_comment_line(line):
+            continue
+        if pattern in line:
+            return True
+    return False
+
+
 def _execute_read(registry: ToolRegistry, step: dict[str, Any]) -> tuple[bool, str]:
+    """Execute Read for this module."""
     path = _step_path(step)
     start = step.get("read_start_line") or 1
     end = step.get("read_end_line")
@@ -321,6 +387,7 @@ def _execute_read(registry: ToolRegistry, step: dict[str, Any]) -> tuple[bool, s
 
 
 def _execute_run_tests(registry: ToolRegistry, step: dict[str, Any]) -> tuple[bool, str]:
+    """Execute Run Tests for this module."""
     path = _step_path(step)
     ok, out, code = run_tests_for_file(registry.cwd, path)
     if code == 2:
@@ -329,6 +396,7 @@ def _execute_run_tests(registry: ToolRegistry, step: dict[str, Any]) -> tuple[bo
 
 
 def _is_human_verify_text(text: str) -> bool:
+    """Is Human Verify Text for this module."""
     lower = text.lower().strip()
     return lower.startswith(
         ("confirm", "verify", "ensure", "check", "validate", "grep shows")
@@ -368,32 +436,16 @@ def _extract_grep_patterns_from_validate(validate: str) -> tuple[list[str], list
     return required, forbidden
 
 
-def _meaningful_patch_lines(text: str) -> list[str]:
-    """Non-comment, non-trivial lines from a patch block."""
-    lines: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if len(stripped) < 4 or stripped.startswith("#"):
-            continue
-        lines.append(stripped)
-    return lines
-
-
-def _distinct_patch_lines(planned_old: str, planned_new: str) -> list[str]:
-    """Lines introduced by the patch (in new_string but not old_string)."""
-    old_lines = set(_meaningful_patch_lines(planned_old))
-    return [ln for ln in _meaningful_patch_lines(planned_new) if ln not in old_lines]
-
-
 def _edit_targets_sql(step: dict[str, Any]) -> bool:
     """True when the planned edit is about SQL/query parameterization."""
     blob = " ".join(
         [
-            step.get("old_string") or "",
-            step.get("new_string") or "",
+            step.get("instruction") or "",
             step.get("change") or "",
             step.get("reason") or "",
             step.get("intent_marker") or "",
+            step.get("old_string") or "",
+            step.get("new_string") or "",
         ]
     ).lower()
     markers = (
@@ -414,6 +466,7 @@ def _edit_targets_sql(step: dict[str, Any]) -> bool:
 
 
 def _read_file_snippet(registry: ToolRegistry, path: str, *, max_lines: int = 200) -> tuple[bool, str]:
+    """Read File Snippet for this module."""
     try:
         resolved = _resolve_repo_file(registry, path)
         text = resolved.read_text(encoding="utf-8")
@@ -426,7 +479,7 @@ def _read_file_snippet(registry: ToolRegistry, path: str, *, max_lines: int = 20
 
 
 def _patterns_from_prior_edits(plan: ExecutionPlan, path: str, step_id: int) -> list[str]:
-    """Use distinctive lines from the latest prior EDIT new_string on the same file."""
+    """Use intent markers from the latest prior EDIT on the same file."""
     latest: dict[str, Any] | None = None
     latest_id = -1
     for raw in plan.execution_steps:
@@ -443,40 +496,8 @@ def _patterns_from_prior_edits(plan: ExecutionPlan, path: str, step_id: int) -> 
             latest_id = prior_id
     if not latest:
         return []
-    return _meaningful_patch_lines(latest.get("new_string") or "")
-
-
-def _validate_edit_completeness(
-    registry: ToolRegistry,
-    step: dict[str, Any],
-) -> tuple[bool, str, list[str]]:
-    """Ensure planned new_string lines are present and old_string lines are removed."""
-    path = _step_path(step)
-    planned_new = step.get("new_string") or ""
-    planned_old = step.get("old_string") or ""
-    if not planned_new:
-        return True, "no planned patch", []
-
-    ok, content = _read_file_snippet(registry, path)
-    if not ok:
-        return False, content, [content]
-
-    new_lines = set(_meaningful_patch_lines(planned_new))
-    missing = [ln for ln in new_lines if ln not in content]
-    # Shared context lines appear in both old and new — only flag lines removed by the patch.
-    remaining = [
-        ln
-        for ln in _meaningful_patch_lines(planned_old)
-        if ln in content and ln not in new_lines
-    ]
-    errors: list[str] = []
-    if missing:
-        errors.append(f"planned new_string lines missing: {missing}")
-    if remaining:
-        errors.append(f"planned old_string lines still present: {remaining}")
-    if errors:
-        return False, "; ".join(errors), errors
-    return True, "edit matches plan", []
+    marker = (latest.get("intent_marker") or "").strip()
+    return [marker] if marker else []
 
 
 def _validate_edit_intent(
@@ -484,11 +505,17 @@ def _validate_edit_intent(
     step: dict[str, Any],
     plan: ExecutionPlan,
 ) -> tuple[bool, str]:
-    """After LLM fallback: validate fix intent via security heuristics and VERIFY patterns."""
+    """Validate fix intent via intent_marker, security heuristics, and VERIFY patterns."""
     path = _step_path(step)
     ok_read, content = _read_file_snippet(registry, path)
     if not ok_read:
         return False, content
+
+    if is_semantic_edit(step):
+        intent_marker = (step.get("intent_marker") or "").strip()
+        if intent_marker and intent_marker not in content:
+            return False, f"intent marker not found: {intent_marker}"
+        return True, "edit intent validated"
 
     planned_new = step.get("new_string") or ""
     planned_old = step.get("old_string") or ""
@@ -502,19 +529,6 @@ def _validate_edit_intent(
             errors.append("vulnerable f-string SQL interpolation still present")
         if "LIKE ?" not in content and "?" not in content:
             errors.append("parameterized query marker not found")
-        critical_lines = [
-            ln
-            for ln in _meaningful_patch_lines(planned_new)
-            if any(marker in ln for marker in ("execute(sql", "params", "LIKE ?"))
-        ]
-        missing_critical = [ln for ln in critical_lines if ln not in content]
-        if missing_critical:
-            errors.append(f"critical planned fix lines missing: {missing_critical}")
-
-    distinct_new = _distinct_patch_lines(planned_old, planned_new)
-    missing_distinct = [ln for ln in distinct_new if ln not in content]
-    if missing_distinct:
-        errors.append(f"distinct planned fix lines missing: {missing_distinct}")
 
     intent_marker = step.get("intent_marker")
     if intent_marker and intent_marker not in content:
@@ -528,126 +542,20 @@ def _validate_edit_intent(
             break
 
     required, forbidden = _extract_grep_patterns_from_validate(validate)
-    if required or forbidden:
-        verify_step = {
-            "action": "VERIFY",
-            "file": path,
-            "validate": validate,
-            "step_id": step.get("step_id"),
-        }
-        ok, msg = _execute_verify(registry, verify_step, plan)
-        if not ok:
-            errors.append(msg)
-    elif (
-        _edit_targets_sql(step)
-        and "LIKE ?" in content
-        and not re.search(r'f["\'].*SELECT.*\{query\}', content)
-    ):
-        # File already satisfies core SQLi fix — skip malformed planner validate prose.
-        pass
+    for pattern in required:
+        if not _file_contains_fixed(content, pattern):
+            errors.append(f"required pattern {pattern!r} not found")
+    for pattern in forbidden:
+        if _file_contains_live_pattern(content, pattern):
+            errors.append(f"vulnerable pattern {pattern!r} still present")
 
     if errors:
         return False, "; ".join(errors)
     return True, "edit intent validated"
 
 
-def _validate_edit_outcome(
-    registry: ToolRegistry,
-    step: dict[str, Any],
-    plan: ExecutionPlan,
-    *,
-    used_fallback: bool,
-) -> tuple[bool, str, list[str]]:
-    complete, msg, errs = _validate_edit_completeness(registry, step)
-    if complete:
-        return complete, msg, errs
-    if not used_fallback:
-        return complete, msg, errs
-    ok, intent_msg = _validate_edit_intent(registry, step, plan)
-    if ok:
-        return True, f"fallback intent validated: {intent_msg}", [
-            "patch deviation: validated by intent, not exact planner patch match"
-        ]
-    return False, f"{msg}; intent check failed: {intent_msg}", errs
-
-
-def _llm_edit_fallback(
-    registry: ToolRegistry,
-    step: dict[str, Any],
-    *,
-    plan: ExecutionPlan,
-    llm: BaseChatModel,
-    file_content: str,
-    gateway: CursorGateway,
-    extra_context: str = "",
-    ticket: dict[str, Any] | None = None,
-) -> tuple[bool, str]:
-    path = _step_path(step)
-    fallback_llm = llm or get_llm(TaskComplexity.LOW)
-    skills = _load_skills(ticket)
-    prompt = f"""{skills}
-
-## EDIT FALLBACK
-File: {path}
-Change required: {step.get('change') or step.get('reason') or step.get('why', '')}
-Planned replacement (apply ALL of these lines — not a subset):
-{step.get('new_string') or '(see change description)'}
-Previous patch error: old_string missing, failed, incomplete, or not applied
-{extra_context}
-
-## FILE CONTENT
-{file_content}
-
-Return ONLY JSON: {{"old_string": "...", "new_string": "..."}}
-Apply the FULL intended transformation from the plan — include every line from the planned replacement."""
-
-    try:
-        response = invoke_tracked(fallback_llm, prompt, agent="executor")
-        content = llm_content(response)
-        json_match = re.search(r"\{.*\}", content, re.DOTALL)
-        if not json_match:
-            return False, "LLM did not return valid edit JSON"
-        patch = json.loads(json_match.group())
-        old_fb = patch.get("old_string") or ""
-        new_fb = patch.get("new_string") or ""
-        _log.info(
-            "llm_edit_fallback",
-            path=path,
-            raw_fallback_json=json_match.group(),
-            old_len=len(old_fb),
-            new_len=len(new_fb),
-            old_eq_new=old_fb == new_fb,
-        )
-        if old_fb == new_fb:
-            accepted = _try_accept_by_intent(
-                registry,
-                step,
-                plan,
-                [],
-                reason="fallback identical patch but fix intent already satisfied",
-            )
-            if accepted:
-                ok_intent, msg_intent, _devs = accepted
-                return ok_intent, msg_intent
-            return False, (
-                f"LLM fallback rejected: identical old_string and new_string for {path}"
-            )
-        if not old_fb or not new_fb:
-            return False, f"LLM fallback rejected: empty patch for {path}"
-        return _apply_edit_via_cursor(
-            gateway,
-            step,
-            plan,
-            create_files=False,
-            old_string=old_fb,
-            new_string=new_fb,
-        )
-    except Exception as e:
-        return False, f"Edit fallback failed: {e}"
-
-
 def _forbidden_patterns_from_prior_edits(plan: ExecutionPlan, path: str, step_id: int) -> list[str]:
-    """Lines from the latest prior EDIT old_string that must no longer appear after the fix."""
+    """Forbidden tokens derived from prior EDIT validate/forbidden hints."""
     latest: dict[str, Any] | None = None
     latest_id = -1
     for raw in plan.execution_steps:
@@ -664,9 +572,8 @@ def _forbidden_patterns_from_prior_edits(plan: ExecutionPlan, path: str, step_id
             latest_id = prior_id
     if not latest:
         return []
-    old_lines = _meaningful_patch_lines(latest.get("old_string") or "")
-    new_lines = set(_meaningful_patch_lines(latest.get("new_string") or ""))
-    return [ln for ln in old_lines if ln not in new_lines]
+    _, forbidden = _extract_grep_patterns_from_validate(latest.get("validate") or "")
+    return forbidden
 
 
 def _resolve_verify_patterns(
@@ -701,17 +608,44 @@ def _resolve_verify_patterns(
     return required, forbidden
 
 
+def _prior_edit_intent_marker(plan: ExecutionPlan, path: str, step_id: int) -> str | None:
+    """Intent marker from the latest prior EDIT on the same file."""
+    latest: str | None = None
+    latest_id = -1
+    for raw in plan.execution_steps:
+        prior = _step_to_dict(raw)
+        if prior.get("action") != "EDIT":
+            continue
+        if _step_path(prior) != path:
+            continue
+        prior_id = prior.get("step_id", 0)
+        if prior_id >= step_id or prior_id <= latest_id:
+            continue
+        marker = (prior.get("intent_marker") or "").strip()
+        if marker:
+            latest = marker
+            latest_id = prior_id
+    return latest
+
+
 def _execute_verify(
     registry: ToolRegistry,
     step: dict[str, Any],
     plan: ExecutionPlan,
 ) -> tuple[bool, str]:
+    """Execute Verify for this module."""
     path = _step_path(step)
-    intent_marker = step.get("intent_marker")
+    intent_marker = (step.get("intent_marker") or "").strip() or _prior_edit_intent_marker(
+        plan, path, step.get("step_id", 0)
+    )
     if intent_marker:
         ok, out, code = verify_intent_marker(registry.cwd, path, intent_marker)
         if not ok:
             return False, out
+        ok_read, content = _read_file_snippet(registry, path)
+        if ok_read and intent_marker in content:
+            _log.info("verification", mode="intent_marker", path=path, marker=intent_marker[:80])
+            return True, f"intent marker verified: {intent_marker}"
 
     patterns, forbidden = _resolve_verify_patterns(step, plan)
 
@@ -738,28 +672,12 @@ def _execute_verify(
 
     for pattern in forbidden:
         _log.info("verification", mode="forbidden", pattern=pattern[:120], path=path)
-        if _file_contains_fixed(content, pattern):
+        if _file_contains_live_pattern(content, pattern):
             errors.append(f"vulnerable pattern {pattern!r} still present")
 
     if errors:
         return False, "; ".join(errors)
     return True, outputs[0] if outputs else "verification passed"
-
-
-def _try_accept_by_intent(
-    registry: ToolRegistry,
-    step: dict[str, Any],
-    plan: ExecutionPlan,
-    deviations: list[str],
-    *,
-    reason: str,
-) -> tuple[bool, str, list[str]] | None:
-    """Return success tuple when file already satisfies fix intent despite patch mismatch."""
-    ok, intent_msg = _validate_edit_intent(registry, step, plan)
-    if not ok:
-        return None
-    deviations.append(f"step {step.get('step_id')}: {reason}")
-    return True, intent_msg, deviations
 
 
 def _assert_snapshot_consistency(plan: ExecutionPlan, repo_path: str) -> None:
@@ -785,188 +703,94 @@ def _execute_edit(
     llm: BaseChatModel,
     gateway: CursorGateway,
     ticket: dict[str, Any] | None = None,
+    validation_policy: str = "",
+    pre_edit: PreEditCapture | None = None,
+    cursor_attempts_used: int = 0,
+    skip_initial_cursor: bool = False,
 ) -> tuple[bool, str, list[str]]:
+    """Execute EDIT via Cursor with LLM semantic validation and configurable retry budget."""
     path = _step_path(step)
-    old_s = step.get("old_string")
-    new_s = step.get("new_string")
     deviations: list[str] = []
     step_id = step.get("step_id", 0)
+    repo_path = registry.cwd
+    max_attempts = settings.cursor_max_edit_attempts
+    policy = validation_policy or load_validation_policy(ticket)
 
-    log_edit_patch(
-        _log,
-        phase="executor_pre",
-        step_id=step_id,
-        file_path=path,
-        old_string=old_s,
-        new_string=new_s,
-    )
-
-    if not old_s and new_s and create_files:
-        ok, out = _apply_edit_via_cursor(
-            gateway, step, plan, create_files=True, old_string="", new_string=new_s
-        )
-        if ok:
-            complete, msg, errs = _validate_edit_completeness(registry, step)
-            if not complete:
-                return False, msg, errs
-            return ok, out, deviations
-
-    # Mandatory fresh read before EDIT (Read → Edit → Verify triad)
-    ok_read, file_content = _read_file_snippet(registry, path)
-    if not ok_read:
-        return False, file_content, deviations
-
-    pre_check = old_string_in_file(registry.cwd, path, old_s or "")
-    pre_hash = pre_check["file_sha256"]
     _log.info(
-        "executor_pre_edit_file",
+        "executor_edit_start",
         step_id=step_id,
         file=path,
-        file_sha256=pre_hash,
-        old_string_exists=pre_check["exists"],
-        occurrence_count=pre_check["occurrence_count"],
+        semantic=is_semantic_edit(step),
+        cursor_attempts_used=cursor_attempts_used,
     )
 
-    if old_s and new_s and old_s == new_s:
-        _log.warning("executor_identical_patch", step_id=step_id, file=path)
-        accepted = _try_accept_by_intent(
-            registry,
-            step,
+    if pre_edit is None:
+        pre_edit = capture_pre_edit(repo_path, step)
+
+    ok_read, read_err = _read_file_snippet(registry, path)
+    if not ok_read and not (create_files and step.get("target_type") == "file"):
+        return False, read_err, deviations
+
+    last_out = ""
+    prior_failure: ValidationResult | None = None
+    retry_note = ""
+
+    for attempt_num in range(cursor_attempts_used + 1, max_attempts + 1):
+        should_call_cursor = not (
+            skip_initial_cursor and attempt_num == cursor_attempts_used + 1
+        )
+
+        if should_call_cursor:
+            ok, last_out = _apply_edit_via_cursor(
+                gateway, step, plan, repo_path=repo_path, retry_note=retry_note
+            )
+            post_hash = file_content_hash(repo_path, path)
+            _log.info(
+                "executor_post_edit_file",
+                step_id=step_id,
+                file=path,
+                file_sha256=post_hash,
+                edit_ok=ok,
+                cursor_attempt=attempt_num,
+            )
+            if not ok:
+                is_noop = "No changes made" in last_out or "identical content" in last_out
+                if not is_noop:
+                    return False, last_out, deviations
+
+        modified_snippet = read_modified_snippet(repo_path, step, pre_edit)
+        validation_attempt = attempt_num - cursor_attempts_used
+        result = validate_edit(
+            llm,
             plan,
-            deviations,
-            reason="identical old/new patch but fix intent already satisfied",
+            step,
+            original_snippet=pre_edit.original_snippet,
+            modified_snippet=modified_snippet,
+            validation_policy=policy,
+            prior_failure=prior_failure,
+            attempt=validation_attempt,
         )
-        if accepted:
-            return accepted
-        return False, (
-            f"EDIT step {step_id}: old_string identical to new_string — edit tool not invoked"
-        ), deviations
 
-    used_fallback = False
-    last_out = "EDIT missing patches"
-    if old_s and new_s:
-        if old_s not in file_content:
-            deviations.append(
-                f"step {step.get('step_id')}: plan old_string not in fresh read; attempting edit anyway"
-            )
-        result = _apply_edit_via_cursor(gateway, step, plan, create_files=create_files)
-        ok, last_out = result
-        post_hash = file_content_hash(registry.cwd, path)
-        post_diff = file_git_diff(registry.cwd, path)
-        _log.info(
-            "executor_post_edit_file",
-            step_id=step_id,
-            file=path,
-            file_sha256=post_hash,
-            edit_ok=ok,
-            file_diff=post_diff[:2000],
-        )
-        if ok:
-            expected_sha = sha256_text(new_s) if new_s else ""
-            sha_match = bool(expected_sha and post_hash == expected_sha)
-            sha_delta = bool(pre_hash and post_hash and pre_hash != post_hash)
-            if sha_match:
-                _log.info(
-                    "executor_sha_match",
-                    step_id=step_id,
-                    file=path,
-                    sha=post_hash,
-                )
-                return ok, last_out, deviations
-            if sha_delta:
-                _log.info(
-                    "executor_edit_confirmed_by_sha_delta",
-                    step_id=step_id,
-                    file=path,
-                    pre_hash=pre_hash,
-                    post_hash=post_hash,
-                )
-                return ok, last_out, deviations
+        if result.passed:
+            if attempt_num > cursor_attempts_used + 1:
+                deviations.append(f"step {step_id}: semantic edit required one retry")
+            return True, last_out or result.reason, deviations
 
-            complete, msg, errs = _validate_edit_outcome(
-                registry, step, plan, used_fallback=False
+        if attempt_num < max_attempts:
+            _log.info(
+                "executor_validation_retry",
+                ticket_id=plan.ticket_id,
+                step_id=step_id,
+                file=path,
+                cursor_attempt=attempt_num + 1,
+                prior_reason=result.reason,
             )
-            if complete:
-                return ok, last_out, deviations
-            accepted = _try_accept_by_intent(
-                registry,
-                step,
-                plan,
-                deviations,
-                reason="primary patch incomplete but fix intent satisfied",
-            )
-            if accepted:
-                return accepted
-            deviations.append(f"step {step.get('step_id')}: primary patch applied but incomplete: {msg}")
-            used_fallback = True
+            prior_failure = result
+            retry_note = build_retry_note(result)
         else:
-            if "No changes made" in last_out or "identical content" in last_out:
-                accepted = _try_accept_by_intent(
-                    registry,
-                    step,
-                    plan,
-                    deviations,
-                    reason="primary edit no-op but fix intent satisfied",
-                )
-                if accepted:
-                    return accepted
-            used_fallback = True
-    elif new_s or step.get("change"):
-        used_fallback = True
+            return False, f"Edit incomplete: {result.reason}", list(result.missing_requirements)
 
-    if not used_fallback:
-        return False, last_out, deviations
-
-    ok_read, file_content = _read_file_snippet(registry, path)
-    if not ok_read:
-        return False, file_content, deviations
-
-    ok, out = _llm_edit_fallback(
-        registry, step, plan=plan, llm=llm, file_content=file_content, gateway=gateway, ticket=ticket
-    )
-    if ok:
-        deviations.append(
-            f"step {step.get('step_id')}: used LLM fallback edit (plan patch did not apply verbatim)"
-        )
-        complete, msg, errs = _validate_edit_outcome(
-            registry, step, plan, used_fallback=True
-        )
-        if complete:
-            return ok, out, deviations
-        ok_read, file_content = _read_file_snippet(registry, path)
-        if not ok_read:
-            return False, file_content, deviations
-        ok_retry, out_retry = _llm_edit_fallback(
-            registry,
-            step,
-            plan=plan,
-            llm=llm,
-            file_content=file_content,
-            gateway=gateway,
-            extra_context=f"Incomplete after first fallback: {msg}. Apply ALL planned lines.",
-            ticket=ticket,
-        )
-        if ok_retry:
-            deviations.append(f"step {step.get('step_id')}: required second LLM fallback attempt")
-            complete, msg, errs = _validate_edit_outcome(
-                registry, step, plan, used_fallback=True
-            )
-            if complete:
-                return True, out_retry, deviations
-        return False, f"Edit incomplete after fallback: {msg}", deviations + errs
-
-    if "No changes made" in out or "identical content" in out:
-        accepted = _try_accept_by_intent(
-            registry,
-            step,
-            plan,
-            deviations,
-            reason="fallback no-op but fix intent satisfied",
-        )
-        if accepted:
-            return accepted
-
-    return False, out, deviations
+    return False, "Edit incomplete: max cursor attempts exhausted", deviations
 
 
 def _execute_step(
@@ -978,12 +802,17 @@ def _execute_step(
     ticket: dict[str, Any] | None = None,
     *,
     batched: bool = False,
+    validation_policy: str = "",
+    pre_edit_by_step: dict[int, PreEditCapture] | None = None,
 ) -> tuple[bool, str, list[str]]:
+    """Execute Step for this module."""
     action = step.get("action", "")
     path = _step_path(step)
     step_id = step.get("step_id", 0)
     _log_step(step_id, action, path)
     deviations: list[str] = []
+    policy = validation_policy or load_validation_policy(ticket)
+    pre_edit_map = pre_edit_by_step or {}
 
     try:
         if action == "READ":
@@ -992,10 +821,16 @@ def _execute_step(
             ok, out = _execute_verify(registry, step, plan)
         elif action == "EDIT":
             if batched:
-                # Edits were already sent in one consolidated Cursor call — validate only.
-                ok, out, deviations = _accept_batched_edit(registry, step, plan)
+                pre_edit = pre_edit_map.get(step_id) or capture_pre_edit(registry.cwd, step)
+                ok, out, deviations = _accept_batched_edit(
+                    registry,
+                    step,
+                    plan,
+                    llm=llm,
+                    validation_policy=policy,
+                    pre_edit=pre_edit,
+                )
                 if not ok:
-                    # Per-file repair (the single permitted retry for a failed edit).
                     ok, out, repair_devs = _execute_edit(
                         registry,
                         step,
@@ -1004,6 +839,10 @@ def _execute_step(
                         llm=llm,
                         gateway=gateway,
                         ticket=ticket,
+                        validation_policy=policy,
+                        pre_edit=pre_edit,
+                        cursor_attempts_used=1,
+                        skip_initial_cursor=True,
                     )
                     deviations = deviations + repair_devs + [
                         f"step {step_id}: batched edit needed per-file repair"
@@ -1017,6 +856,7 @@ def _execute_step(
                     llm=llm,
                     gateway=gateway,
                     ticket=ticket,
+                    validation_policy=policy,
                 )
         elif action == "RUN_TESTS":
             ok, out = _execute_run_tests(registry, step)
@@ -1033,6 +873,7 @@ def _execute_step(
 
 
 def _assert_file_allowed(step: dict[str, Any], plan: ExecutionPlan) -> None:
+    """Assert File Allowed for this module."""
     path = _step_path(step)
     if not path:
         return
@@ -1049,6 +890,24 @@ def _assert_file_allowed(step: dict[str, Any], plan: ExecutionPlan) -> None:
         )
 
 
+def _resolve_executor_llm(llm: BaseChatModel | None) -> BaseChatModel:
+    """Return injected LLM, env stub for subprocess tests, or default LOW-tier model."""
+    if llm is not None:
+        return llm
+    stub = os.getenv("EXECUTOR_VALIDATION_STUB_RESPONSE")
+    if stub:
+
+        class _StubLLM:
+            def invoke(self, _prompt: Any) -> Any:
+                class _Resp:
+                    content = stub
+
+                return _Resp()
+
+        return _StubLLM()  # type: ignore[return-value]
+    return get_llm(TaskComplexity.LOW)
+
+
 @traceable(name="executor_agent")
 def run_executor(
     plan: ExecutionPlan,
@@ -1061,9 +920,13 @@ def run_executor(
 ) -> ExecutionResult:
     """Execute all plan steps in order; stop on first failure."""
     configure_logging()
+    plan = _normalize_executor_plan(plan, repo_path)
     log_repo_snapshot(_log, "start", repo_path, ticket_id=plan.ticket_id, steps=len(plan.execution_steps))
     _assert_snapshot_consistency(plan, repo_path)
 
+    tracing_token = set_tracing_agent("executor")
+    llm = _resolve_executor_llm(llm)
+    validation_policy = load_validation_policy(ticket)
     if gateway is None:
         if dry_run:
             gateway = get_cursor_gateway(Path(repo_path), dry_run=True)
@@ -1082,8 +945,12 @@ def run_executor(
     # to Cursor in ONE consolidated call up front. Chained same-file edits fall back to the
     # sequential per-step path because they depend on prior edits already being on disk.
     batched = _independent_edits(plan)
+    pre_edit_by_step: dict[int, PreEditCapture] = {}
     if batched:
-        b_ok, b_msg = _apply_batched_edits(gateway, plan)
+        for edit_step in _edit_steps(plan):
+            sid = edit_step.get("step_id", 0)
+            pre_edit_by_step[sid] = capture_pre_edit(repo_path, edit_step)
+        b_ok, b_msg = _apply_batched_edits(gateway, plan, repo_path=repo_path)
         if b_ok:
             plan_deviations.append("cursor: all edits applied in a single batched call")
         else:
@@ -1096,7 +963,15 @@ def run_executor(
             step = _step_to_dict(raw_step)
             _assert_file_allowed(step, plan)
             ok, out, deviations = _execute_step(
-                registry, step, plan, llm, gateway, ticket=ticket, batched=batched
+                registry,
+                step,
+                plan,
+                llm,
+                gateway,
+                ticket=ticket,
+                batched=batched,
+                validation_policy=validation_policy,
+                pre_edit_by_step=pre_edit_by_step,
             )
             plan_deviations.extend(deviations)
             step_results.append(
@@ -1129,9 +1004,11 @@ def run_executor(
         return result
     finally:
         registry.dispose()
+        reset_tracing_agent(tracing_token)
 
 
 def _save_failure(state: AgentState, plan: dict, error: str, now: str) -> None:
+    """Save Failure for this module."""
     from src.agents.planner.agent import plan_hash
 
     save_failed_attempt(

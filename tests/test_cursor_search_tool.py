@@ -15,11 +15,13 @@ from src.integrations.cursor.gateway import DryRunCursorGateway
 
 @pytest.fixture
 def gateway(tmp_path):
+    """Gateway for this module."""
     return DryRunCursorGateway(tmp_path)
 
 
 @pytest.fixture
 def search_tool(gateway, tmp_path):
+    """Search Tool for this module."""
     init_budget("research", "test-thread", hard_limit=3, budget_dir=tmp_path)
     return make_cursor_search_tool(
         gateway,
@@ -31,6 +33,7 @@ def search_tool(gateway, tmp_path):
 
 
 def test_cursor_search_returns_structured_json(search_tool):
+    """Test Cursor Search Returns Structured Json for this module."""
     result = search_tool.invoke({"query": "sql injection in user search"})
     payload = json.loads(result)
     assert payload["hits"]
@@ -38,6 +41,7 @@ def test_cursor_search_returns_structured_json(search_tool):
 
 
 def test_cursor_search_budget_abort(gateway, tmp_path):
+    """Test Cursor Search Budget Abort for this module."""
     init_budget("research", "abort-thread", hard_limit=1, budget_dir=tmp_path)
     tool = make_cursor_search_tool(
         gateway,
@@ -53,6 +57,7 @@ def test_cursor_search_budget_abort(gateway, tmp_path):
 
 
 def test_cursor_search_records_on_search_callback(gateway, tmp_path):
+    """Test Cursor Search Records On Search Callback for this module."""
     init_budget("research", "cb-thread", hard_limit=5)
     seen = []
 

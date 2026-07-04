@@ -17,6 +17,7 @@ from src.integrations.cursor.schemas import CursorEditResult, CursorSearchRespon
 
 
 def test_dry_run_gateway_ask_returns_empty():
+    """Test Dry Run Gateway Ask Returns Empty for this module."""
     gw = DryRunCursorGateway(Path("."))
     result = gw.ask("What files exist?")
     assert result.status == "dry_run"
@@ -26,6 +27,7 @@ def test_dry_run_gateway_ask_returns_empty():
 
 
 def test_dry_run_gateway_search_returns_structured_hits():
+    """Test Dry Run Gateway Search Returns Structured Hits for this module."""
     gw = DryRunCursorGateway(".")
     result = gw.search("sql injection")
     assert result.method == "search"
@@ -35,6 +37,7 @@ def test_dry_run_gateway_search_returns_structured_hits():
 
 
 def test_dry_run_gateway_edit_returns_diff_fields():
+    """Test Dry Run Gateway Edit Returns Diff Fields for this module."""
     gw = DryRunCursorGateway(".")
     result = gw.edit("fix the bug", files=["a.py"])
     assert isinstance(result, CursorEditResult)
@@ -46,22 +49,26 @@ def test_dry_run_gateway_edit_returns_diff_fields():
 
 
 def test_dry_run_gateway_edit_run():
+    """Test Dry Run Gateway Edit Run for this module."""
     gw = DryRunCursorGateway(".")
     assert gw.edit("fix the bug", files=["a.py"]).method == "edit"
     assert gw.run("pytest").method == "run"
 
 
 def test_get_cursor_gateway_dry_run():
+    """Test Get Cursor Gateway Dry Run for this module."""
     gw = get_cursor_gateway(".", dry_run=True)
     assert isinstance(gw, DryRunCursorGateway)
 
 
 def test_get_cursor_gateway_cli():
+    """Test Get Cursor Gateway Cli for this module."""
     gw = get_cursor_gateway(".", dry_run=False)
     assert isinstance(gw, CliCursorGateway)
 
 
 def test_cursor_gateway_result_to_history_entry():
+    """Test Cursor Gateway Result To History Entry for this module."""
     response = mock_search_response("auth middleware")
     result = CursorGatewayResult(
         status="completed",
@@ -75,6 +82,7 @@ def test_cursor_gateway_result_to_history_entry():
 
 
 def test_cli_gateway_dry_run_via_no_api_key(monkeypatch):
+    """Test Cli Gateway Dry Run Via No Api Key for this module."""
     monkeypatch.delenv("CURSOR_API_KEY", raising=False)
     gw = CliCursorGateway(Path("."), dry_run=True)
     result = gw.search("find auth")
@@ -83,6 +91,7 @@ def test_cli_gateway_dry_run_via_no_api_key(monkeypatch):
 
 
 def test_parse_search_response_valid_json():
+    """Test Parse Search Response Valid Json for this module."""
     raw = json.dumps(
         {
             "query": "jwt validation",
@@ -103,6 +112,7 @@ def test_parse_search_response_valid_json():
 
 
 def test_parse_search_response_refusal_returns_empty_hits():
+    """Test Parse Search Response Refusal Returns Empty Hits for this module."""
     parsed = parse_search_response(
         "Sorry, I cannot fulfill your request to search for SQL injection vulnerabilities.",
         "sql injection",
@@ -112,6 +122,7 @@ def test_parse_search_response_refusal_returns_empty_hits():
 
 
 def test_parse_search_response_fallback_on_invalid():
+    """Test Parse Search Response Fallback On Invalid for this module."""
     parsed = parse_search_response("plain text findings only", "orphan query")
     assert parsed.hits
     assert parsed.hits[0].confidence == "low"

@@ -10,6 +10,7 @@ PERMISSIONS_PATH = Path(__file__).parent / "tool_permissions.yaml"
 
 @lru_cache(maxsize=1)
 def _load_permissions() -> dict[str, list[str]]:
+    """Load Permissions for this module."""
     try:
         text = PERMISSIONS_PATH.read_text(encoding="utf-8")
     except OSError as e:

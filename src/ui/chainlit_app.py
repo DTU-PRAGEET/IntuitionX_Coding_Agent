@@ -30,6 +30,7 @@ from src.tools.base import register_event_handler
 
 
 def _chainlit_event_handler(event_type: str, payload: dict) -> None:
+    """Chainlit Event Handler for this module."""
     log = cl.user_session.get("event_log") or []
     log.append({"type": event_type, **payload})
     cl.user_session.set("event_log", log[-30:])
@@ -39,6 +40,7 @@ register_event_handler(_chainlit_event_handler)
 
 
 def _parse_decision(text: str) -> dict:
+    """Parse Decision for this module."""
     upper = text.strip().upper()
     if upper.startswith("APPROVE"):
         return {"status": "APPROVE", "feedback": text[7:].strip() or None}
@@ -88,10 +90,12 @@ _NODE_LABELS = {
 
 
 async def _post_progress(message: str) -> None:
+    """Post Progress for this module."""
     await cl.Message(content=message).send()
 
 
 def _format_token_usage(snapshot: dict[str, Any] | None) -> str:
+    """Format Token Usage for this module."""
     if not snapshot:
         return "**LLM token usage:** no data (tracking was not active or no LLM calls recorded)."
     total = snapshot.get("total_tokens", 0)
@@ -112,10 +116,12 @@ def _format_token_usage(snapshot: dict[str, Any] | None) -> str:
 
 
 async def _show_token_usage(snapshot: dict[str, Any] | None) -> None:
+    """Show Token Usage for this module."""
     await cl.Message(content=_format_token_usage(snapshot)).send()
 
 
 async def _show_jira_ingestion(ticket_id: str) -> None:
+    """Show Jira Ingestion for this module."""
     try:
         ticket, raw_payload, parsed = await asyncio.to_thread(fetch_ticket_by_id, ticket_id)
     except Exception as e:
@@ -156,6 +162,7 @@ async def _show_jira_ingestion(ticket_id: str) -> None:
 
 
 async def _show_workflow_result(result: dict) -> None:
+    """Show Workflow Result for this module."""
     route = result.get("routing_route")
     phase = result.get("current_phase")
     ticket = result.get("jira_ticket") or {}
@@ -196,6 +203,7 @@ async def _show_workflow_result(result: dict) -> None:
 
 
 async def _show_event_log() -> None:
+    """Show Event Log for this module."""
     log = cl.user_session.get("event_log") or []
     tool_events = [e for e in log if e.get("type") in ("tool_start", "tool_end")][-8:]
     if tool_events:
@@ -212,6 +220,7 @@ async def _show_event_log() -> None:
 
 
 async def _run_graph_with_hitl(graph, state, config):
+    """Run Graph With Hitl for this module."""
     current_input = state
 
     while True:
@@ -280,6 +289,7 @@ async def _run_graph_with_hitl(graph, state, config):
 
 @cl.on_chat_start
 async def on_chat_start():
+    """On Chat Start for this module."""
     cl.user_session.set("thread_id", str(uuid.uuid4()))
     cl.user_session.set("event_log", [])
 
@@ -314,6 +324,7 @@ async def on_chat_start():
 
 @cl.on_message
 async def on_message(message: cl.Message):
+    """On Message for this module."""
     text = message.content.strip()
     if not text:
         await cl.Message(content="Please provide a Jira ID and User Prompt to begin.").send()

@@ -16,7 +16,7 @@ from src.agents.research.memory import InMemoryResearchMemory, ResearchMemorySto
 from src.agents.research.tools.builder import build_research_tool_registry
 from src.agents.research.tools.file_discovery import extract_anchors
 from src.agents.research.tools.repo_profile import profile_repository
-from src.core.file_paths import extract_repo_file_paths_from_texts
+from src.core.file_paths import extract_repo_file_paths_from_texts, repair_repo_from_cursor_temp_clone, resolve_repo_relative_path
 from src.core.logging import configure_logging, get_logger
 from src.core.skill_scripts.budget import init_budget
 from src.core.token_usage import record_messages_usage
@@ -108,8 +108,32 @@ def _backfill_affected_files_from_hypotheses(
     )
 
 
+def _normalize_research_paths(report: ResearchReport, repo_path: str) -> ResearchReport:
+    """Remap Cursor-style affected_files paths to repo-relative paths."""
+    remapped: list[AffectedFile] = []
+    changed = False
+    for item in report.affected_files:
+        resolved = resolve_repo_relative_path(item.path, repo_path)
+        if resolved and resolved != item.path:
+            remapped.append(item.model_copy(update={"path": resolved}))
+            changed = True
+        else:
+            remapped.append(item)
+
+    if not changed:
+        return report
+
+    flags = list(report.flags)
+    if "cursor_paths_remapped" not in flags:
+        flags.append("cursor_paths_remapped")
+    return report.model_copy(update={"affected_files": remapped, "flags": flags})
+
+
 def _finalize_research_report(report: ResearchReport, repo_path: str) -> ResearchReport:
+    """Finalize Research Report for this module."""
+    repair_repo_from_cursor_temp_clone(repo_path)
     report = _sanitize_research_report(report, repo_path)
+    report = _normalize_research_paths(report, repo_path)
     return _backfill_affected_files_from_hypotheses(report, repo_path)
 
 
@@ -123,12 +147,14 @@ class ResearchAgent:
         gateway: CursorGateway | None = None,
         dry_run: bool = False,
     ):
+        """Initialize ResearchAgent with the provided arguments."""
         self.repo_path = str(Path(repo_path).resolve())
         self.dry_run = dry_run
         self._gateway = gateway
 
     @property
     def gateway(self) -> CursorGateway:
+        """Gateway for ResearchAgent."""
         if self._gateway is None:
             self._gateway = get_cursor_gateway(self.repo_path, dry_run=self.dry_run)
         return self._gateway
@@ -143,6 +169,7 @@ class ResearchAgent:
         llm: BaseChatModel | None = None,
         memory: ResearchMemoryStore | None = None,
     ) -> ResearchReport:
+        """Run for ResearchAgent."""
         if self.dry_run:
             from src.integrations.cursor.research_runner import mock_research_report
 

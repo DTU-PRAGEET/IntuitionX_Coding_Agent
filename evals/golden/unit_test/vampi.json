@@ -1,0 +1,273 @@
+[
+  {
+    "case_id": "G-06",
+    "title": "IDOR — change another user's password (VAmPI)",
+    "repo": {
+      "slug": "VAmPI",
+      "url": "https://github.com/erev0s/VAmPI",
+      "commit_sha": "efa769ae6bd10de7cf59545703ef19f436b61eef",
+      "target_branch": "master"
+    },
+    "language": "python",
+    "vuln_class": "IDOR",
+    "owasp_category": "API1:2023",
+    "cwe": "CWE-639",
+    "severity_label": "High",
+    "difficulty": "easy",
+    "ticket": {
+      "title": "Password update endpoint trusts the URL username instead of the token identity",
+      "problem_statement": "The PUT /users/v1/{username}/password endpoint in api_views/users.py updates the password for the user named in the URL path rather than the user identified by the authenticated JWT. An attacker with any valid token can reset another user's password (including admin) by changing the username in the path. The handler must always act on the JWT subject, not the path parameter.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "Critical",
+      "priority_normalized": "P0",
+      "module": "users",
+      "labels": [
+        "security",
+        "idor",
+        "bola",
+        "broken-access-control"
+      ],
+      "repo_links": [
+        "https://github.com/erev0s/VAmPI"
+      ],
+      "acceptance_criteria": [
+        "A user cannot change another user's password by altering the URL username",
+        "Password updates only affect the account identified by the JWT subject"
+      ],
+      "vulnerability_category": "Broken Object Level Authorization"
+    },
+    "expected_route": "MICRO",
+    "expected_files": [
+      "api_views/users.py"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "api_views/users.py",
+        "start": 186,
+        "end": 192
+      }
+    ],
+    "expected_fix_type": "authorization_check",
+    "expected_patch_contains": [
+      "resp['sub']"
+    ],
+    "expected_patch_excludes": [],
+    "pass_criteria": [
+      "Plan targets update_password in api_views/users.py",
+      "Fix resolves the target user from the JWT subject, not the URL path username",
+      "Vulnerable branch that loads the path-named user is removed"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "G-07",
+    "title": "SQL injection in user lookup (VAmPI)",
+    "repo": {
+      "slug": "VAmPI",
+      "url": "https://github.com/erev0s/VAmPI",
+      "commit_sha": "efa769ae6bd10de7cf59545703ef19f436b61eef",
+      "target_branch": "master"
+    },
+    "language": "python",
+    "vuln_class": "Injection",
+    "owasp_category": "API8:2023",
+    "cwe": "CWE-89",
+    "severity_label": "Critical",
+    "difficulty": "easy",
+    "ticket": {
+      "title": "Username path parameter is concatenated into a raw SQL query",
+      "problem_statement": "The user lookup behind GET /users/v1/{username} builds a SQL query by embedding the username path parameter directly into the query string via an f-string in models/user_model.py (get_user). A payload such as name1' OR '1'='1 alters the query and can read arbitrary user records. The lookup must use the ORM / parameterized query so the username is treated as data.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "Critical",
+      "priority_normalized": "P0",
+      "module": "users",
+      "labels": [
+        "security",
+        "sqli",
+        "injection"
+      ],
+      "repo_links": [
+        "https://github.com/erev0s/VAmPI"
+      ],
+      "acceptance_criteria": [
+        "Username lookups treat input as a bound value, not SQL",
+        "Injection payloads no longer alter the query; legitimate lookups still work"
+      ],
+      "vulnerability_category": "Injection"
+    },
+    "expected_route": "MICRO",
+    "expected_files": [
+      "models/user_model.py"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "models/user_model.py",
+        "start": 71,
+        "end": 78
+      }
+    ],
+    "expected_fix_type": "parameterize_sql",
+    "expected_patch_contains": [
+      "filter_by"
+    ],
+    "expected_patch_excludes": [
+      "SELECT * FROM users WHERE username = '"
+    ],
+    "pass_criteria": [
+      "Plan targets get_user in models/user_model.py",
+      "Fix uses the ORM / parameterized query instead of an f-string",
+      "The raw string-concatenated SQL branch is removed"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "G-08",
+    "title": "JWT signed with a hardcoded weak secret (VAmPI)",
+    "repo": {
+      "slug": "VAmPI",
+      "url": "https://github.com/erev0s/VAmPI",
+      "commit_sha": "efa769ae6bd10de7cf59545703ef19f436b61eef",
+      "target_branch": "master"
+    },
+    "language": "python",
+    "vuln_class": "Auth",
+    "owasp_category": "API2:2023",
+    "cwe": "CWE-798",
+    "severity_label": "Critical",
+    "difficulty": "medium",
+    "ticket": {
+      "title": "JWT signing secret is a hardcoded, guessable value",
+      "problem_statement": "The Flask app configures its JWT signing key as a hardcoded, trivially guessable secret in config.py. Because tokens are HS256-signed with this committed value, an attacker can forge a token for any user (including admin) and bypass authentication on every protected endpoint. The secret must be loaded from an environment variable / secret store with sufficient entropy and never committed.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "Critical",
+      "priority_normalized": "P0",
+      "module": "config",
+      "labels": [
+        "security",
+        "auth",
+        "jwt",
+        "secrets"
+      ],
+      "repo_links": [
+        "https://github.com/erev0s/VAmPI"
+      ],
+      "acceptance_criteria": [
+        "JWT signing secret is sourced from the environment, not committed source",
+        "Tokens forged with the old hardcoded secret are rejected"
+      ],
+      "vulnerability_category": "Broken Authentication"
+    },
+    "expected_route": "MICRO",
+    "expected_files": [
+      "config.py"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "config.py",
+        "start": 13,
+        "end": 13
+      }
+    ],
+    "expected_fix_type": "secrets_removal",
+    "expected_patch_contains": [
+      "os.environ"
+    ],
+    "expected_patch_excludes": [
+      "'random'"
+    ],
+    "pass_criteria": [
+      "Plan targets the SECRET_KEY configuration in config.py",
+      "Fix loads the signing secret from the environment instead of a hardcoded literal",
+      "The committed weak secret value is removed"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "G-09",
+    "title": "Username/password enumeration via distinct login errors (VAmPI)",
+    "repo": {
+      "slug": "VAmPI",
+      "url": "https://github.com/erev0s/VAmPI",
+      "commit_sha": "efa769ae6bd10de7cf59545703ef19f436b61eef",
+      "target_branch": "master"
+    },
+    "language": "python",
+    "vuln_class": "Auth",
+    "owasp_category": "API2:2023",
+    "cwe": "CWE-204",
+    "severity_label": "Medium",
+    "difficulty": "easy",
+    "ticket": {
+      "title": "Login returns different errors for unknown user vs wrong password",
+      "problem_statement": "The POST /users/v1/login handler in api_views/users.py returns distinct failure messages depending on whether the username exists ('Username does not exist') or the password was wrong ('Password is not correct for the given username.'). This lets an attacker enumerate valid usernames and focus password attacks. Failed logins must return a single generic message and consistent status code regardless of which part was wrong.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "Medium",
+      "priority_normalized": "P2",
+      "module": "users",
+      "labels": [
+        "security",
+        "auth",
+        "user-enumeration"
+      ],
+      "repo_links": [
+        "https://github.com/erev0s/VAmPI"
+      ],
+      "acceptance_criteria": [
+        "Invalid-username and wrong-password failures return an identical body and status",
+        "Successful logins are unaffected"
+      ],
+      "vulnerability_category": "Broken Authentication"
+    },
+    "expected_route": "MICRO",
+    "expected_files": [
+      "api_views/users.py"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "api_views/users.py",
+        "start": 101,
+        "end": 106
+      }
+    ],
+    "expected_fix_type": "generic_error_response",
+    "expected_patch_contains": [],
+    "expected_patch_excludes": [
+      "Username does not exist",
+      "Password is not correct for the given username"
+    ],
+    "pass_criteria": [
+      "Plan targets login_user in api_views/users.py",
+      "Fix unifies the failure response into one generic message and status",
+      "The discriminating error messages are removed"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  }
+]

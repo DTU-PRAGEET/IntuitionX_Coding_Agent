@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from src.core.skill_registry import default_skills_root
+from src.core.skill_manager import default_skills_root
 
 from src.agents.orchestrator.tools.jira import JiraCredentialsError, credentials_configured, fetch_jira_ticket
 from src.agents.research.deep_runner import run_research
@@ -20,6 +20,7 @@ _log = get_logger("research_cli")
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for this module."""
     configure_logging()
     parser = argparse.ArgumentParser(description="Run Research Deep Agent standalone")
     parser.add_argument("--ticket", default="PLAT-1234", help="Jira ticket id")

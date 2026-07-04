@@ -12,6 +12,7 @@ from src.core.schemas import ResearchReport
 
 
 def test_llm_content_flattens_gemini_list_blocks():
+    """Test Llm Content Flattens Gemini List Blocks for this module."""
     msg = AIMessage(
         content=[
             {
@@ -27,11 +28,13 @@ def test_llm_content_flattens_gemini_list_blocks():
 
 
 def test_llm_content_plain_string_unchanged():
+    """Test Llm Content Plain String Unchanged for this module."""
     msg = AIMessage(content='{"ticket_id": "X"}')
     assert llm_content(msg) == '{"ticket_id": "X"}'
 
 
 def test_parse_llm_json_from_fenced_gemini_block():
+    """Test Parse Llm Json From Fenced Gemini Block for this module."""
     payload = {
         "ticket_id": "SCRUM-5",
         "research_summary": "SQLi in search_users",
@@ -63,5 +66,6 @@ def test_parse_llm_json_from_fenced_gemini_block():
 
 
 def test_parse_llm_json_rejects_non_string():
+    """Test Parse Llm Json Rejects Non String for this module."""
     with pytest.raises(ValueError, match="expected str"):
         parse_llm_json(["not", "a", "string"], ResearchReport)  # type: ignore[arg-type]

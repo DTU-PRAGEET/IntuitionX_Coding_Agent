@@ -20,6 +20,8 @@ class AttemptSummary(BaseModel):
 
 
 class RepoProfileCompact(BaseModel):
+    """Trimmed repo_profile slice for per-agent prompts (type + top modules).
+    Embedded in OrchestratorContext / ResearchContext / PlanningContext handoffs."""
     repo_type: str
     modules: list[str] = Field(default_factory=list, max_length=8)
 
@@ -35,6 +37,8 @@ class ResearchHandoff(BaseModel):
 
 
 class OrchestratorContext(BaseModel):
+    """Token-minimal prompt bundle for orchestrator routing LLM (ADR-004).
+    Fields mirror `build_orchestrator_routing_context` in `core/orchestrator_context.py`."""
     jira_ticket_id: str
     user_prompt: str = ""
     ticket: dict[str, Any]
@@ -47,6 +51,8 @@ class OrchestratorContext(BaseModel):
 
 
 class ResearchContext(BaseModel):
+    """Prompt-facing research-agent context: ticket, repo path, prior failures, budget.
+    Companion to portable `AgentContext` for typed per-phase prompt assembly."""
     jira_ticket_id: str
     user_prompt: str = ""
     ticket: dict[str, Any]
@@ -58,6 +64,8 @@ class ResearchContext(BaseModel):
 
 
 class PlanningContext(BaseModel):
+    """Planner prompt context — ResearchHandoff + routing_route + gate feedback.
+    Feeds `agents/planner/agent.py` without full research hypothesis dumps."""
     jira_ticket_id: str
     ticket: dict[str, Any]
     research: ResearchHandoff
@@ -70,6 +78,8 @@ class PlanningContext(BaseModel):
 
 
 class ExecutorContext(BaseModel):
+    """Executor prompt context — files_to_change, constraints, test/file flags.
+    Derived from ExecutionPlan / fix_plan for implementation LLM prompts."""
     jira_ticket_id: str
     files_to_change: list[str] = Field(default_factory=list)
     implementation_constraints: list[str] = Field(default_factory=list, max_length=10)
@@ -100,6 +110,7 @@ class AgentContext:
         user_prompt: str = "",
         repo_path: str | None = None,
     ) -> AgentContext:
+        """From Ticket for AgentContext."""
         desc = (ticket.get("problem_statement") or ticket.get("title") or "")[:2000]
         return cls(
             bug_description=desc,
@@ -117,27 +128,33 @@ class AgentContext:
 
     @property
     def research_output(self) -> dict[str, Any]:
+        """Research Output for AgentContext."""
         return self.metadata.get("research_output") or {}
 
     @property
     def fix_plan(self) -> dict[str, Any]:
+        """Fix Plan for AgentContext."""
         return self.metadata.get("fix_plan") or {}
 
     @property
     def plan_output(self) -> dict[str, Any]:
+        """Plan Output for AgentContext."""
         return self.metadata.get("plan_output") or {}
 
     @property
     def execution_metadata(self) -> dict[str, Any]:
+        """Execution Metadata for AgentContext."""
         if "execution_metadata" not in self.metadata:
             self.metadata["execution_metadata"] = {}
         return self.metadata["execution_metadata"]
 
     def append_cursor_history(self, entry: dict[str, Any]) -> AgentContext:
+        """Append Cursor History for AgentContext."""
         self.cursor_history.append(entry)
         return self
 
     def with_phase_output(self, phase: str, artifact: dict[str, Any]) -> AgentContext:
+        """With Phase Output for AgentContext."""
         self.metadata[f"{phase}_output"] = artifact
         if phase == "research":
             for f in artifact.get("affected_files") or []:

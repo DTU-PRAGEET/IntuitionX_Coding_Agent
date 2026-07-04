@@ -24,6 +24,7 @@ _FULL_ROUTING = RoutingDecision(
 
 
 def test_get_allowed_tools_research():
+    """Test Get Allowed Tools Research for this module."""
     tools = get_allowed_tools("research")
     assert "cursor_search" in tools
     assert "web_search" in tools
@@ -32,12 +33,14 @@ def test_get_allowed_tools_research():
 
 
 def test_get_allowed_tools_planner_executor():
+    """Test Get Allowed Tools Planner Executor for this module."""
     assert get_allowed_tools("planner") == ["read", "grep", "find"]
     assert get_allowed_tools("executor") == ["read", "bash", "git_worktree", "mr_create"]
     assert get_allowed_tools("orchestrator") == []
 
 
 def test_builders_respect_permissions(tmp_path):
+    """Test Builders Respect Permissions for this module."""
     from src.agents.executor.tools.builder import build_executor_tools
     from src.agents.planner.tools.builder import build_planner_tools
     from src.agents.research.tools.builder import build_research_tool_registry
@@ -59,6 +62,7 @@ def test_builders_respect_permissions(tmp_path):
 
 
 def test_pipeline_dry_run(tmp_path):
+    """Test Pipeline Dry Run for this module."""
     ticket = make_security_ticket("PLAT-1234")
     with (
         patch("src.pipeline.runner.fetch_jira_ticket", return_value=ticket),
@@ -72,6 +76,7 @@ def test_pipeline_dry_run(tmp_path):
 
 
 def test_pipeline_full_mocked(tmp_path):
+    """Test Pipeline Full Mocked for this module."""
     ticket = make_security_ticket("PLAT-1234")
     fake_report = ResearchReport(
         ticket_id="PLAT-1234",
@@ -132,6 +137,7 @@ def test_pipeline_full_mocked(tmp_path):
 
 
 def test_pipeline_stage_failed_research(tmp_path):
+    """Test Pipeline Stage Failed Research for this module."""
     ticket = make_security_ticket("PLAT-1234")
     with (
         patch("src.pipeline.runner.fetch_jira_ticket", return_value=ticket),
@@ -143,6 +149,7 @@ def test_pipeline_stage_failed_research(tmp_path):
 
 
 def test_pipeline_stage_failed_planner(tmp_path):
+    """Test Pipeline Stage Failed Planner for this module."""
     ticket = make_security_ticket("PLAT-1234")
     fake_report = ResearchReport(
         ticket_id="PLAT-1234",
@@ -168,6 +175,7 @@ def test_pipeline_stage_failed_planner(tmp_path):
 
 
 def test_pipeline_malformed_ticket_load_fails(tmp_path):
+    """Test Pipeline Malformed Ticket Load Fails for this module."""
     with patch(
         "src.pipeline.runner.fetch_jira_ticket",
         side_effect=RuntimeError("Jira unavailable"),

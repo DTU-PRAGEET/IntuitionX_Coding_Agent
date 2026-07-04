@@ -9,12 +9,16 @@ from typing_extensions import TypedDict
 
 
 class JiraComment(TypedDict):
+    """One Jira issue comment — author, body, created timestamp.
+    Populated by `agents/orchestrator/tools/jira._issue_to_jira_ticket`."""
     author: str
     body: str
     created: str
 
 
 class JiraDependency(TypedDict):
+    """Linked Jira issue metadata (blocks/is blocked by) attached to a ticket.
+    Extracted in `agents/orchestrator/tools/jira.py` during ticket fetch."""
     issue_id: str
     relationship: str
     status: str
@@ -22,11 +26,15 @@ class JiraDependency(TypedDict):
 
 
 class JiraAttachment(TypedDict):
+    """Attachment name/type summary on a fetched Jira issue.
+    Filled by `jira._issue_to_jira_ticket` when attachments are present."""
     name: str
     type: str
 
 
 class JiraTicket(TypedDict):
+    """Normalized Jira issue — pipeline input after `fetch_jira_ticket` / webhook ingestion.
+    Carried on LangGraph AgentState.jira_ticket and AgentContext.metadata['jira_ticket']."""
     issue_id: str
     title: str
     issue_type: str
@@ -49,6 +57,8 @@ class JiraTicket(TypedDict):
 
 
 class Hypothesis(TypedDict):
+    """Research hypothesis row — mirrors `schemas.Hypothesis` for LangGraph state.
+    Written to AgentState.research_output by `agents/research/agent.research_node`."""
     rank: int
     hypothesis: str
     evidence_strength: Literal["strong", "moderate", "weak"]
@@ -56,12 +66,16 @@ class Hypothesis(TypedDict):
 
 
 class AffectedFile(TypedDict):
+    """File + reason from research — mirrors `schemas.AffectedFile`.
+    Seeds planner file_paths and eval `expected_files` fixtures."""
     path: str
     reason: str
     evidence_strength: Literal["strong", "moderate", "weak"]
 
 
 class ResearchOutput(TypedDict):
+    """Research phase artifact on AgentState.research_output / AgentContext metadata.
+    Produced by research agent; consumed by planner (`planner/agent.py`, `plan_runner.py`)."""
     ticket_id: str
     research_summary: str
     hypotheses: list[Hypothesis]
@@ -74,6 +88,8 @@ class ResearchOutput(TypedDict):
 
 
 class ExecutionStep(TypedDict):
+    """Legacy step dict in PlanOutput — superseded by `schemas.ExecutionStep` for validation.
+    Still embedded in plan_output JSON consumed by executor."""
     step_id: int
     action: Literal["READ", "EDIT", "VERIFY", "RUN_TESTS"]
     file: str
@@ -86,6 +102,8 @@ class ExecutionStep(TypedDict):
 
 
 class PlanOutput(TypedDict):
+    """Planner artifact on AgentState.plan_output — files, constraints, execution_steps.
+    Mapped from FixPlan via `plan_runner.fix_plan_to_plan_output` for executor compatibility."""
     ticket_id: str
     root_hypothesis: str
     files_to_change: list[str]
@@ -99,6 +117,8 @@ class PlanOutput(TypedDict):
 
 
 class ExecutionOutput(TypedDict):
+    """Executor artifact: MR URL, diff summary, worktree — AgentState.execution_output.
+    Set by `agents/executor/agent.executor_node` after tool/Cursor edits complete."""
     mr_url: str
     changed_files: list[str]
     git_diff_summary: str
@@ -108,6 +128,8 @@ class ExecutionOutput(TypedDict):
 
 
 class HumanApprovalGate(TypedDict):
+    """Paused HITL checkpoint (research/plan/micro) on AgentState.human_gates.
+    Resumed through API `ApprovalDecision` or LangGraph interrupt resume."""
     gate_id: str
     gate_type: Literal["RESEARCH", "PLANNING", "MICRO_CONFIRM"]
     status: Literal["PENDING", "APPROVED", "REJECTED", "REVISE"]
@@ -116,6 +138,8 @@ class HumanApprovalGate(TypedDict):
 
 
 class FailedAttempt(TypedDict):
+    """Prior failure row on AgentState.previous_attempts for self-healing retries.
+    Loaded from Redis/Mongo cache; summarized in orchestrator routing context."""
     attempt_id: str
     ticket_id: str
     phase_failed: str
@@ -127,6 +151,8 @@ class FailedAttempt(TypedDict):
 
 
 class RepoProfile(TypedDict):
+    """Repo layout snapshot (language, modules, package roots) on AgentState.repo_profile.
+    Built by `agents/research/tools/repo_profile.profile_repository`."""
     repo_type: Literal["java_gradle", "python", "unknown"]
     root_path: str
     modules: list[str]
@@ -134,6 +160,9 @@ class RepoProfile(TypedDict):
 
 
 class AgentState(TypedDict):
+    """LangGraph shared state — ticket input, phase outputs, gates, retries, messages.
+    Initialized by `initial_state()`; mutated by orchestrator/research/planner/executor nodes.
+    Wired in `core/graph.py` and end-to-end in `pipeline/runner.py`."""
     # Inputs
     jira_ticket_id: str
     user_prompt: str

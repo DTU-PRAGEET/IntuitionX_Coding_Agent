@@ -1,0 +1,126 @@
+[
+  {
+    "case_id": "G-00",
+    "route": "EXIT"
+  },
+  {
+    "case_id": "G-01",
+    "route": "FULL",
+    "files": [
+      "sqli/dao/student.py"
+    ],
+    "research_summary": "Raw string-formatted INSERT in Student.create allows SQL injection via the name field.",
+    "plan_files": [
+      "sqli/dao/student.py"
+    ],
+    "plan_fix_type": "parameterize_sql",
+    "plan_line_ranges": [
+      {
+        "file": "sqli/dao/student.py",
+        "start": 42,
+        "end": 45
+      }
+    ],
+    "patch_text": "--- a/sqli/dao/student.py\n+++ b/sqli/dao/student.py\n@@\n-        q = (\"INSERT INTO students (name) \"\n-             \"VALUES ('%(name)s')\" % {'name': name})\n-        async with conn.cursor() as cur:\n-            await cur.execute(q)\n+        q = \"INSERT INTO students (name) VALUES (%(name)s)\"\n+        async with conn.cursor() as cur:\n+            await cur.execute(q, {'name': name})\n",
+    "changed_files": [
+      "sqli/dao/student.py"
+    ],
+    "compilation_status": "PASS"
+  },
+  {
+    "case_id": "G-06",
+    "route": "MICRO",
+    "files": [
+      "api_views/users.py"
+    ],
+    "research_summary": "Password update trusts URL username instead of JWT subject.",
+    "plan_files": [
+      "api_views/users.py"
+    ],
+    "plan_fix_type": "authorization_check",
+    "plan_line_ranges": [
+      {
+        "file": "api_views/users.py",
+        "start": 186,
+        "end": 192
+      }
+    ],
+    "patch_text": "--- a/api_views/users.py\n+++ b/api_views/users.py\n@@\n+        username = resp['sub']\n",
+    "changed_files": [
+      "api_views/users.py"
+    ],
+    "compilation_status": "PASS"
+  },
+  {
+    "case_id": "G-10",
+    "route": "FULL",
+    "files": [
+      "src/main/java/org/owasp/webgoat/lessons/sqlinjection/introduction/SqlInjectionLesson5a.java"
+    ],
+    "research_summary": "Account lookup concatenates user input into SQL WHERE clause.",
+    "plan_files": [
+      "src/main/java/org/owasp/webgoat/lessons/sqlinjection/introduction/SqlInjectionLesson5a.java"
+    ],
+    "plan_fix_type": "parameterize_sql",
+    "plan_line_ranges": [
+      {
+        "file": "src/main/java/org/owasp/webgoat/lessons/sqlinjection/introduction/SqlInjectionLesson5a.java",
+        "start": 47,
+        "end": 52
+      }
+    ],
+    "patch_text": "--- a/SqlInjectionLesson5a.java\n+++ b/SqlInjectionLesson5a.java\n@@\n+        PreparedStatement pstmt = connection.prepareStatement(query);\n+        pstmt.setString(1, accountName);\n",
+    "changed_files": [
+      "src/main/java/org/owasp/webgoat/lessons/sqlinjection/introduction/SqlInjectionLesson5a.java"
+    ],
+    "compilation_status": "PASS"
+  },
+  {
+    "case_id": "G-14",
+    "route": "FULL",
+    "files": [
+      "frontend/src/app/search-result/search-result.component.ts"
+    ],
+    "research_summary": "Search term rendered as trusted HTML via innerHTML bypass.",
+    "plan_files": [
+      "frontend/src/app/search-result/search-result.component.ts"
+    ],
+    "plan_fix_type": "output_encoding",
+    "plan_line_ranges": [
+      {
+        "file": "frontend/src/app/search-result/search-result.component.ts",
+        "start": 134,
+        "end": 143
+      }
+    ],
+    "patch_text": "--- a/search-result.component.ts\n+++ b/search-result.component.ts\n@@\n+        this.searchValue = this.route.snapshot.queryParams.q;\n",
+    "changed_files": [
+      "frontend/src/app/search-result/search-result.component.ts"
+    ],
+    "compilation_status": "PASS"
+  },
+  {
+    "case_id": "G-17",
+    "route": "MICRO",
+    "files": [
+      "src/main/resources/application.properties"
+    ],
+    "research_summary": "Plaintext secret committed in application.properties.",
+    "plan_files": [
+      "src/main/resources/application.properties"
+    ],
+    "plan_fix_type": "secrets_removal",
+    "plan_line_ranges": [
+      {
+        "file": "src/main/resources/application.properties",
+        "start": 7,
+        "end": 7
+      }
+    ],
+    "patch_text": "--- a/application.properties\n+++ b/application.properties\n@@\n+password=${SECRET_PASSWORD}\n",
+    "changed_files": [
+      "src/main/resources/application.properties"
+    ],
+    "compilation_status": "PASS"
+  }
+]

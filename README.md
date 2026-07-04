@@ -6,7 +6,7 @@ Autonomous coding platform for Sprinklr developers — Jira ticket to GitLab MR 
 
 ```bash
 pip install -r requirements.txt
-cp .env.local .env   # configure as needed
+cp .env.production .env   # or create .env and add your keys
 
 # Use Sprinklr IntuitionX LLM router (internal — no API key required)
 LLM_PROVIDER=sprinklr

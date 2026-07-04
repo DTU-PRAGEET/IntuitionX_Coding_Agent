@@ -18,15 +18,13 @@ agents: [planner]
 
 ## Role & Scope
 
-Translates research into a deterministic executable plan. Does NOT navigate the repo
-beyond optional verification reads and the pre-loaded AFFECTED FILE CONTENTS block.
-Does NOT produce code — produces steps that tell Executor exactly what to do.
+Translates research into a deterministic executable plan. Does NOT preload file contents
+or perform its own repository exploration — the Cursor Agent explores the repo and returns
+the plan. Does NOT produce code — produces steps that tell Executor exactly what to do.
 
-**File grounding:** Before planning, the runner injects fresh on-disk contents for every
-candidate file (from `affected_files` plus paths cited in hypothesis evidence). Use those
-blocks to copy exact `old_string` values. If a file you must edit is missing from that
-block, call the `read` tool to ground it — never emit READ→VERIFY placeholders because
-contents were unavailable.
+**Repository exploration:** The runner invokes Cursor Agent (Ask mode) with the research
+handoff. Cursor inspects affected files, follows dependencies, reads on-disk content, and
+returns ExecutionPlan JSON. The Python runner only validates and normalizes that plan.
 
 ---
 
@@ -58,8 +56,9 @@ FOR each hypothesis H in research_output.hypotheses:
   ASSERT the step block addresses H (fix, verify-only, or documents cross-file mitigation)
 
 FOR each EDIT step:
-  ASSERT old_string != new_string (identical strings fail validation)
-  ASSERT old_string differs from disk content OR create_files=true
+  ASSERT instruction describes a real security fix (not no-op)
+  ASSERT target_type + target_name (or block + end_line) uniquely identify the edit site
+  ASSERT intent_marker is expected in file after Executor applies the fix
 
 FOR each hypothesis requiring no file change:
   ASSERT plan uses READ→VERIFY only (NO EDIT step)
@@ -104,9 +103,9 @@ If any assertion fails → rebuild plan before Step 5.
 
 For **each hypothesis** (issue):
 1. Identify primary `file` from linked `affected_files` or hypothesis evidence paths
-2. Ground the file from AFFECTED FILE CONTENTS in context; if absent, use the `read` tool
+2. Inspect the file on disk via Cursor exploration before writing semantic targets
 3. Decide fix location:
-   - **Direct fix needed** → include EDIT with real `old_string`/`new_string` change
+   - **Direct fix needed** → include EDIT with `target_type`, `target_name`, `instruction`, `intent_marker`
    - **Fixed by change elsewhere** (e.g., global autoescape) → READ→VERIFY only on this file
    - **No code change required** → READ→VERIFY only; NEVER emit no-op EDIT
 
@@ -115,9 +114,9 @@ Set `files_to_change` = unique paths that receive EDIT steps (not verify-only fi
 | Violation | Next action |
 |-----------|-------------|
 | Hypothesis with no corresponding step block | Add steps; rebuild |
-| EDIT where `old_string == new_string` | Remove EDIT; use READ→VERIFY or add real patch |
+| EDIT where instruction is empty or no-op | Remove EDIT; use READ→VERIFY or add real instruction |
 | File in hypothesis but missing from plan | Add step block citing hypothesis rank |
-| Missing file contents in context | Call `read` on that path, then emit EDIT — do NOT use READ→VERIFY as a placeholder |
+| Missing file on disk during exploration | Read it via Cursor tools, then emit EDIT — do NOT use READ→VERIFY as a placeholder |
 
 **Next action:** Step 3.
 
@@ -126,27 +125,27 @@ Set `files_to_change` = unique paths that receive EDIT steps (not verify-only fi
 For **each hypothesis**, emit a step block:
 
 **When code change is required (READ → EDIT → VERIFY):**
-1. **READ** — `file`=path, line range from research, `reason`="Ground old_string; addresses hypothesis rank=N"
-2. **EDIT** — real patch: `old_string`/`new_string` MUST differ; `intent_marker` unique in `new_string`
+1. **READ** — `file`=path, line range from research, `reason`="Ground context; addresses hypothesis rank=N"
+2. **EDIT** — semantic target: `target_type`, `target_name`, `instruction`, `approximate_line`, `intent_marker`
 3. **VERIFY** — confirm fix or mitigation
 
 **When fix is applied elsewhere (READ → VERIFY only):**
 1. **READ** — ground current file state
 2. **VERIFY** — `reason`="Hypothesis rank=N mitigated by <upstream fix>; confirm no unsafe patterns remain"
-3. **Do NOT emit EDIT** — identical old/new strings fail pipeline validation
+3. **Do NOT emit EDIT** with empty instruction
 
 Optional: **RUN_TESTS** when `write_tests=true`.
 
 **Step fields (required per step):**
 - `step_id` (sequential int), `action`, `file`, `target`, `reason`, `validate`
-- EDIT also requires: `old_string`, `new_string`, `intent_marker`, `change`
+- EDIT also requires: `target_type`, `target_name` (except block/file), `instruction`, `intent_marker`, `change`
 - Every `reason` for issue-related steps MUST cite hypothesis rank: `"Addresses hypothesis rank=2: ..."`
 
 | Violation | Next action |
 |-----------|-------------|
 | EDIT without preceding READ on same file | Rebuild — invalid |
 | VERIFY without preceding READ or EDIT on same file | Rebuild — invalid |
-| EDIT with identical old_string and new_string | Replace with READ→VERIFY only |
+| EDIT with empty instruction | Replace with READ→VERIFY only |
 | Path not in research | Remove step; add `flags: ["path_not_in_research"]` |
 
 **Next action:** Step 4.
@@ -156,9 +155,9 @@ Optional: **RUN_TESTS** when `write_tests=true`.
 Run the **Self-Check Before Finalizing** (above).
 
 Additional checks:
-- Every EDIT `intent_marker` appears in `new_string`
+- Every EDIT has unique resolvable target (file + target_type + target_name + optional approximate_line)
 - Every hypothesis rank has a corresponding step block
-- `old_string` is plausible given research snippets
+- Every EDIT `intent_marker` is a substring expected after the fix
 
 **Next action:** Step 5.
 
@@ -204,7 +203,7 @@ First character `{`, last character `}`. No SEARCH steps.
 
 - NEVER omit a step block for any hypothesis in the Research Report
 - NEVER emit EDIT where `old_string` equals `new_string` — use READ→VERIFY instead
-- NEVER emit READ→VERIFY-only because file contents were missing — use `read` to ground first
+- NEVER emit READ→VERIFY-only because you have not inspected the file — explore the repo first
 - NEVER emit SEARCH steps — use READ with line ranges
 - NEVER construct `old_string` without a READ step in the plan for that file
 - NEVER skip VERIFY after EDIT

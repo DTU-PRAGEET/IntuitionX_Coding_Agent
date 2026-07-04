@@ -12,6 +12,7 @@ from typing import Any
 from src.core.logging import get_logger
 from src.core.runner_utils import parse_llm_json
 from src.core.schemas import FixPlan
+from src.core.token_usage import report_cursor_usage
 from src.integrations.cursor.client import run_local_agent
 from src.integrations.cursor.schemas import (
     CursorEditRequest,
@@ -75,6 +76,7 @@ _DRY_RUN_SEARCH_PATH = "src/example/handler.py"
 
 
 def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    """Run Git for this module."""
     return subprocess.run(
         ["git"] + args,
         cwd=cwd,
@@ -86,11 +88,13 @@ def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
 
 
 def _git_porcelain(cwd: Path) -> str:
+    """Git Porcelain for this module."""
     result = _run_git(["status", "--porcelain"], cwd)
     return (result.stdout or "").strip()
 
 
 def _changed_files_from_porcelain(porcelain: str) -> list[str]:
+    """Changed Files From Porcelain for this module."""
     files: list[str] = []
     for line in porcelain.splitlines():
         if len(line) >= 4:
@@ -103,6 +107,7 @@ def _changed_files_from_porcelain(porcelain: str) -> list[str]:
 
 
 def _git_diff_capture(cwd: Path) -> tuple[str, str]:
+    """Git Diff Capture for this module."""
     stat = _run_git(["diff", "--stat"], cwd)
     full = _run_git(["diff"], cwd)
     stat_text = (stat.stdout or stat.stderr or "").strip() or "(no diff)"
@@ -136,6 +141,7 @@ def mock_search_response(query: str) -> CursorSearchResponse:
 
 
 def _is_search_refusal(text: str) -> bool:
+    """Is Search Refusal for this module."""
     lowered = text.lower()
     return any(marker in lowered for marker in _REFUSAL_MARKERS)
 
@@ -177,14 +183,20 @@ def parse_search_response(text: str, query: str) -> CursorSearchResponse:
 
 @dataclass
 class CursorGatewayResult:
+    """Unified gateway return for ask/search — text, tool_calls, usage, optional hits.
+    Stored on AgentContext.cursor_history via `to_history_entry()`."""
     status: str
     text: str
     dry_run: bool = False
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     method: str = ""
     search_response: CursorSearchResponse | None = None
+    usage: dict[str, int] = field(
+        default_factory=lambda: {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    )
 
     def to_history_entry(self) -> dict[str, Any]:
+        """To History Entry for CursorGatewayResult."""
         entry: dict[str, Any] = {
             "method": self.method,
             "status": self.status,
@@ -203,13 +215,19 @@ class CursorGateway(ABC):
 
     @property
     @abstractmethod
-    def cwd(self) -> Path: ...
+    def cwd(self) -> Path:
+        """Repository root path used for Cursor SDK calls."""
+        ...
 
     @abstractmethod
-    def ask(self, prompt: str, *, context: str | None = None) -> CursorGatewayResult: ...
+    def ask(self, prompt: str, *, context: str | None = None) -> CursorGatewayResult:
+        """Run a read-only Cursor agent prompt against the repository."""
+        ...
 
     @abstractmethod
-    def search(self, query: str, *, path: str = ".") -> CursorGatewayResult: ...
+    def search(self, query: str, *, path: str = ".") -> CursorGatewayResult:
+        """Search the repository with a natural-language query."""
+        ...
 
     @abstractmethod
     def edit(
@@ -219,10 +237,14 @@ class CursorGateway(ABC):
         files: list[str] | None = None,
         fix_plan: FixPlan | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> CursorEditResult: ...
+    ) -> CursorEditResult:
+        """Apply code edits via Cursor using optional file scope and metadata."""
+        ...
 
     @abstractmethod
-    def run(self, command: str, *, timeout: int = 30) -> CursorGatewayResult: ...
+    def run(self, command: str, *, timeout: int = 30) -> CursorGatewayResult:
+        """Execute a shell command in the repository via Cursor."""
+        ...
 
     def search_structured(self, query: str, *, path: str = ".") -> CursorSearchResponse:
         """Convenience — search and return parsed structured hits."""
@@ -236,17 +258,21 @@ class DryRunCursorGateway(CursorGateway):
     """Returns mock search results — for tests and --dry-run without CURSOR_API_KEY."""
 
     def __init__(self, cwd: Path | str):
+        """Initialize DryRunCursorGateway with the provided arguments."""
         self._cwd = Path(cwd).resolve()
 
     @property
     def cwd(self) -> Path:
+        """Cwd for DryRunCursorGateway."""
         return self._cwd
 
     def ask(self, prompt: str, *, context: str | None = None) -> CursorGatewayResult:
+        """Ask for DryRunCursorGateway."""
         _log.info("cursor_gateway_dry_run", method="ask", cwd=str(self._cwd), prompt_len=len(prompt))
         return CursorGatewayResult(status="dry_run", text="", dry_run=True, method="ask")
 
     def search(self, query: str, *, path: str = ".") -> CursorGatewayResult:
+        """Search for DryRunCursorGateway."""
         _log.info("cursor_gateway_dry_run", method="search", query=query[:80], path=path)
         response = mock_search_response(query)
         return CursorGatewayResult(
@@ -265,6 +291,7 @@ class DryRunCursorGateway(CursorGateway):
         fix_plan: FixPlan | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> CursorEditResult:
+        """Edit for DryRunCursorGateway."""
         _log.info("cursor_gateway_dry_run", method="edit", files=files)
         stat, full = _git_diff_capture(self._cwd)
         return CursorEditResult(
@@ -279,6 +306,7 @@ class DryRunCursorGateway(CursorGateway):
         )
 
     def run(self, command: str, *, timeout: int = 30) -> CursorGatewayResult:
+        """Run for DryRunCursorGateway."""
         _log.info("cursor_gateway_dry_run", method="run", command=command[:80])
         return CursorGatewayResult(status="dry_run", text="", dry_run=True, method="run")
 
@@ -287,24 +315,30 @@ class CliCursorGateway(CursorGateway):
     """Wraps cursor-sdk via run_local_agent — only implementation that touches the SDK."""
 
     def __init__(self, cwd: Path | str, *, dry_run: bool = False):
+        """Initialize CliCursorGateway with the provided arguments."""
         self._cwd = Path(cwd).resolve()
         self._dry_run = dry_run
 
     @property
     def cwd(self) -> Path:
+        """Cwd for CliCursorGateway."""
         return self._cwd
 
     def _invoke(self, prompt: str, method: str) -> CursorGatewayResult:
+        """Invoke for CliCursorGateway."""
         run = run_local_agent(prompt, cwd=self._cwd, dry_run=self._dry_run)
+        report_cursor_usage(run.usage)
         status = "dry_run" if run.dry_run else (run.status or "completed")
         return CursorGatewayResult(
             status=status,
             text=run.text,
             dry_run=run.dry_run,
             method=method,
+            usage=dict(run.usage),
         )
 
     def _invoke_search(self, query: str, *, path: str = ".") -> CursorGatewayResult:
+        """Invoke Search for CliCursorGateway."""
         prompt = f"{_SEARCH_PREFIX}Query: {query}\nSearch root: {path}\n"
         result = self._invoke(prompt, "search")
         if result.dry_run or not result.text.strip():
@@ -318,6 +352,7 @@ class CliCursorGateway(CursorGateway):
         return result
 
     def ask(self, prompt: str, *, context: str | None = None) -> CursorGatewayResult:
+        """Ask for CliCursorGateway."""
         parts = [_ASK_PREFIX]
         if context:
             parts.append(f"Context:\n{context}\n\n")
@@ -325,6 +360,7 @@ class CliCursorGateway(CursorGateway):
         return self._invoke("".join(parts), "ask")
 
     def search(self, query: str, *, path: str = ".") -> CursorGatewayResult:
+        """Search for CliCursorGateway."""
         return self._invoke_search(query, path=path)
 
     def edit(
@@ -335,6 +371,7 @@ class CliCursorGateway(CursorGateway):
         fix_plan: FixPlan | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> CursorEditResult:
+        """Edit for CliCursorGateway."""
         before = _git_porcelain(self._cwd)
         files_line = f"Files: {', '.join(files)}\n" if files else ""
         meta_line = ""
@@ -344,6 +381,7 @@ class CliCursorGateway(CursorGateway):
             meta_line += f"FixPlan ticket: {fix_plan.ticket_id}, type: {fix_plan.primary_fix_type}\n"
         prompt = f"{_EDIT_PREFIX}{files_line}{meta_line}{instruction}"
         run = run_local_agent(prompt, cwd=self._cwd, dry_run=self._dry_run)
+        report_cursor_usage(run.usage)
         stat, full = _git_diff_capture(self._cwd)
         after = _git_porcelain(self._cwd)
         changed = _changed_files_from_porcelain(after)
@@ -364,6 +402,7 @@ class CliCursorGateway(CursorGateway):
         )
 
     def run(self, command: str, *, timeout: int = 30) -> CursorGatewayResult:
+        """Run for CliCursorGateway."""
         prompt = f"{_RUN_PREFIX}Command: {command}\nTimeout: {timeout}s\n"
         return self._invoke(prompt, "run")
 
@@ -372,16 +411,20 @@ class LocalPatchCursorGateway(CursorGateway):
     """Applies metadata-driven string patches locally — for unit tests without Cursor SDK."""
 
     def __init__(self, cwd: Path | str):
+        """Initialize LocalPatchCursorGateway with the provided arguments."""
         self._cwd = Path(cwd).resolve()
 
     @property
     def cwd(self) -> Path:
+        """Cwd for LocalPatchCursorGateway."""
         return self._cwd
 
     def ask(self, prompt: str, *, context: str | None = None) -> CursorGatewayResult:
+        """Ask for LocalPatchCursorGateway."""
         return CursorGatewayResult(status="success", text="", method="ask")
 
     def search(self, query: str, *, path: str = ".") -> CursorGatewayResult:
+        """Search for LocalPatchCursorGateway."""
         response = mock_search_response(query)
         return CursorGatewayResult(
             status="success",
@@ -398,10 +441,15 @@ class LocalPatchCursorGateway(CursorGateway):
         fix_plan: FixPlan | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> CursorEditResult:
+        """Edit for LocalPatchCursorGateway — supports semantic metadata for tests."""
         meta = metadata or {}
         batched_edits = meta.get("edits")
         if batched_edits:
-            return self._apply_batched_edits(instruction, batched_edits)
+            return self._apply_batched_edits(instruction, batched_edits, semantic=meta.get("semantic"))
+
+        if meta.get("instruction") or meta.get("target_type"):
+            return self._apply_semantic_edit(instruction, files or [], meta)
+
         old_s = meta.get("old_string") or ""
         new_s = meta.get("new_string") or ""
         create_file = bool(meta.get("create_file"))
@@ -456,10 +504,84 @@ class LocalPatchCursorGateway(CursorGateway):
             changed_files=changed,
         )
 
-    def _apply_batched_edits(
-        self, instruction: str, edits: list[dict[str, Any]]
+    def _apply_semantic_edit(
+        self,
+        instruction: str,
+        target_files: list[str],
+        meta: dict[str, Any],
     ) -> CursorEditResult:
-        """Apply an ordered list of edits in a single call (consolidated executor payload)."""
+        """Simulate semantic edit by injecting intent_marker into target file."""
+        marker = (meta.get("intent_marker") or "FIXED").strip()
+        changed: list[str] = []
+        errors: list[str] = []
+        for rel in target_files:
+            fp = (self._cwd / rel).resolve()
+            try:
+                fp.relative_to(self._cwd)
+            except ValueError:
+                errors.append(f"path escapes workspace: {rel}")
+                continue
+            if meta.get("create_file") and not fp.is_file():
+                fp.parent.mkdir(parents=True, exist_ok=True)
+                fp.write_text(f"# {marker}\n", encoding="utf-8")
+                changed.append(rel)
+                continue
+            if not fp.is_file():
+                errors.append(f"file not found: {rel}")
+                continue
+            content = fp.read_text(encoding="utf-8")
+            if marker not in content:
+                suffix = f"\n# semantic-edit: {marker}\n"
+                fp.write_text(content.rstrip() + suffix, encoding="utf-8")
+            changed.append(rel)
+        if errors and not changed:
+            joined = "; ".join(errors)
+            return CursorEditResult(
+                status="failed", text=joined, stderr=joined, exit_code=1, changed_files=[]
+            )
+        stat, full = _git_diff_capture(self._cwd)
+        return CursorEditResult(
+            status="success" if changed else "failed",
+            text=instruction[:500],
+            exit_code=0 if changed else 1,
+            git_diff_stat=stat,
+            git_diff_full=full,
+            changed_files=changed,
+        )
+
+    def _apply_batched_edits(
+        self, instruction: str, edits: list[dict[str, Any]], *, semantic: bool = False
+    ) -> CursorEditResult:
+        """Apply an ordered list of edits in a single call."""
+        if semantic or any(e.get("instruction") or e.get("target_type") for e in edits):
+            changed: list[str] = []
+            errors: list[str] = []
+            for edit in edits:
+                rel = edit.get("file") or ""
+                if not rel:
+                    errors.append("edit missing file path")
+                    continue
+                result = self._apply_semantic_edit(
+                    instruction, [rel], edit
+                )
+                if result.changed_files:
+                    changed.extend(result.changed_files)
+                elif result.stderr:
+                    errors.append(result.stderr)
+            if errors and not changed:
+                joined = "; ".join(errors)
+                return CursorEditResult(
+                    status="failed", text=joined, stderr=joined, exit_code=1, changed_files=[]
+                )
+            stat, full = _git_diff_capture(self._cwd)
+            return CursorEditResult(
+                status="success" if changed else "failed",
+                text=instruction[:500],
+                exit_code=0 if changed else 1,
+                git_diff_stat=stat,
+                git_diff_full=full,
+                changed_files=list(dict.fromkeys(changed)),
+            )
         changed: list[str] = []
         errors: list[str] = []
         for edit in edits:
@@ -511,6 +633,7 @@ class LocalPatchCursorGateway(CursorGateway):
         )
 
     def run(self, command: str, *, timeout: int = 30) -> CursorGatewayResult:
+        """Run for LocalPatchCursorGateway."""
         return CursorGatewayResult(status="success", text="", method="run")
 
 

@@ -10,12 +10,14 @@ from src.core.state import FailedAttempt
 
 
 def _redis_client():
+    """Redis Client for this module."""
     import redis
 
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"))
 
 
 def save_failed_attempt(attempt: FailedAttempt) -> None:
+    """Save Failed Attempt for this module."""
     try:
         r = _redis_client()
         key = f"failed:{attempt['ticket_id']}"
@@ -27,6 +29,7 @@ def save_failed_attempt(attempt: FailedAttempt) -> None:
 
 
 def get_failed_attempts(ticket_id: str) -> list[FailedAttempt]:
+    """Return failed attempts."""
     try:
         r = _redis_client()
         raw = r.get(f"failed:{ticket_id}")

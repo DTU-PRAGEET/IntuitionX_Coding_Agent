@@ -15,12 +15,14 @@ from src.agents.executor.tools.git_worktree import (
 
 
 def test_resolve_base_branch_prefers_existing_remote(tmp_path):
+    """Test Resolve Base Branch Prefers Existing Remote for this module."""
     with patch("src.agents.executor.tools.git_worktree._remote_branch_exists") as exists:
         exists.side_effect = lambda _path, branch: branch == "main"
         assert resolve_base_branch(str(tmp_path), preferred="develop") == "main"
 
 
 def test_make_branch_name_includes_run_timestamp():
+    """Test Make Branch Name Includes Run Timestamp for this module."""
     import re
 
     name = make_branch_name("SPACE-129069", description="stored reflected xss")
@@ -29,6 +31,7 @@ def test_make_branch_name_includes_run_timestamp():
 
 
 def test_reused_worktree_checks_out_new_branch(tmp_path):
+    """Test Reused Worktree Checks Out New Branch for this module."""
     worktree_root = tmp_path / "worktrees"
     worktree = worktree_root / "space_129068"
     worktree.mkdir(parents=True)
@@ -66,6 +69,7 @@ def test_reused_worktree_checks_out_new_branch(tmp_path):
 
 
 def test_stage_commit_push_reports_no_changes_without_remote_branch(tmp_path):
+    """Test Stage Commit Push Reports No Changes Without Remote Branch for this module."""
     with patch("src.agents.executor.tools.git_worktree._run_git") as mock_git, patch(
         "src.agents.executor.tools.git_worktree._remote_branch_exists",
         return_value=False,

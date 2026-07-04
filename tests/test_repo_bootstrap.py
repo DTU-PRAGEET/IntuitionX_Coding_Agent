@@ -10,6 +10,7 @@ from src.core.schemas import ResearchReport
 
 
 def test_bootstrap_repo_context_existing_repo(tmp_path: Path) -> None:
+    """Test Bootstrap Repo Context Existing Repo for this module."""
     (tmp_path / "sqli").mkdir()
     (tmp_path / "run.py").write_text("print('ok')\n", encoding="utf-8")
 
@@ -21,6 +22,7 @@ def test_bootstrap_repo_context_existing_repo(tmp_path: Path) -> None:
 
 
 def test_sanitize_research_report_strips_false_repo_blocker(tmp_path: Path) -> None:
+    """Test Sanitize Research Report Strips False Repo Blocker for this module."""
     report = ResearchReport(
         ticket_id="SPACE-1",
         research_summary="Repository is not checked out at repo_path",
@@ -47,6 +49,7 @@ def test_sanitize_research_report_strips_false_repo_blocker(tmp_path: Path) -> N
 
 
 def test_sanitize_research_report_strips_not_accessible_blocker(tmp_path: Path) -> None:
+    """Test Sanitize Research Report Strips Not Accessible Blocker for this module."""
     report = ResearchReport(
         ticket_id="SPACE-129069",
         research_summary="Repository path in ticket context is not accessible in this environment",
@@ -75,6 +78,7 @@ def test_sanitize_research_report_strips_not_accessible_blocker(tmp_path: Path) 
 
 
 def test_research_agent_fails_fast_when_repo_missing(tmp_path: Path) -> None:
+    """Test Research Agent Fails Fast When Repo Missing for this module."""
     from src.agents.research.research_agent import ResearchAgent
     from tests.helpers import make_security_ticket
 

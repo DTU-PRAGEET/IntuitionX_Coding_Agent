@@ -1,4 +1,4 @@
-<!-- CHANGELOG (2026-06-26): Expanded to full ExecutionPlan field contract, RUN_TESTS example, flags/self_healing_notes, and triad validation checklist. -->
+<!-- CHANGELOG (2026-07-03): Semantic EDIT steps — target_type/instruction replace old_string/new_string patches. -->
 
 ---
 # plan_schema.md
@@ -30,84 +30,72 @@
 | `target` | yes | yes | yes | yes |
 | `reason` | yes | yes | yes | yes |
 | `validate` | yes | yes | yes | yes |
-| `old_string` | — | yes* | — | — |
-| `new_string` | — | yes | — | — |
+| `target_type` | — | yes | — | — |
+| `target_name` | — | yes* | — | — |
+| `instruction` | — | yes | — | — |
+| `approximate_line` | optional | optional | — | — |
+| `end_line` | — | block only | — | — |
+| `parent_name` | — | optional | — | — |
+| `occurrence_index` | — | optional | — | — |
 | `intent_marker` | — | yes | recommended | — |
 | `change` | — | recommended | — | — |
 | `read_start_line` | optional | — | — | — |
 | `read_end_line` | optional | — | — | — |
 
-\* `old_string` may be empty when `create_files=true` (new file).
+\* `target_name` optional for `target_type=file` or `block`.
 
-## Example Plan
+### target_type values
+
+`function` | `method` | `class` | `variable` | `assignment` | `import` | `block` | `file`
+
+## Example Plan (semantic EDIT)
 
 ```json
 {
   "ticket_id": "PLAT-1234",
-  "root_hypothesis": "SQL injection via string concatenation in UserDAO",
-  "files_to_change": ["src/dao/UserDAO.java"],
+  "root_hypothesis": "Hardcoded JWT secret in validate_user",
+  "files_to_change": ["src/auth.py"],
   "implementation_constraints": ["Do not modify public API signatures"],
   "execution_steps": [
     {
       "step_id": 1,
       "action": "READ",
-      "file": "src/dao/UserDAO.java",
-      "target": "Read query method before edit",
-      "reason": "Ground old_string from disk",
-      "validate": "File read succeeds",
-      "read_start_line": 40,
-      "read_end_line": 80
+      "file": "src/auth.py",
+      "target": "Read validate_user before edit",
+      "reason": "Ground context for hypothesis rank=1",
+      "validate": "File read succeeds"
     },
     {
       "step_id": 2,
       "action": "EDIT",
-      "file": "src/dao/UserDAO.java",
-      "target": "Parameterize SQL query",
-      "reason": "Fix SQL injection root cause",
-      "validate": "grep shows PreparedStatement",
-      "old_string": "exact text from READ",
-      "new_string": "replacement with PreparedStatement",
-      "intent_marker": "PreparedStatement",
-      "change": "Replace string-concat SQL with parameterized query"
+      "file": "src/auth.py",
+      "target": "Parameterize JWT secret",
+      "reason": "Fix hypothesis rank=1: committed secret",
+      "validate": "grep for os.environ",
+      "target_type": "function",
+      "target_name": "validate_user",
+      "approximate_line": 120,
+      "instruction": "Replace the hardcoded JWT secret with an environment variable.",
+      "intent_marker": "os.environ",
+      "change": "Use env var for JWT secret"
     },
     {
       "step_id": 3,
       "action": "VERIFY",
-      "file": "src/dao/UserDAO.java",
+      "file": "src/auth.py",
       "target": "Confirm fix applied",
-      "reason": "Ensure parameterized query present",
-      "validate": "grep for PreparedStatement; !string concatenation in SQL",
-      "intent_marker": "PreparedStatement"
-    },
-    {
-      "step_id": 4,
-      "action": "RUN_TESTS",
-      "file": "src/test/dao/UserDAOTest.java",
-      "target": "Run unit tests for DAO",
-      "reason": "Regression check after SQL fix",
-      "validate": "Tests pass or skip"
+      "reason": "Ensure secret removed",
+      "validate": "grep for os.environ",
+      "intent_marker": "os.environ"
     }
   ],
-  "write_tests": true,
+  "write_tests": false,
   "create_files": false,
   "risk_level": "medium",
-  "self_healing_notes": ["If old_string mismatch, executor uses Cursor fallback"],
+  "self_healing_notes": [],
   "flags": []
 }
 ```
-
-## Issue Completeness (1:1 Mapping)
-
-Each entry in `research_output.hypotheses[]` is one **issue**. The plan MUST address every issue:
-
-| Research field | Plan requirement |
-|----------------|------------------|
-| `hypotheses[i].rank` | ≥1 `execution_steps` entry with `reason` citing `hypothesis rank=i` |
-| Issue requiring code change | READ → EDIT → VERIFY on fix file |
-| Issue mitigated elsewhere | READ → VERIFY only (no EDIT) |
-
-**Self-check before emit:** For each hypothesis rank, confirm a corresponding step block exists.
-Never emit EDIT where `old_string == new_string`.
 
 ## Triad Validation Checklist
 
@@ -115,6 +103,6 @@ Before emitting, confirm for each modified file:
 - [ ] Every hypothesis rank has a corresponding step block
 - [ ] READ step immediately before EDIT on same `file`
 - [ ] VERIFY step immediately after EDIT on same `file`
-- [ ] EDIT `old_string` ≠ `new_string` (identical strings fail validation)
-- [ ] EDIT `intent_marker` is substring of `new_string`
+- [ ] EDIT has `instruction`, `target_type`, `intent_marker`
+- [ ] Semantic target resolves uniquely on disk (use `parent_name` / `occurrence_index` if ambiguous)
 - [ ] All `file` paths ∈ `files_to_change` (unless `create_files=true`)

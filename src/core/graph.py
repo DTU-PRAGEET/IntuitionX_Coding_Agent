@@ -22,6 +22,7 @@ def _record_gate(
     gate_type: str,
     decision: dict,
 ) -> HumanApprovalGate:
+    """Record Gate for this module."""
     status = decision.get("status", "REJECTED").upper()
     feedback = decision.get("feedback") or decision.get("notes")
     if status == "APPROVE":
@@ -91,6 +92,7 @@ def micro_confirm_node(state: AgentState) -> AgentState:
 
 
 def route_after_orchestrator(state: AgentState) -> str:
+    """Route After Orchestrator for this module."""
     route = state.get("routing_route", "FULL")
     if route == "EXIT":
         return "exit"
@@ -104,6 +106,7 @@ def route_after_orchestrator(state: AgentState) -> str:
 
 
 def route_after_research_hag(state: AgentState) -> str:
+    """Route After Research Hag for this module."""
     gates = state.get("human_gates", [])
     if not gates:
         return "reject"
@@ -117,6 +120,7 @@ def route_after_research_hag(state: AgentState) -> str:
 
 
 def route_after_planning_hag(state: AgentState) -> str:
+    """Route After Planning Hag for this module."""
     gates = state.get("human_gates", [])
     if not gates:
         return "reject"
@@ -130,6 +134,7 @@ def route_after_planning_hag(state: AgentState) -> str:
 
 
 def route_after_micro_confirm(state: AgentState) -> str:
+    """Route After Micro Confirm for this module."""
     gates = state.get("human_gates", [])
     if not gates:
         return "reject"
@@ -143,6 +148,7 @@ def route_after_micro_confirm(state: AgentState) -> str:
 
 
 def route_after_planner(state: AgentState) -> str:
+    """Route After Planner for this module."""
     route = state.get("routing_route", "FULL")
     if route == "MICRO":
         return "micro_confirm"

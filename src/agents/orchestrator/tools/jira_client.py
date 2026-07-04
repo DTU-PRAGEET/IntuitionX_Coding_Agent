@@ -38,6 +38,7 @@ def create_jira_client(
 
 
 def credentials_configured() -> bool:
+    """Credentials Configured for this module."""
     return bool(settings.jira_server_url and settings.jira_email and settings.jira_api_token)
 
 
@@ -45,6 +46,7 @@ def fetch_ticket_by_key(client: JIRA, issue_key: str) -> JiraTicketRaw:
     """Fetch a single Jira ticket by key."""
 
     def _fetch() -> JiraTicketRaw:
+        """Fetch for this module."""
         issue = client.issue(issue_key, fields="summary,description,status,issuetype,priority,labels,components,comment")
         return JiraTicketRaw(
             key=issue.key,
@@ -64,6 +66,7 @@ def fetch_tickets_from_jql(client: JIRA, jql: str, max_results: int = 50) -> lis
     """Run JQL and return minimal ticket payloads."""
 
     def _fetch() -> list[JiraTicketRaw]:
+        """Fetch for this module."""
         issues = client.search_issues(jql, maxResults=max_results, fields="summary,description")
         return [
             JiraTicketRaw(
@@ -83,6 +86,7 @@ def fetch_tickets_from_jql(client: JIRA, jql: str, max_results: int = 50) -> lis
 
 
 def extract_ticket_id_from_url(url: str) -> Optional[str]:
+    """Extract ticket id from url."""
     for pattern in (r"/browse/([A-Z]+-\d+)", r"/([A-Z]+-\d+)"):
         match = re.search(pattern, url)
         if match:

@@ -18,6 +18,7 @@ class LsTool(ToolDefinition):
 
     @audit_tool
     def execute(self, path: str = ".", limit: int = DEFAULT_LIMIT) -> ToolResult:
+        """Execute for LsTool."""
         try:
             resolved = self.resolve_path(path)
         except ValueError as e:

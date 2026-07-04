@@ -13,4 +13,5 @@ class ResearchRunContext:
 
     @property
     def has_loaded_skills(self) -> bool:
+        """Has Loaded Skills for ResearchRunContext."""
         return bool(self.loaded_skills)

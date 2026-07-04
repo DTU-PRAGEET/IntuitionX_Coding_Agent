@@ -10,4 +10,10 @@ data/
 .coverage
 htmlcov/
 /tmp/
+.env.production
 .cursor/debug-*.log
+
+evals/reports/
+.cache/eval_repos/
+
+.DS_Store

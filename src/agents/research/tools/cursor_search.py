@@ -19,6 +19,8 @@ _log = get_logger("cursor_search_tool")
 
 
 class CursorSearchInput(BaseModel):
+    """LangChain tool args for natural-language repo search via CursorGateway.
+    Bound in `make_cursor_search_tool`; budget-checked against `skill_scripts/budget.py`."""
     query: str = Field(
         description=(
             "Natural-language search question, e.g. "
@@ -44,6 +46,7 @@ def make_cursor_search_tool(
     """Factory — bind gateway and budget for cursor_search LangChain tool."""
 
     def cursor_search(query: str, path: str = ".") -> str:
+        """Cursor Search for this module."""
         from src.core.skill_scripts.budget import _budget_path
 
         budget_path = _budget_path(agent, thread_id, budget_dir)

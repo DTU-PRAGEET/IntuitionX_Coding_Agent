@@ -26,6 +26,7 @@ from pathlib import Path
 
 
 def _guess_test_path(repo_path: str, file_path: str) -> list[str]:
+    """Guess Test Path for this module."""
     root = Path(repo_path)
     rel = Path(file_path)
     candidates: list[Path] = []
@@ -44,6 +45,7 @@ def _guess_test_path(repo_path: str, file_path: str) -> list[str]:
 
 
 def run_tests_for_file(repo_path: str, file_path: str, *, timeout: int = 120) -> tuple[bool, str, int]:
+    """Run tests for file."""
     targets = _guess_test_path(repo_path, file_path)
     if not targets:
         return True, f"TEST_SKIP: no tests found for {file_path}", 2
@@ -70,6 +72,7 @@ def run_tests_for_file(repo_path: str, file_path: str, *, timeout: int = 120) ->
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for this module."""
     parser = argparse.ArgumentParser(description="Run pytest subset for a file")
     parser.add_argument("--repo", required=True)
     parser.add_argument("--file", required=True)

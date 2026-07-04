@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from src.core.plan_validation import validate_plan_triad
+from src.core.plan_validation import sync_files_to_change_from_edit_steps, validate_plan_triad
 from src.core.schemas import ExecutionPlan, ExecutionStep
 
 
 def test_valid_read_edit_verify_triad():
+    """Test Valid Read Edit Verify Triad for this module."""
     plan = ExecutionPlan(
         ticket_id="T-1",
         root_hypothesis="fix",
@@ -27,8 +28,10 @@ def test_valid_read_edit_verify_triad():
                 target="edit",
                 reason="fix",
                 validate="ok",
-                old_string="a",
-                new_string="b",
+                target_type="block",
+                approximate_line=1,
+                end_line=1,
+                instruction="replace a with b",
                 intent_marker="b",
             ),
             ExecutionStep(
@@ -47,6 +50,7 @@ def test_valid_read_edit_verify_triad():
 
 
 def test_invalid_edit_without_read():
+    """Test Invalid Edit Without Read for this module."""
     plan = ExecutionPlan(
         ticket_id="T-1",
         root_hypothesis="fix",
@@ -68,3 +72,49 @@ def test_invalid_edit_without_read():
     )
     errors = validate_plan_triad(plan)
     assert any("preceding READ" in e for e in errors)
+
+
+def test_sync_files_to_change_from_edit_steps_adds_missing_paths():
+    """Planner LLM may omit EDIT targets from files_to_change — repair before executor."""
+    plan = ExecutionPlan(
+        ticket_id="SPACE-129070",
+        root_hypothesis="remove hardcoded secrets",
+        files_to_change=[
+            "src/main/resources/application.properties",
+            "src/main/java/org/owasp/wrongsecrets/challenges/docker/WrongSecretsConstants.java",
+        ],
+        execution_steps=[
+            ExecutionStep(
+                step_id=7,
+                action="READ",
+                file=".ssh/wrongsecrets.keys",
+                target="read ssh key file",
+                reason="ground",
+                validate="ok",
+            ),
+            ExecutionStep(
+                step_id=8,
+                action="EDIT",
+                file=".ssh/wrongsecrets.keys",
+                target="redact ssh key",
+                reason="remove private key",
+                validate="grep REMOVED_FOR_SECURITY",
+                target_type="file",
+                instruction="Replace private key with security placeholder comments",
+                intent_marker="REMOVED_FOR_SECURITY",
+            ),
+            ExecutionStep(
+                step_id=9,
+                action="VERIFY",
+                file=".ssh/wrongsecrets.keys",
+                target="verify redaction",
+                reason="confirm",
+                validate="grep REMOVED_FOR_SECURITY",
+                intent_marker="REMOVED_FOR_SECURITY",
+            ),
+        ],
+        risk_level="high",
+    )
+    synced = sync_files_to_change_from_edit_steps(plan)
+    assert ".ssh/wrongsecrets.keys" in synced.files_to_change
+    assert "files_to_change_synced_from_edit_steps" in synced.flags

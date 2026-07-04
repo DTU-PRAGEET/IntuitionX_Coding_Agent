@@ -10,6 +10,8 @@ from src.core.schemas import FixPlan
 
 
 class CursorSearchHit(BaseModel):
+    """Single repo search match from CursorGateway.search — path, confidence, snippets.
+    Parsed from LLM JSON in `gateway._parse_search_response`; used by research cursor_search."""
     path: str
     confidence: Literal["high", "medium", "low"]
     summary: str
@@ -17,6 +19,8 @@ class CursorSearchHit(BaseModel):
 
 
 class CursorSearchResponse(BaseModel):
+    """Full search response: query + ranked CursorSearchHit list.
+    Returned by `CursorGateway.search`; logged to research memory on each tool call."""
     query: str
     hits: list[CursorSearchHit] = Field(default_factory=list)
     flags: list[str] = Field(default_factory=list)
@@ -47,6 +51,7 @@ class CursorEditResult(BaseModel):
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
 
     def to_history_entry(self) -> dict[str, Any]:
+        """To History Entry for CursorEditResult."""
         return {
             "method": self.method,
             "status": self.status,

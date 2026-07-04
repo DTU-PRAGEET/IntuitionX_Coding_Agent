@@ -17,10 +17,12 @@ class RestrictedToolRegistry(ToolRegistry):
     """ToolRegistry that denies execute() for tools outside the executor allowlist."""
 
     def __init__(self, cwd: str, allowed: frozenset[str]):
+        """Initialize RestrictedToolRegistry with the provided arguments."""
         super().__init__(cwd)
         self._allowed = allowed
 
     def execute(self, name: str, **kwargs) -> ToolResult:
+        """Execute for RestrictedToolRegistry."""
         if name not in self._allowed:
             msg = (
                 f"Tool {name!r} is not allowed for the Executor agent. "

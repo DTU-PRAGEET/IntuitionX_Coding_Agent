@@ -19,6 +19,7 @@ from tests.helpers import make_security_ticket
 
 
 def test_enrich_security_ticket_extracts_cve_and_severity():
+    """Test Enrich Security Ticket Extracts Cve And Severity for this module."""
     raw = JiraTicketRaw(
         key="SEC-1",
         summary="Critical SQL injection in AuthFilter",
@@ -30,7 +31,22 @@ def test_enrich_security_ticket_extracts_cve_and_severity():
     assert enrichment.affected_component == "AuthFilter"
 
 
+def test_enrich_security_ticket_does_not_false_positive_rce_in_source_controlled():
+    """Short vuln tokens must not match inside unrelated words like source-controlled."""
+    raw = JiraTicketRaw(
+        key="SPACE-129070",
+        summary="Remove committed secrets and improve secret management",
+        description=(
+            "Sensitive credentials may be committed into source-controlled artifacts. "
+            "Replace insecure secret handling with runtime secret management."
+        ),
+    )
+    enrichment = enrich_security_ticket(raw)
+    assert enrichment.vulnerability_type != "rce"
+
+
 def test_security_ticket_has_enrichment():
+    """Test Security Ticket Has Enrichment for this module."""
     ticket = make_security_ticket("SEC-TEST-1")
     enrichment = ticket["ticket_history_summary"]["security_enrichment"]
     assert enrichment["cve_ids"]
@@ -38,6 +54,7 @@ def test_security_ticket_has_enrichment():
 
 
 def test_research_tool_builder_includes_cursor_and_agent_tools(tmp_path):
+    """Test Research Tool Builder Includes Cursor And Agent Tools for this module."""
     gateway = DryRunCursorGateway(tmp_path)
     _, tools = build_research_tool_registry(str(tmp_path), gateway=gateway)
     names = sorted(t.name for t in tools)
@@ -53,6 +70,7 @@ def test_research_tool_builder_includes_cursor_and_agent_tools(tmp_path):
 
 
 def test_in_memory_research_memory_snippet():
+    """Test In Memory Research Memory Snippet for this module."""
     mem = InMemoryResearchMemory()
     mem.record("tool_call", {"tool": "grep", "pattern": "foo"})
     snippet = mem.to_context_snippet()
@@ -61,6 +79,7 @@ def test_in_memory_research_memory_snippet():
 
 
 def test_research_dry_run_cli(tmp_path, capsys):
+    """Test Research Dry Run Cli for this module."""
     from src.agents.research.__main__ import main
 
     ticket = make_security_ticket("SEC-TEST-1")
@@ -79,6 +98,7 @@ def test_research_dry_run_cli(tmp_path, capsys):
 
 
 def test_backfill_affected_files_from_hypothesis_evidence(tmp_path):
+    """Test Backfill Affected Files From Hypothesis Evidence for this module."""
     student = tmp_path / "sqli" / "dao" / "student.py"
     student.parent.mkdir(parents=True)
     student.write_text("vulnerable\n", encoding="utf-8")
@@ -125,6 +145,7 @@ def test_backfill_affected_files_from_hypothesis_evidence(tmp_path):
 
 
 def test_run_research_parses_report(tmp_path):
+    """Test Run Research Parses Report for this module."""
     from src.agents.research.deep_runner import run_research
 
     ticket = make_security_ticket("PLAT-1234")
@@ -157,6 +178,7 @@ def test_run_research_parses_report(tmp_path):
 
 
 def test_run_research_recursion_error_propagates(tmp_path):
+    """Test Run Research Recursion Error Propagates for this module."""
     from src.agents.research.deep_runner import run_research
 
     ticket = make_security_ticket("SEC-TEST-1")

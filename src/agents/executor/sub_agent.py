@@ -9,7 +9,7 @@ from src.agents.executor.tools.mr_create import create_github_pr
 from src.core.agent_context import AgentContext
 from src.core.logging import get_logger
 from src.core.schemas import FixPlan, PatchResult
-from src.core.skill_registry import SkillRegistry, get_skill_registry
+from src.core.skill_manager import SkillRegistry, get_skill_registry
 from src.core.sub_agent import SubAgent
 from src.integrations.cursor.gateway import CursorGateway, get_cursor_gateway
 from src.integrations.cursor.implement_runner import mock_patch_result, run_cursor_implement
@@ -31,6 +31,7 @@ class CursorImplementSubAgent(SubAgent):
         skill_registry: SkillRegistry | None = None,
         create_pr: bool = False,
     ):
+        """Initialize CursorImplementSubAgent with the provided arguments."""
         self._repo_path = repo_path
         self._dry_run = dry_run
         self._gateway = gateway
@@ -38,6 +39,7 @@ class CursorImplementSubAgent(SubAgent):
         self._create_pr = create_pr
 
     def run(self, context: AgentContext) -> AgentContext:
+        """Run for CursorImplementSubAgent."""
         fix_raw = context.metadata.get("fix_plan") or {}
         ticket_id = context.metadata.get("ticket_id", "UNKNOWN")
         repo_path = self._repo_path or context.metadata.get("repo_path") or "."

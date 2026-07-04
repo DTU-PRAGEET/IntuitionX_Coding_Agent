@@ -1,0 +1,267 @@
+[
+  {
+    "case_id": "G-10",
+    "title": "SQL injection via string concatenation in WHERE clause (WebGoat)",
+    "repo": {
+      "slug": "WebGoat",
+      "url": "https://github.com/WebGoat/WebGoat",
+      "commit_sha": "f69f564fcc34cf44aae273e06346fc6216b30e18",
+      "target_branch": "main"
+    },
+    "language": "java",
+    "vuln_class": "Injection",
+    "owasp_category": "A03:2021",
+    "cwe": "CWE-89",
+    "severity_label": "High",
+    "difficulty": "medium",
+    "ticket": {
+      "title": "Account lookup builds its SQL WHERE clause by string concatenation",
+      "problem_statement": "An account-search feature builds its SQL query by concatenating the user-supplied account name straight into the WHERE clause (\"... last_name = '\" + accountName + \"'\"). A classic ' OR '1'='1 payload returns the entire user_data table. The query must bind user input through a PreparedStatement parameter instead of string concatenation.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "High",
+      "priority_normalized": "P1",
+      "module": "sqlinjection",
+      "labels": [
+        "security",
+        "sqli",
+        "injection"
+      ],
+      "repo_links": [
+        "https://github.com/WebGoat/WebGoat"
+      ],
+      "acceptance_criteria": [
+        "User input is bound as a parameter, not concatenated into SQL",
+        "Injection payloads no longer return extra rows; legitimate lookups still work"
+      ],
+      "vulnerability_category": "Injection"
+    },
+    "expected_route": "FULL",
+    "expected_files": [
+      "src/main/java/org/owasp/webgoat/lessons/sqlinjection/introduction/SqlInjectionLesson5a.java"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "src/main/java/org/owasp/webgoat/lessons/sqlinjection/introduction/SqlInjectionLesson5a.java",
+        "start": 47,
+        "end": 52
+      }
+    ],
+    "expected_fix_type": "parameterize_sql",
+    "expected_patch_contains": [
+      "PreparedStatement",
+      "setString"
+    ],
+    "expected_patch_excludes": [
+      "\" + accountName + \""
+    ],
+    "pass_criteria": [
+      "Research identifies SqlInjectionLesson5a.java (injectableQuery) as the injection sink",
+      "Fix uses a PreparedStatement with a bound parameter for the account name",
+      "No string-concatenated user input remains in the query"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "G-11",
+    "title": "JWT 'alg:none' / unverified token accepted (WebGoat)",
+    "repo": {
+      "slug": "WebGoat",
+      "url": "https://github.com/WebGoat/WebGoat",
+      "commit_sha": "f69f564fcc34cf44aae273e06346fc6216b30e18",
+      "target_branch": "main"
+    },
+    "language": "java",
+    "vuln_class": "Auth",
+    "owasp_category": "A07:2021",
+    "cwe": "CWE-347",
+    "severity_label": "High",
+    "difficulty": "medium",
+    "ticket": {
+      "title": "Token refresh accepts unsigned (alg:none) and unverified JWTs",
+      "problem_statement": "The JWT refresh flow decodes and trusts incoming tokens without enforcing the signing algorithm, accepting 'alg:none' / effectively unsigned tokens and re-reading identity from an expired token. An attacker can mint a token with no signature and impersonate another user. Token handling must verify the signature with an explicit algorithm allowlist and reject the 'none' algorithm.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "High",
+      "priority_normalized": "P1",
+      "module": "jwt",
+      "labels": [
+        "security",
+        "auth",
+        "jwt"
+      ],
+      "repo_links": [
+        "https://github.com/WebGoat/WebGoat"
+      ],
+      "acceptance_criteria": [
+        "Tokens are verified against an explicit algorithm allowlist",
+        "Unsigned / alg:none tokens are rejected"
+      ],
+      "vulnerability_category": "Broken Authentication"
+    },
+    "expected_route": "FULL",
+    "expected_files": [
+      "src/main/java/org/owasp/webgoat/lessons/jwt/JWTRefreshEndpoint.java"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "src/main/java/org/owasp/webgoat/lessons/jwt/JWTRefreshEndpoint.java",
+        "start": 83,
+        "end": 106
+      }
+    ],
+    "expected_fix_type": "enforce_jwt_algorithm",
+    "expected_patch_contains": [],
+    "expected_patch_excludes": [],
+    "pass_criteria": [
+      "Research identifies JWTRefreshEndpoint.java as the token verification location",
+      "Fix enforces signature verification with an explicit algorithm allowlist and rejects alg:none",
+      "Identity is not derived from an expired or unverified token"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "G-12",
+    "title": "IDOR — read any user's profile by id (WebGoat)",
+    "repo": {
+      "slug": "WebGoat",
+      "url": "https://github.com/WebGoat/WebGoat",
+      "commit_sha": "f69f564fcc34cf44aae273e06346fc6216b30e18",
+      "target_branch": "main"
+    },
+    "language": "java",
+    "vuln_class": "IDOR",
+    "owasp_category": "A01:2021",
+    "cwe": "CWE-639",
+    "severity_label": "High",
+    "difficulty": "medium",
+    "ticket": {
+      "title": "Profile endpoint returns any profile by userId without an ownership check",
+      "problem_statement": "GET /IDOR/profile/{userId} returns the requested profile without verifying that the requested userId belongs to the authenticated caller, so any logged-in user can read another user's profile (horizontal privilege escalation). The handler must authorize every object access and only return a profile when it belongs to the caller (or the caller holds an explicit authorized role).",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "High",
+      "priority_normalized": "P1",
+      "module": "idor",
+      "labels": [
+        "security",
+        "idor",
+        "broken-access-control"
+      ],
+      "repo_links": [
+        "https://github.com/WebGoat/WebGoat"
+      ],
+      "acceptance_criteria": [
+        "A user cannot read another user's profile by changing the userId",
+        "A user can still read their own profile"
+      ],
+      "vulnerability_category": "Broken Access Control"
+    },
+    "expected_route": "FULL",
+    "expected_files": [
+      "src/main/java/org/owasp/webgoat/lessons/idor/IDORViewOtherProfile.java"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "src/main/java/org/owasp/webgoat/lessons/idor/IDORViewOtherProfile.java",
+        "start": 49,
+        "end": 62
+      }
+    ],
+    "expected_fix_type": "authorization_check",
+    "expected_patch_contains": [
+      "authUserId"
+    ],
+    "expected_patch_excludes": [],
+    "pass_criteria": [
+      "Research identifies IDORViewOtherProfile.java as the unauthorized object access",
+      "Fix enforces that the requested userId matches the authenticated user before returning the profile",
+      "Requesting another user's id no longer returns their profile"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "G-13",
+    "title": "Path traversal via user-controlled upload filename (WebGoat)",
+    "repo": {
+      "slug": "WebGoat",
+      "url": "https://github.com/WebGoat/WebGoat",
+      "commit_sha": "f69f564fcc34cf44aae273e06346fc6216b30e18",
+      "target_branch": "main"
+    },
+    "language": "java",
+    "vuln_class": "BAC",
+    "owasp_category": "A01:2021",
+    "cwe": "CWE-22",
+    "severity_label": "High",
+    "difficulty": "hard",
+    "ticket": {
+      "title": "Profile upload uses the client-supplied filename without canonicalization",
+      "problem_statement": "The profile upload writes the uploaded file to a destination built directly from the user-controlled filename (new File(uploadDirectory, fullName)) with no canonicalization, so a fullName containing ../ escapes the intended upload directory and writes elsewhere on disk. The destination must be constrained: strip path components and verify the resolved canonical path stays under the upload directory before writing.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "High",
+      "priority_normalized": "P1",
+      "module": "pathtraversal",
+      "labels": [
+        "security",
+        "path-traversal",
+        "broken-access-control"
+      ],
+      "repo_links": [
+        "https://github.com/WebGoat/WebGoat"
+      ],
+      "acceptance_criteria": [
+        "Uploaded files cannot be written outside the user's upload directory",
+        "Legitimate uploads still succeed"
+      ],
+      "vulnerability_category": "Broken Access Control"
+    },
+    "expected_route": "FULL",
+    "expected_files": [
+      "src/main/java/org/owasp/webgoat/lessons/pathtraversal/ProfileUploadBase.java"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "src/main/java/org/owasp/webgoat/lessons/pathtraversal/ProfileUploadBase.java",
+        "start": 50,
+        "end": 53
+      }
+    ],
+    "expected_fix_type": "path_canonicalization",
+    "expected_patch_contains": [],
+    "expected_patch_excludes": [
+      "new File(uploadDirectory, fullName)"
+    ],
+    "pass_criteria": [
+      "Research identifies ProfileUploadBase.execute as the traversal sink",
+      "Fix strips path components and validates the canonical path stays under the upload directory",
+      "The raw new File(uploadDirectory, fullName) construction is removed"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  }
+]

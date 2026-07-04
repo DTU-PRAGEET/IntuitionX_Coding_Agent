@@ -12,6 +12,8 @@ GREP_MAX_LINE_LENGTH = 500
 
 @dataclass(frozen=True)
 class TruncationResult:
+    """read/grep truncation metadata — kept content plus line/byte limits hit.
+    Produced by `truncate_head` in `tools/truncate.py`; used by read_tool and grep_tool."""
     content: str
     truncated: bool
     truncated_by: Literal["lines", "bytes"] | None
@@ -24,6 +26,7 @@ class TruncationResult:
 
 
 def format_size(num_bytes: int) -> str:
+    """Format size."""
     if num_bytes < 1024:
         return f"{num_bytes}B"
     if num_bytes < 1024 * 1024:
@@ -32,6 +35,7 @@ def format_size(num_bytes: int) -> str:
 
 
 def _split_lines(content: str) -> list[str]:
+    """Split Lines for this module."""
     if not content:
         return []
     lines = content.split("\n")

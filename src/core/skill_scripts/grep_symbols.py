@@ -32,6 +32,7 @@ def grep_symbols(
     *,
     limit_per_pattern: int = DEFAULT_LIMIT,
 ) -> dict:
+    """Grep Symbols for this module."""
     registry = ToolRegistry(repo_path)
     hits: list[dict] = []
     try:
@@ -71,6 +72,7 @@ def grep_symbols(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for this module."""
     parser = argparse.ArgumentParser(description="Search repository for symbol patterns")
     parser.add_argument("--repo", required=True)
     parser.add_argument("--patterns", required=True, help="Comma-separated keywords")

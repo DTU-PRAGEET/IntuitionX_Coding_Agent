@@ -33,6 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_research_excluded_tools_cover_deepagents_scaffolding():
+    """Test Research Excluded Tools Cover Deepagents Scaffolding for this module."""
     assert "task" in RESEARCH_EXCLUDED_DEEPAGENT_TOOLS
     assert "write_todos" in RESEARCH_EXCLUDED_DEEPAGENT_TOOLS
     assert "read_file" in RESEARCH_EXCLUDED_DEEPAGENT_TOOLS
@@ -40,10 +41,12 @@ def test_research_excluded_tools_cover_deepagents_scaffolding():
 
 
 def test_progressive_tool_disclosure_starts_core_only():
+    """Test Progressive Tool Disclosure Starts Core Only for this module."""
     assert _visible_research_tools([], None) == RESEARCH_CORE_TOOLS
 
 
 def test_progressive_tool_disclosure_hides_load_skill_after_load():
+    """Test Progressive Tool Disclosure Hides Load Skill After Load for this module."""
     ctx = ResearchRunContext()
     ctx.loaded_skills["research"] = "workflow body"
     visible = _visible_research_tools([], ctx)
@@ -52,6 +55,7 @@ def test_progressive_tool_disclosure_hides_load_skill_after_load():
 
 
 def test_progressive_tool_disclosure_unlocks_after_cursor_search():
+    """Test Progressive Tool Disclosure Unlocks After Cursor Search for this module."""
     from langchain_core.messages import AIMessage, ToolMessage
 
     messages = [
@@ -67,6 +71,7 @@ def test_progressive_tool_disclosure_unlocks_after_cursor_search():
 
 
 def test_build_research_user_message_has_load_skill_catalog(tmp_path):
+    """Test Build Research User Message Has Load Skill Catalog for this module."""
     ticket = make_security_ticket("SEC-CAT-1")
     message = build_research_user_message(
         ticket,
@@ -84,6 +89,7 @@ def test_build_research_user_message_has_load_skill_catalog(tmp_path):
 
 
 def test_load_skill_tool_resolves_research_and_security():
+    """Test Load Skill Tool Resolves Research And Security for this module."""
     tool = make_load_skill_tool()
     research_body = tool.invoke({"skill": "research"})
     injection_body = tool.invoke({"skill": "injection"})
@@ -91,7 +97,16 @@ def test_load_skill_tool_resolves_research_and_security():
     assert len(injection_body) > 100
 
 
+def test_load_skill_tool_resolves_security_rce_alias():
+    """Stale vulnerability_category values like security/rce map to injection."""
+    tool = make_load_skill_tool()
+    body = tool.invoke({"skill": "security/rce"})
+    assert len(body) > 100
+    assert "load_skill error" not in body.lower()
+
+
 def test_progressive_skill_middleware_compacts_tool_message_and_injects_system():
+    """Test Progressive Skill Middleware Compacts Tool Message And Injects System for this module."""
     ctx = ResearchRunContext()
     mw = ProgressiveSkillMiddleware(ctx)
     request = MagicMock()
@@ -108,6 +123,7 @@ def test_progressive_skill_middleware_compacts_tool_message_and_injects_system()
 
 @patch("deepagents.create_deep_agent")
 def test_build_deep_agent_research_only_profile(mock_create):
+    """Test Build Deep Agent Research Only Profile for this module."""
     from src.core.schemas import ResearchReport
 
     mock_create.return_value = MagicMock()
@@ -150,6 +166,7 @@ def test_model_visible_tools_are_trimmed_and_cheap():
     all_tools: dict[str, object] = {}
 
     def walk(o, depth=0):
+        """Walk for this module."""
         if depth > 8:
             return
         from langchain_core.tools import BaseTool

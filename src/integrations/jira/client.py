@@ -49,6 +49,7 @@ class ParsedJiraTicket(BaseModel):
 
 
 def _sanitize_raw_payload(issue: Any) -> dict[str, Any]:
+    """Sanitize Raw Payload for this module."""
     description = _field_text(_issue_field(issue, "description"))
     summary = _field_text(_issue_field(issue, "summary"))
     return {

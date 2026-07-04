@@ -30,11 +30,13 @@ User Search
 
 
 def test_github_slugs_from_jira_smart_link():
+    """Test Github Slugs From Jira Smart Link for this module."""
     slugs = github_slugs_from_text(SCRUM_5_DESCRIPTION)
     assert slugs == ["DTU-PRAGEET/Testing-Security-demo"]
 
 
 def test_extract_repo_links_does_not_split_description():
+    """Test Extract Repo Links Does Not Split Description for this module."""
     links = extract_repo_links_from_text(SCRUM_5_DESCRIPTION)
     assert links == ["DTU-PRAGEET/Testing-Security-demo"]
     assert all("\n" not in link for link in links)
@@ -42,4 +44,5 @@ def test_extract_repo_links_does_not_split_description():
 
 
 def test_extract_target_branch_master():
+    """Test Extract Target Branch Master for this module."""
     assert extract_target_branch(SCRUM_5_DESCRIPTION) == "master"

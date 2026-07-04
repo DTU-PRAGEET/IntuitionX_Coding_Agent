@@ -1,0 +1,139 @@
+[
+  {
+    "case_id": "G-00",
+    "title": "DUMMY — DONE security ticket should EXIT (harness smoke case)",
+    "repo": {
+      "slug": "",
+      "url": "",
+      "commit_sha": "3cc696ecdd18c009b30c7586e7d1b45bd393605a",
+      "target_branch": "main"
+    },
+    "language": "n/a",
+    "vuln_class": "Routing",
+    "owasp_category": "",
+    "cwe": "",
+    "severity_label": "Low",
+    "difficulty": "easy",
+    "ticket": {
+      "title": "SQL injection in student search (already fixed)",
+      "problem_statement": "Previously reported SQL injection. A patch has already been merged and verified; closing out.",
+      "issue_type": "Security",
+      "status": "Done",
+      "priority_raw": "High",
+      "priority_normalized": "P1",
+      "module": "sqli",
+      "labels": [
+        "security",
+        "sqli"
+      ],
+      "repo_links": [],
+      "acceptance_criteria": []
+    },
+    "expected_route": "EXIT",
+    "expected_files": [],
+    "expected_line_ranges": [],
+    "expected_fix_type": "",
+    "expected_patch_contains": [],
+    "expected_patch_excludes": [],
+    "pass_criteria": [
+      "Orchestrator exits immediately because ticket status is Done"
+    ],
+    "eval_scope": [
+      "routing"
+    ],
+    "requires_cursor": false
+  },
+  {
+    "case_id": "G-19",
+    "title": "Already-resolved ticket (status Done) should EXIT",
+    "repo": {
+      "slug": "",
+      "url": "",
+      "commit_sha": "",
+      "target_branch": "main"
+    },
+    "language": "n/a",
+    "vuln_class": "Routing",
+    "owasp_category": "",
+    "cwe": "",
+    "severity_label": "Low",
+    "difficulty": "easy",
+    "ticket": {
+      "title": "IDOR on book secret endpoint (already remediated)",
+      "problem_statement": "Broken object level authorization on the book-secret endpoint was reported and a fix has already been merged, deployed, and verified by the security team. This ticket is being closed out; no further code change is required.",
+      "issue_type": "Security",
+      "status": "Done",
+      "priority_raw": "High",
+      "priority_normalized": "P1",
+      "module": "books",
+      "labels": [
+        "security",
+        "idor",
+        "resolved"
+      ],
+      "repo_links": [],
+      "acceptance_criteria": []
+    },
+    "expected_route": "EXIT",
+    "expected_files": [],
+    "expected_line_ranges": [],
+    "expected_fix_type": "",
+    "expected_patch_contains": [],
+    "expected_patch_excludes": [],
+    "pass_criteria": [
+      "Orchestrator exits immediately because the ticket is already Done / resolved"
+    ],
+    "eval_scope": [
+      "routing"
+    ],
+    "requires_cursor": false
+  },
+  {
+    "case_id": "G-20",
+    "title": "Non-security feature request should EXIT",
+    "repo": {
+      "slug": "",
+      "url": "",
+      "commit_sha": "",
+      "target_branch": "main"
+    },
+    "language": "n/a",
+    "vuln_class": "Routing",
+    "owasp_category": "",
+    "cwe": "",
+    "severity_label": "Low",
+    "difficulty": "easy",
+    "ticket": {
+      "title": "Add a dark mode toggle to the dashboard",
+      "problem_statement": "Users would like a dark mode option in the dashboard settings so the UI can switch between light and dark themes, remembering their preference across sessions. This is a UI/UX enhancement request, not a security defect.",
+      "issue_type": "Feature",
+      "status": "In Progress",
+      "priority_raw": "Low",
+      "priority_normalized": "P3",
+      "module": "dashboard",
+      "labels": [
+        "feature",
+        "ui",
+        "enhancement"
+      ],
+      "repo_links": [],
+      "acceptance_criteria": [
+        "A dark mode toggle is available in settings",
+        "The selected theme persists across sessions"
+      ]
+    },
+    "expected_route": "EXIT",
+    "expected_files": [],
+    "expected_line_ranges": [],
+    "expected_fix_type": "",
+    "expected_patch_contains": [],
+    "expected_patch_excludes": [],
+    "pass_criteria": [
+      "Orchestrator classifies the ticket as a non-security feature request and exits"
+    ],
+    "eval_scope": [
+      "routing"
+    ],
+    "requires_cursor": false
+  }
+]

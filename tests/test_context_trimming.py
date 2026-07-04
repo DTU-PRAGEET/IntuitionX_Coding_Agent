@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from src.agents.planner.agent import build_planner_prompt, load_research_report
+from src.integrations.cursor.semantic_plan_runner import build_semantic_plan_prompt
+from src.agents.planner.agent import load_research_report
 from src.agents.research.deep_runner import (
     _compact_repo_profile,
     _compact_security_enrichment,
@@ -21,6 +22,7 @@ FIXTURE_REPORT = REPO_ROOT / "src/agents/planner/fixtures/mock_research_report.j
 
 
 def _ticket() -> dict:
+    """Ticket for this module."""
     return {
         "issue_id": "PLAT-1234",
         "title": "SQL injection in ExampleHandler",
@@ -45,6 +47,7 @@ def _ticket() -> dict:
 
 
 def _previous_attempt_with_full_plan() -> dict:
+    """Previous Attempt With Full Plan for this module."""
     return {
         "attempt_id": "a1",
         "ticket_id": "PLAT-1234",
@@ -77,6 +80,7 @@ def _previous_attempt_with_full_plan() -> dict:
 
 
 def test_compact_ticket_drops_noise_keeps_essentials():
+    """Test Compact Ticket Drops Noise Keeps Essentials for this module."""
     compact = compact_ticket_for_planner(_ticket())
     assert compact is not None
     assert compact["ticket_id"] == "PLAT-1234"
@@ -88,6 +92,7 @@ def test_compact_ticket_drops_noise_keeps_essentials():
 
 
 def test_retry_summary_collapses_history_without_plans():
+    """Test Retry Summary Collapses History Without Plans for this module."""
     summary = retry_summary_for_planner([_previous_attempt_with_full_plan()])
     assert summary is not None
     assert summary["num_previous_attempts"] == 1
@@ -100,13 +105,15 @@ def test_retry_summary_collapses_history_without_plans():
 
 
 def test_retry_summary_none_when_no_attempts():
+    """Test Retry Summary None When No Attempts for this module."""
     assert retry_summary_for_planner([]) is None
     assert retry_summary_for_planner(None) is None
 
 
 def test_planner_prompt_excludes_previous_plans_and_ticket_noise():
+    """Test Planner Prompt Excludes Previous Plans And Ticket Noise for this module."""
     report = load_research_report(FIXTURE_REPORT)
-    prompt = build_planner_prompt(
+    prompt = build_semantic_plan_prompt(
         report,
         str(REPO_ROOT),
         previous_attempts=[_previous_attempt_with_full_plan()],
@@ -128,6 +135,7 @@ def test_planner_prompt_excludes_previous_plans_and_ticket_noise():
 
 
 def test_research_handoff_keeps_hypotheses_drops_issue_type():
+    """Test Research Handoff Keeps Hypotheses Drops Issue Type for this module."""
     report = load_research_report(FIXTURE_REPORT)
     handoff = research_handoff_for_planner(report)
     assert handoff["hypotheses"]  # planner reasons from these
@@ -140,6 +148,7 @@ def test_research_handoff_keeps_hypotheses_drops_issue_type():
 
 
 def test_compact_repo_profile_drops_root_and_package_roots():
+    """Test Compact Repo Profile Drops Root And Package Roots for this module."""
     profile = {
         "repo_type": "python",
         "root_path": "/tmp/secret/path",
@@ -151,6 +160,7 @@ def test_compact_repo_profile_drops_root_and_package_roots():
 
 
 def test_compact_security_enrichment_keeps_signal_drops_noise():
+    """Test Compact Security Enrichment Keeps Signal Drops Noise for this module."""
     enrichment = {
         "severity": "High",
         "vulnerability_type": "SQLi",
@@ -170,6 +180,7 @@ def test_compact_security_enrichment_keeps_signal_drops_noise():
 
 
 def test_research_message_uses_compact_profile(tmp_path):
+    """Test Research Message Uses Compact Profile for this module."""
     ticket = _ticket()
     ticket["ticket_history_summary"] = {
         "security_enrichment": {

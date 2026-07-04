@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.core.skills_loader import (
+from src.core.skill_manager import (
     load_reference,
     load_skill_file,
     load_skill_manifest,
@@ -21,6 +21,7 @@ SECURITY_REF = SKILLS_ROOT / "references" / "security_patterns.md"
 
 
 def test_load_skill_manifest_research():
+    """Test Load Skill Manifest Research for this module."""
     manifest = load_skill_manifest(SKILL_DIR)
     assert manifest.name == "research"
     assert manifest.description
@@ -29,11 +30,13 @@ def test_load_skill_manifest_research():
 
 
 def test_load_security_reference():
+    """Test Load Security Reference for this module."""
     content = load_reference(SKILL_DIR, "security_patterns")
     assert "security_enrichment" in content
 
 
 def test_malformed_skill_missing_script_name(tmp_path):
+    """Test Malformed Skill Missing Script Name for this module."""
     bad = tmp_path / "bad.md"
     bad.write_text(
         "script_description: missing name\nscript_content: |\n  body\n",
@@ -44,6 +47,7 @@ def test_malformed_skill_missing_script_name(tmp_path):
 
 
 def test_security_ticket_selects_security_skill():
+    """Test Security Ticket Selects Security Skill for this module."""
     ticket = make_security_ticket("SEC-TEST-1")
     skill, reason = select_research_skill(ticket, SKILLS_ROOT)
     assert skill is not None
@@ -53,12 +57,14 @@ def test_security_ticket_selects_security_skill():
 
 
 def test_select_references_security():
+    """Test Select References Security for this module."""
     ticket = make_security_ticket("SEC-TEST-1")
     refs = select_references(ticket, SKILL_DIR, "research")
     assert any(r.name == "security_patterns.md" for r in refs)
 
 
 def test_bug_ticket_no_skill_match():
+    """Test Bug Ticket No Skill Match for this module."""
     ticket = make_bug_ticket("PLAT-9999")
     skill, reason = select_research_skill(ticket, SKILLS_ROOT)
     assert skill is None
@@ -66,6 +72,7 @@ def test_bug_ticket_no_skill_match():
 
 
 def test_research_dry_run_includes_skill_fields(tmp_path):
+    """Test Research Dry Run Includes Skill Fields for this module."""
     from unittest.mock import patch
 
     from src.agents.research.__main__ import main

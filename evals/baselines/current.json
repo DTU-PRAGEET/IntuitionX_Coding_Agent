@@ -1,0 +1,11 @@
+{
+  "_comment": "Baseline scorecard tracker (Milestone 2.4). Updated only by an intentional baseline run; PRs that regress the smoke score by >5% are blocked (Phase 4.2). Do not hand-edit.",
+  "experiment": null,
+  "created_at": null,
+  "total": 0,
+  "passed": 0,
+  "pass_rate": null,
+  "evaluator_means": {},
+  "by_difficulty": {},
+  "by_vuln_class": {}
+}

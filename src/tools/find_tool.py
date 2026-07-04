@@ -23,6 +23,7 @@ class FindTool(ToolDefinition):
 
     @audit_tool
     def execute(self, pattern: str, path: str = ".", limit: int = DEFAULT_LIMIT) -> ToolResult:
+        """Execute for FindTool."""
         try:
             root = self.resolve_path(path)
         except ValueError as e:

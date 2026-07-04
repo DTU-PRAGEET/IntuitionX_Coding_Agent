@@ -14,12 +14,14 @@ _log = get_logger("repo_snapshot")
 
 
 def sha256_text(text: str | None) -> str:
+    """Sha256 Text for this module."""
     if text is None:
         return hashlib.sha256(b"").hexdigest()
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _run_git(args: list[str], cwd: str, *, check: bool = False) -> subprocess.CompletedProcess:
+    """Run Git for this module."""
     return subprocess.run(
         ["git"] + args,
         cwd=cwd,
@@ -62,6 +64,7 @@ def git_repo_snapshot(repo_path: str) -> dict[str, Any]:
 
 
 def log_repo_snapshot(logger: Any, event: str, repo_path: str, **extra: Any) -> dict[str, Any]:
+    """Log Repo Snapshot for this module."""
     snap = git_repo_snapshot(repo_path)
     logger.info(event, **snap, **extra)
     return snap
@@ -77,6 +80,7 @@ def log_edit_patch(
     new_string: str | None,
     **extra: Any,
 ) -> None:
+    """Log Edit Patch for this module."""
     old_s = old_string or ""
     new_s = new_string or ""
     logger.info(
@@ -93,6 +97,7 @@ def log_edit_patch(
 
 
 def file_content_hash(repo_path: str, rel_path: str) -> str:
+    """File Content Hash for this module."""
     full = Path(repo_path) / rel_path
     if not full.is_file():
         return ""
@@ -103,6 +108,7 @@ def file_content_hash(repo_path: str, rel_path: str) -> str:
 
 
 def old_string_in_file(repo_path: str, rel_path: str, old_string: str) -> dict[str, Any]:
+    """Old String In File for this module."""
     full = Path(repo_path) / rel_path
     if not full.is_file():
         return {"exists": False, "occurrence_count": 0, "file_sha256": ""}
@@ -119,6 +125,7 @@ def old_string_in_file(repo_path: str, rel_path: str, old_string: str) -> dict[s
 
 
 def file_git_diff(repo_path: str, rel_path: str) -> str:
+    """File Git Diff for this module."""
     result = _run_git(["diff", "--", rel_path], repo_path, check=False)
     return (result.stdout or result.stderr or "").strip()
 
@@ -127,6 +134,7 @@ def snapshots_match(
     planner_head: str | None,
     executor_head: str | None,
 ) -> bool:
+    """Snapshots Match for this module."""
     if not planner_head:
         return True
     if not executor_head:

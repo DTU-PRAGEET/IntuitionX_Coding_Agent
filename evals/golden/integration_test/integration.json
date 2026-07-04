@@ -1,0 +1,507 @@
+[
+  {
+    "case_id": "I-01",
+    "title": "DVPWA — injection, weak crypto, and stored XSS bundle",
+    "case_kind": "integration",
+    "repo": {
+      "slug": "Testing-Security-demo",
+      "url": "https://github.com/DTU-PRAGEET/Testing-Security-demo",
+      "commit_sha": "3cc696ecdd18c009b30c7586e7d1b45bd393605a",
+      "target_branch": "main"
+    },
+    "language": "python",
+    "vuln_class": "Mixed",
+    "owasp_category": "A03:2021",
+    "cwe": "CWE-89",
+    "severity_label": "Critical",
+    "difficulty": "hard",
+    "ticket": {
+      "title": "Security audit bundle — SQL injection, password hashing, and stored XSS in DVPWA",
+      "problem_statement": "A consolidated security review of the Testing-Security-demo (DVPWA) codebase flagged three independent findings that must all be remediated in this ticket:\n\n1. **SQL injection (student creation):** The 'Add new student' feature in sqli/dao/student.py places user-supplied names directly into an INSERT via string formatting instead of bound parameters.\n\n2. **Weak password storage:** User passwords in sqli/dao/user.py are verified against fast, unsalted MD5 hashes. Replace with a modern salted adaptive hash (bcrypt/argon2/PBKDF2).\n\n3. **Stored XSS in course reviews:** Review text is rendered without HTML escaping because autoescape is disabled application-wide (sqli/app.py) and review content is emitted unescaped in course.jinja2.\n\nAll three issues are in the same repository and must be fixed together.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "Critical",
+      "priority_normalized": "P0",
+      "module": "sqli",
+      "labels": ["security", "sqli", "xss", "crypto", "integration", "dvpwa"],
+      "repo_links": ["https://github.com/DTU-PRAGEET/Testing-Security-demo"],
+      "acceptance_criteria": [
+        "Student names are bound as parameters, not concatenated into SQL",
+        "Passwords use a salted adaptive KDF instead of MD5",
+        "Review HTML is escaped by default (autoescape enabled)"
+      ],
+      "vulnerability_category": "Mixed"
+    },
+    "expected_route": "FULL",
+    "expected_files": [
+      "sqli/dao/student.py",
+      "sqli/dao/user.py",
+      "sqli/app.py",
+      "sqli/templates/course.jinja2"
+    ],
+    "expected_line_ranges": [
+      {"file": "sqli/dao/student.py", "start": 42, "end": 45},
+      {"file": "sqli/dao/user.py", "start": 40, "end": 41},
+      {"file": "sqli/app.py", "start": 33, "end": 35},
+      {"file": "sqli/templates/course.jinja2", "start": 20, "end": 28}
+    ],
+    "expected_fix_type": "mixed",
+    "expected_patch_contains": ["VALUES (%(name)s)"],
+    "expected_patch_excludes": ["VALUES ('%(name)s')", "md5(", "autoescape=False"],
+    "pass_criteria": [
+      "Research identifies all four affected files across the three findings",
+      "SQL injection fixed with parameterized INSERT",
+      "MD5 replaced with salted adaptive password hashing",
+      "Output escaping enabled; autoescape=False removed"
+    ],
+    "issues": [
+      {
+        "issue_id": "I-01-a",
+        "title": "SQL injection in student creation",
+        "repo_slug": "Testing-Security-demo",
+        "vuln_class": "Injection",
+        "cwe": "CWE-89",
+        "expected_files": ["sqli/dao/student.py"],
+        "expected_line_ranges": [{"file": "sqli/dao/student.py", "start": 42, "end": 45}],
+        "expected_fix_type": "parameterize_sql",
+        "expected_patch_contains": ["VALUES (%(name)s)", "{'name': name}"],
+        "expected_patch_excludes": ["VALUES ('%(name)s')", "% {'name': name}"],
+        "source_unit_case": "G-01"
+      },
+      {
+        "issue_id": "I-01-b",
+        "title": "Weak password storage — unsalted MD5",
+        "repo_slug": "Testing-Security-demo",
+        "vuln_class": "Crypto",
+        "cwe": "CWE-916",
+        "expected_files": ["sqli/dao/user.py"],
+        "expected_line_ranges": [{"file": "sqli/dao/user.py", "start": 40, "end": 41}],
+        "expected_fix_type": "hash_password",
+        "expected_patch_excludes": ["md5("],
+        "source_unit_case": "G-02"
+      },
+      {
+        "issue_id": "I-01-c",
+        "title": "Stored XSS in course reviews",
+        "repo_slug": "Testing-Security-demo",
+        "vuln_class": "XSS",
+        "cwe": "CWE-79",
+        "expected_files": ["sqli/app.py", "sqli/templates/course.jinja2"],
+        "expected_line_ranges": [
+          {"file": "sqli/app.py", "start": 33, "end": 35},
+          {"file": "sqli/templates/course.jinja2", "start": 20, "end": 28}
+        ],
+        "expected_fix_type": "output_encoding",
+        "expected_patch_excludes": ["autoescape=False"],
+        "source_unit_case": "G-03"
+      }
+    ],
+    "eval_scope": ["routing", "research", "plan", "implement"],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "I-02",
+    "title": "VAmPI — IDOR, SQL injection, and hardcoded JWT secret bundle",
+    "case_kind": "integration",
+    "repo": {
+      "slug": "VAmPI",
+      "url": "https://github.com/erev0s/VAmPI",
+      "commit_sha": "efa769ae6bd10de7cf59545703ef19f436b61eef",
+      "target_branch": "master"
+    },
+    "language": "python",
+    "vuln_class": "Mixed",
+    "owasp_category": "API1:2023",
+    "cwe": "CWE-639",
+    "severity_label": "Critical",
+    "difficulty": "hard",
+    "ticket": {
+      "title": "Security audit bundle — BOLA, SQLi, and JWT secret in VAmPI",
+      "problem_statement": "Three independent API security findings in the VAmPI repository must be remediated together:\n\n1. **Broken object authorization (password update):** PUT /users/v1/{username}/password in api_views/users.py updates the password for the URL username instead of the JWT subject.\n\n2. **SQL injection (user lookup):** GET /users/v1/{username} builds a raw SQL query via f-string in models/user_model.py, allowing injection through the username path parameter.\n\n3. **Hardcoded JWT secret:** The Flask JWT signing key in config.py is a committed, guessable literal, allowing token forgery.\n\nAll three issues are in the same repository.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "Critical",
+      "priority_normalized": "P0",
+      "module": "users",
+      "labels": ["security", "idor", "sqli", "jwt", "integration", "vampi"],
+      "repo_links": ["https://github.com/erev0s/VAmPI"],
+      "acceptance_criteria": [
+        "Password updates only affect the JWT subject account",
+        "Username lookups use ORM/parameterized query, not f-string SQL",
+        "JWT secret loaded from environment, not hardcoded"
+      ],
+      "vulnerability_category": "Mixed"
+    },
+    "expected_route": "FULL",
+    "expected_files": ["api_views/users.py", "models/user_model.py", "config.py"],
+    "expected_line_ranges": [
+      {"file": "api_views/users.py", "start": 186, "end": 192},
+      {"file": "models/user_model.py", "start": 71, "end": 78},
+      {"file": "config.py", "start": 13, "end": 13}
+    ],
+    "expected_fix_type": "mixed",
+    "expected_patch_contains": ["resp['sub']", "filter_by", "os.environ"],
+    "expected_patch_excludes": ["SELECT * FROM users WHERE username = '", "'random'"],
+    "pass_criteria": [
+      "Research identifies api_views/users.py, models/user_model.py, and config.py",
+      "IDOR fix resolves user from JWT subject",
+      "SQL injection fixed via ORM/parameterized query",
+      "Hardcoded JWT secret removed from config.py"
+    ],
+    "issues": [
+      {
+        "issue_id": "I-02-a",
+        "title": "IDOR — change another user's password",
+        "repo_slug": "VAmPI",
+        "vuln_class": "IDOR",
+        "cwe": "CWE-639",
+        "expected_files": ["api_views/users.py"],
+        "expected_line_ranges": [{"file": "api_views/users.py", "start": 186, "end": 192}],
+        "expected_fix_type": "authorization_check",
+        "expected_patch_contains": ["resp['sub']"],
+        "source_unit_case": "G-06"
+      },
+      {
+        "issue_id": "I-02-b",
+        "title": "SQL injection in user lookup",
+        "repo_slug": "VAmPI",
+        "vuln_class": "Injection",
+        "cwe": "CWE-89",
+        "expected_files": ["models/user_model.py"],
+        "expected_line_ranges": [{"file": "models/user_model.py", "start": 71, "end": 78}],
+        "expected_fix_type": "parameterize_sql",
+        "expected_patch_contains": ["filter_by"],
+        "expected_patch_excludes": ["SELECT * FROM users WHERE username = '"],
+        "source_unit_case": "G-07"
+      },
+      {
+        "issue_id": "I-02-c",
+        "title": "JWT signed with hardcoded weak secret",
+        "repo_slug": "VAmPI",
+        "vuln_class": "Auth",
+        "cwe": "CWE-798",
+        "expected_files": ["config.py"],
+        "expected_line_ranges": [{"file": "config.py", "start": 13, "end": 13}],
+        "expected_fix_type": "secrets_removal",
+        "expected_patch_contains": ["os.environ"],
+        "expected_patch_excludes": ["'random'"],
+        "source_unit_case": "G-08"
+      }
+    ],
+    "eval_scope": ["routing", "research", "plan", "implement"],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "I-03",
+    "title": "WebGoat — SQLi, JWT bypass, and IDOR bundle",
+    "case_kind": "integration",
+    "repo": {
+      "slug": "WebGoat",
+      "url": "https://github.com/WebGoat/WebGoat",
+      "commit_sha": "f69f564fcc34cf44aae273e06346fc6216b30e18",
+      "target_branch": "main"
+    },
+    "language": "java",
+    "vuln_class": "Mixed",
+    "owasp_category": "A03:2021",
+    "cwe": "CWE-89",
+    "severity_label": "High",
+    "difficulty": "hard",
+    "ticket": {
+      "title": "Security audit bundle — injection, JWT, and IDOR in WebGoat",
+      "problem_statement": "Three lesson-level findings in the WebGoat repository must be fixed in this ticket:\n\n1. **SQL injection:** SqlInjectionLesson5a.java builds its WHERE clause by concatenating the account name into the query string instead of using a PreparedStatement parameter.\n\n2. **JWT alg:none bypass:** JWTRefreshEndpoint.java accepts unsigned/unverified tokens without enforcing the signing algorithm.\n\n3. **IDOR on profiles:** IDORViewOtherProfile.java returns any user's profile by userId without verifying ownership.\n\nAll three issues are in the same WebGoat repository.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "High",
+      "priority_normalized": "P1",
+      "module": "lessons",
+      "labels": ["security", "sqli", "jwt", "idor", "integration", "webgoat"],
+      "repo_links": ["https://github.com/WebGoat/WebGoat"],
+      "acceptance_criteria": [
+        "Account lookup uses PreparedStatement with bound parameters",
+        "JWT verification enforces algorithm allowlist and rejects alg:none",
+        "Profile reads enforce ownership before returning data"
+      ],
+      "vulnerability_category": "Mixed"
+    },
+    "expected_route": "FULL",
+    "expected_files": [
+      "src/main/java/org/owasp/webgoat/lessons/sqlinjection/introduction/SqlInjectionLesson5a.java",
+      "src/main/java/org/owasp/webgoat/lessons/jwt/JWTRefreshEndpoint.java",
+      "src/main/java/org/owasp/webgoat/lessons/idor/IDORViewOtherProfile.java"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "src/main/java/org/owasp/webgoat/lessons/sqlinjection/introduction/SqlInjectionLesson5a.java",
+        "start": 47,
+        "end": 52
+      },
+      {
+        "file": "src/main/java/org/owasp/webgoat/lessons/jwt/JWTRefreshEndpoint.java",
+        "start": 83,
+        "end": 106
+      },
+      {
+        "file": "src/main/java/org/owasp/webgoat/lessons/idor/IDORViewOtherProfile.java",
+        "start": 49,
+        "end": 62
+      }
+    ],
+    "expected_fix_type": "mixed",
+    "expected_patch_contains": ["PreparedStatement", "setString", "authUserId"],
+    "expected_patch_excludes": ["\" + accountName + \""],
+    "pass_criteria": [
+      "Research identifies SqlInjectionLesson5a, JWTRefreshEndpoint, and IDORViewOtherProfile",
+      "SQL injection fixed with PreparedStatement",
+      "JWT verification enforces algorithm and rejects unsigned tokens",
+      "IDOR fix verifies userId matches authenticated user"
+    ],
+    "issues": [
+      {
+        "issue_id": "I-03-a",
+        "title": "SQL injection via string concatenation",
+        "repo_slug": "WebGoat",
+        "vuln_class": "Injection",
+        "cwe": "CWE-89",
+        "expected_files": [
+          "src/main/java/org/owasp/webgoat/lessons/sqlinjection/introduction/SqlInjectionLesson5a.java"
+        ],
+        "expected_line_ranges": [
+          {
+            "file": "src/main/java/org/owasp/webgoat/lessons/sqlinjection/introduction/SqlInjectionLesson5a.java",
+            "start": 47,
+            "end": 52
+          }
+        ],
+        "expected_fix_type": "parameterize_sql",
+        "expected_patch_contains": ["PreparedStatement", "setString"],
+        "expected_patch_excludes": ["\" + accountName + \""],
+        "source_unit_case": "G-10"
+      },
+      {
+        "issue_id": "I-03-b",
+        "title": "JWT alg:none / unverified token accepted",
+        "repo_slug": "WebGoat",
+        "vuln_class": "Auth",
+        "cwe": "CWE-347",
+        "expected_files": [
+          "src/main/java/org/owasp/webgoat/lessons/jwt/JWTRefreshEndpoint.java"
+        ],
+        "expected_line_ranges": [
+          {
+            "file": "src/main/java/org/owasp/webgoat/lessons/jwt/JWTRefreshEndpoint.java",
+            "start": 83,
+            "end": 106
+          }
+        ],
+        "expected_fix_type": "enforce_jwt_algorithm",
+        "source_unit_case": "G-11"
+      },
+      {
+        "issue_id": "I-03-c",
+        "title": "IDOR — read any user's profile",
+        "repo_slug": "WebGoat",
+        "vuln_class": "IDOR",
+        "cwe": "CWE-639",
+        "expected_files": [
+          "src/main/java/org/owasp/webgoat/lessons/idor/IDORViewOtherProfile.java"
+        ],
+        "expected_line_ranges": [
+          {
+            "file": "src/main/java/org/owasp/webgoat/lessons/idor/IDORViewOtherProfile.java",
+            "start": 49,
+            "end": 62
+          }
+        ],
+        "expected_fix_type": "authorization_check",
+        "expected_patch_contains": ["authUserId"],
+        "source_unit_case": "G-12"
+      }
+    ],
+    "eval_scope": ["routing", "research", "plan", "implement"],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "I-04",
+    "title": "Juice Shop — DOM XSS, admin BAC, and JWT bypass bundle",
+    "case_kind": "integration",
+    "repo": {
+      "slug": "juice-shop",
+      "url": "https://github.com/juice-shop/juice-shop",
+      "commit_sha": "d9e533960bccf5d20d37f9d6422a7114ed8abe6b",
+      "target_branch": "master"
+    },
+    "language": "typescript",
+    "vuln_class": "Mixed",
+    "owasp_category": "A03:2021",
+    "cwe": "CWE-79",
+    "severity_label": "High",
+    "difficulty": "hard",
+    "ticket": {
+      "title": "Security audit bundle — XSS, access control, and JWT in Juice Shop",
+      "problem_statement": "Three findings in the juice-shop repository must be remediated together:\n\n1. **DOM XSS in search:** SearchResultComponent passes the q query parameter through bypassSecurityTrustHtml and renders via [innerHTML].\n\n2. **Admin forced browsing:** The administration section is reachable by non-admin users because access relies on a client-side JWT role check without server-side enforcement.\n\n3. **JWT alg:none accepted:** lib/insecurity.ts verifies tokens without pinning the algorithm, accepting unsigned tokens.\n\nAll three issues are in the same Juice Shop repository.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "High",
+      "priority_normalized": "P1",
+      "module": "frontend",
+      "labels": ["security", "xss", "broken-access-control", "jwt", "integration", "juice-shop"],
+      "repo_links": ["https://github.com/juice-shop/juice-shop"],
+      "acceptance_criteria": [
+        "Search term rendered as text, not bypassed HTML",
+        "Admin section and APIs enforce role server-side",
+        "JWT verification pins algorithm and rejects alg:none"
+      ],
+      "vulnerability_category": "Mixed"
+    },
+    "expected_route": "FULL",
+    "expected_files": [
+      "frontend/src/app/search-result/search-result.component.ts",
+      "frontend/src/app/app.guard.ts",
+      "routes/authenticatedUsers.ts",
+      "lib/insecurity.ts"
+    ],
+    "expected_line_ranges": [
+      {"file": "frontend/src/app/search-result/search-result.component.ts", "start": 134, "end": 143},
+      {"file": "frontend/src/app/app.guard.ts", "start": 47, "end": 60},
+      {"file": "routes/authenticatedUsers.ts", "start": 10, "end": 34},
+      {"file": "lib/insecurity.ts", "start": 54, "end": 56}
+    ],
+    "expected_fix_type": "mixed",
+    "expected_patch_contains": ["RS256"],
+    "expected_patch_excludes": ["bypassSecurityTrustHtml"],
+    "pass_criteria": [
+      "Research identifies search component, admin guard/API, and insecurity.ts",
+      "DOM XSS fixed — no bypassSecurityTrustHtml on query param",
+      "Admin access enforced server-side",
+      "JWT algorithm pinned; unsigned tokens rejected"
+    ],
+    "issues": [
+      {
+        "issue_id": "I-04-a",
+        "title": "DOM XSS in search results",
+        "repo_slug": "juice-shop",
+        "vuln_class": "XSS",
+        "cwe": "CWE-79",
+        "expected_files": ["frontend/src/app/search-result/search-result.component.ts"],
+        "expected_line_ranges": [
+          {"file": "frontend/src/app/search-result/search-result.component.ts", "start": 134, "end": 143}
+        ],
+        "expected_fix_type": "output_encoding",
+        "expected_patch_excludes": ["bypassSecurityTrustHtml"],
+        "source_unit_case": "G-14"
+      },
+      {
+        "issue_id": "I-04-b",
+        "title": "Admin section reachable by forced browsing",
+        "repo_slug": "juice-shop",
+        "vuln_class": "BAC",
+        "cwe": "CWE-284",
+        "expected_files": ["frontend/src/app/app.guard.ts", "routes/authenticatedUsers.ts"],
+        "expected_line_ranges": [
+          {"file": "frontend/src/app/app.guard.ts", "start": 47, "end": 60},
+          {"file": "routes/authenticatedUsers.ts", "start": 10, "end": 34}
+        ],
+        "expected_fix_type": "authorization_check",
+        "source_unit_case": "G-15"
+      },
+      {
+        "issue_id": "I-04-c",
+        "title": "Unsigned (alg:none) JWT accepted",
+        "repo_slug": "juice-shop",
+        "vuln_class": "Auth",
+        "cwe": "CWE-347",
+        "expected_files": ["lib/insecurity.ts"],
+        "expected_line_ranges": [{"file": "lib/insecurity.ts", "start": 54, "end": 56}],
+        "expected_fix_type": "enforce_jwt_algorithm",
+        "expected_patch_contains": ["RS256"],
+        "source_unit_case": "G-16"
+      }
+    ],
+    "eval_scope": ["routing", "research", "plan", "implement"],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "I-05",
+    "title": "WrongSecrets — committed secrets in properties and Kubernetes manifest",
+    "case_kind": "integration",
+    "repo": {
+      "slug": "wrongsecrets",
+      "url": "https://github.com/OWASP/wrongsecrets",
+      "commit_sha": "3f6156bf12206535ccb7e2da533c4a0a49ef7b19",
+      "target_branch": "master"
+    },
+    "language": "java",
+    "vuln_class": "Secrets",
+    "owasp_category": "A05:2021",
+    "cwe": "CWE-798",
+    "severity_label": "High",
+    "difficulty": "hard",
+    "ticket": {
+      "title": "Security audit bundle — hardcoded secrets in WrongSecrets",
+      "problem_statement": "Two committed-secret findings in the OWASP WrongSecrets repository must be remediated together:\n\n1. **Plaintext secret in application.properties:** A password value is committed directly in src/main/resources/application.properties and bound at startup.\n\n2. **Base64 secret in Kubernetes manifest:** k8s/secrets-secret.yml commits a secret value as base64 in version control (encoding, not encryption).\n\nBoth secrets must be removed from VCS and sourced from a secure runtime store.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "High",
+      "priority_normalized": "P1",
+      "module": "config",
+      "labels": ["security", "secrets", "kubernetes", "integration", "wrongsecrets"],
+      "repo_links": ["https://github.com/OWASP/wrongsecrets"],
+      "acceptance_criteria": [
+        "Plaintext secret removed from application.properties",
+        "Committed base64 secret removed from k8s/secrets-secret.yml",
+        "Both values sourced from environment/secret store at runtime"
+      ],
+      "vulnerability_category": "Security Misconfiguration"
+    },
+    "expected_route": "FULL",
+    "expected_files": [
+      "src/main/resources/application.properties",
+      "k8s/secrets-secret.yml"
+    ],
+    "expected_line_ranges": [
+      {"file": "src/main/resources/application.properties", "start": 7, "end": 7},
+      {"file": "k8s/secrets-secret.yml", "start": 3, "end": 3}
+    ],
+    "expected_fix_type": "secrets_removal",
+    "expected_patch_excludes": [
+      "ThisEnvironmentIsAnotherPlaceToHide",
+      "dGhpcyBpcyBhcGFzc3dvcmQ="
+    ],
+    "pass_criteria": [
+      "Research identifies application.properties and k8s/secrets-secret.yml",
+      "Plaintext secret removed from properties file",
+      "Committed base64 secret removed from Kubernetes manifest"
+    ],
+    "issues": [
+      {
+        "issue_id": "I-05-a",
+        "title": "Hardcoded secret in application.properties",
+        "repo_slug": "wrongsecrets",
+        "vuln_class": "Secrets",
+        "cwe": "CWE-798",
+        "expected_files": ["src/main/resources/application.properties"],
+        "expected_line_ranges": [
+          {"file": "src/main/resources/application.properties", "start": 7, "end": 7}
+        ],
+        "expected_fix_type": "secrets_removal",
+        "expected_patch_excludes": ["ThisEnvironmentIsAnotherPlaceToHide"],
+        "source_unit_case": "G-17"
+      },
+      {
+        "issue_id": "I-05-b",
+        "title": "Plaintext-equivalent secret in Kubernetes manifest",
+        "repo_slug": "wrongsecrets",
+        "vuln_class": "Misconfig",
+        "cwe": "CWE-312",
+        "expected_files": ["k8s/secrets-secret.yml"],
+        "expected_line_ranges": [{"file": "k8s/secrets-secret.yml", "start": 3, "end": 3}],
+        "expected_fix_type": "secrets_removal",
+        "expected_patch_excludes": ["dGhpcyBpcyBhcGFzc3dvcmQ="],
+        "source_unit_case": "G-18"
+      }
+    ],
+    "eval_scope": ["routing", "research", "plan", "implement"],
+    "requires_cursor": true
+  }
+]

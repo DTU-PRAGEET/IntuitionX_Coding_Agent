@@ -18,6 +18,7 @@ from src.tools.edit_args import prepare_edit_arguments
 
 
 def test_basic_exact_replace() -> None:
+    """Test Basic Exact Replace for this module."""
     content = "alpha\nbeta\ngamma\n"
     _, new = apply_edits_to_normalized_content(
         content,
@@ -28,6 +29,7 @@ def test_basic_exact_replace() -> None:
 
 
 def test_not_found_includes_hint() -> None:
+    """Test Not Found Includes Hint for this module."""
     with pytest.raises(EditError, match="Could not find the exact text"):
         apply_edits_to_normalized_content(
             "hello world\n",
@@ -37,6 +39,7 @@ def test_not_found_includes_hint() -> None:
 
 
 def test_not_found_includes_nearby_lines() -> None:
+    """Test Not Found Includes Nearby Lines for this module."""
     content = 'sql = f"SELECT * FROM users WHERE name LIKE \'%{query}%\'"\n'
     with pytest.raises(EditError, match="Nearby lines in file"):
         apply_edits_to_normalized_content(
@@ -47,6 +50,7 @@ def test_not_found_includes_nearby_lines() -> None:
 
 
 def test_duplicate_match_rejected() -> None:
+    """Test Duplicate Match Rejected for this module."""
     with pytest.raises(EditError, match="Found 3 occurrences"):
         apply_edits_to_normalized_content(
             "foo foo foo\n",
@@ -56,6 +60,7 @@ def test_duplicate_match_rejected() -> None:
 
 
 def test_crlf_file_lf_old_text() -> None:
+    """Test Crlf File Lf Old Text for this module."""
     content = "line one\r\nline two\r\n"
     ending = detect_line_ending(content)
     assert ending == "\r\n"
@@ -70,6 +75,7 @@ def test_crlf_file_lf_old_text() -> None:
 
 
 def test_trailing_whitespace_fuzzy_match() -> None:
+    """Test Trailing Whitespace Fuzzy Match for this module."""
     content = "def run():   \n    return 1\n"
     old = "def run():\n    return 1"
     _, new = apply_edits_to_normalized_content(
@@ -81,6 +87,7 @@ def test_trailing_whitespace_fuzzy_match() -> None:
 
 
 def test_bom_preserved_on_write_path() -> None:
+    """Test Bom Preserved On Write Path for this module."""
     bom, stripped = strip_bom("\ufeffhello")
     assert bom == "\ufeff"
     assert stripped == "hello"
@@ -93,6 +100,7 @@ def test_bom_preserved_on_write_path() -> None:
 
 
 def test_overlapping_edits_rejected() -> None:
+    """Test Overlapping Edits Rejected for this module."""
     content = "abcdef\n"
     with pytest.raises(EditError, match="overlap"):
         apply_edits_to_normalized_content(
@@ -106,6 +114,7 @@ def test_overlapping_edits_rejected() -> None:
 
 
 def test_no_op_edit_rejected() -> None:
+    """Test No Op Edit Rejected for this module."""
     with pytest.raises(EditError, match="identical content"):
         apply_edits_to_normalized_content(
             "same\n",
@@ -115,6 +124,7 @@ def test_no_op_edit_rejected() -> None:
 
 
 def test_empty_old_text_rejected() -> None:
+    """Test Empty Old Text Rejected for this module."""
     with pytest.raises(EditError, match="must not be empty"):
         apply_edits_to_normalized_content(
             "content\n",
@@ -124,6 +134,7 @@ def test_empty_old_text_rejected() -> None:
 
 
 def test_multi_edit_disjoint() -> None:
+    """Test Multi Edit Disjoint for this module."""
     content = "aaa\nbbb\nccc\n"
     _, new = apply_edits_to_normalized_content(
         content,
@@ -137,6 +148,7 @@ def test_multi_edit_disjoint() -> None:
 
 
 def test_prepare_legacy_arguments() -> None:
+    """Test Prepare Legacy Arguments for this module."""
     path, edits = prepare_edit_arguments(
         path="a.py",
         old_string="old",
@@ -149,6 +161,7 @@ def test_prepare_legacy_arguments() -> None:
 
 
 def test_prepare_json_string_edits() -> None:
+    """Test Prepare Json String Edits for this module."""
     path, edits = prepare_edit_arguments(
         path="a.py",
         edits='[{"old_string": "x", "new_string": "y"}]',
@@ -158,6 +171,7 @@ def test_prepare_json_string_edits() -> None:
 
 
 def test_prepare_old_text_alias() -> None:
+    """Test Prepare Old Text Alias for this module."""
     path, edits = prepare_edit_arguments(
         path="a.py",
         edits=[{"oldText": "a", "newText": "b"}],
@@ -167,9 +181,11 @@ def test_prepare_old_text_alias() -> None:
 
 
 def test_prepare_rejects_list_as_old_string() -> None:
+    """Test Prepare Rejects List As Old String for this module."""
     with pytest.raises(EditError, match="must be a string, got list"):
         prepare_edit_arguments(path="a.py", old_string=["bad"], new_string="x")
 
 
 def test_normalize_for_fuzzy_match_smart_quotes() -> None:
+    """Test Normalize For Fuzzy Match Smart Quotes for this module."""
     assert normalize_for_fuzzy_match("\u201chello\u201d") == '"hello"'

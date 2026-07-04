@@ -155,7 +155,7 @@ Read from user message JSON: `ticket_id`, `title`, `module`, `problem_statement`
 
 | Condition | Next action |
 |-----------|-------------|
-| Security/CVE/SQLi labels or issue_type=Security | Load matching `skills/security/<category>.md` + `security_patterns.md` |
+| Security/CVE/SQLi labels or issue_type=Security | `load_skill` the recommended security skill from the **Skills System** list in the user message (never invent paths from `vulnerability_category`) |
 | All other tickets | `general_patterns.md` |
 | Reference already in context | Apply rules; do not reload |
 

@@ -1,0 +1,361 @@
+[
+  {
+    "case_id": "G-01",
+    "title": "SQL injection in student creation (DVPWA)",
+    "repo": {
+      "slug": "Testing-Security-demo",
+      "url": "https://github.com/DTU-PRAGEET/Testing-Security-demo",
+      "commit_sha": "3cc696ecdd18c009b30c7586e7d1b45bd393605a",
+      "target_branch": "main"
+    },
+    "language": "python",
+    "vuln_class": "Injection",
+    "owasp_category": "A03:2021",
+    "cwe": "CWE-89",
+    "severity_label": "Critical",
+    "difficulty": "easy",
+    "ticket": {
+      "title": "SQL injection when adding a new student",
+      "problem_statement": "The 'Add new student' feature lets an attacker inject SQL through the student name field. Submitting a name like \"Robert'); DROP TABLE students CASCADE; --\" executes arbitrary SQL against the database. User input is being placed directly into the INSERT statement instead of being passed as a bound parameter. Please fix the injection so the name is treated as data, not SQL.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "Critical",
+      "priority_normalized": "P0",
+      "module": "sqli",
+      "labels": [
+        "security",
+        "sqli",
+        "vulnerability"
+      ],
+      "repo_links": [
+        "https://github.com/DTU-PRAGEET/Testing-Security-demo"
+      ],
+      "acceptance_criteria": [
+        "Student names containing SQL payloads are stored as literal text",
+        "Normal student names still insert and render correctly"
+      ],
+      "vulnerability_category": "Injection"
+    },
+    "expected_route": "FULL",
+    "expected_files": [
+      "sqli/dao/student.py"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "sqli/dao/student.py",
+        "start": 42,
+        "end": 45
+      }
+    ],
+    "expected_fix_type": "parameterize_sql",
+    "expected_patch_contains": [
+      "VALUES (%(name)s)",
+      "{'name': name}"
+    ],
+    "expected_patch_excludes": [
+      "VALUES ('%(name)s')",
+      "% {'name': name}"
+    ],
+    "pass_criteria": [
+      "Research identifies sqli/dao/student.py as the vulnerable file",
+      "Fix uses a parameterized query (driver binds the value), not string formatting",
+      "No literal single quotes around the interpolated value remain in the SQL"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "G-02",
+    "title": "Weak password storage — unsalted MD5 (DVPWA)",
+    "repo": {
+      "slug": "Testing-Security-demo",
+      "url": "https://github.com/DTU-PRAGEET/Testing-Security-demo",
+      "commit_sha": "3cc696ecdd18c009b30c7586e7d1b45bd393605a",
+      "target_branch": "main"
+    },
+    "language": "python",
+    "vuln_class": "Crypto",
+    "owasp_category": "A02:2021",
+    "cwe": "CWE-916",
+    "severity_label": "High",
+    "difficulty": "easy",
+    "ticket": {
+      "title": "User passwords are stored using fast, unsalted hashing",
+      "problem_statement": "User passwords are verified against a fast, unsalted hash. Two users with the same password end up with identical stored hashes, and if the credential table ever leaks the passwords can be recovered almost instantly with rainbow tables. We need login verification to use a modern, salted, adaptive password hashing scheme (bcrypt/argon2/PBKDF2) with a constant-time comparison instead of the current digest comparison.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "High",
+      "priority_normalized": "P1",
+      "module": "auth",
+      "labels": [
+        "security",
+        "crypto",
+        "password-storage"
+      ],
+      "repo_links": [
+        "https://github.com/DTU-PRAGEET/Testing-Security-demo"
+      ],
+      "acceptance_criteria": [
+        "Passwords are verified with a salted adaptive KDF (bcrypt/argon2/PBKDF2)",
+        "Two users with the same password produce different stored hashes",
+        "Legitimate logins continue to succeed after the change"
+      ],
+      "vulnerability_category": "Cryptographic Failures"
+    },
+    "expected_route": "FULL",
+    "expected_files": [
+      "sqli/dao/user.py"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "sqli/dao/user.py",
+        "start": 40,
+        "end": 41
+      }
+    ],
+    "expected_fix_type": "hash_password",
+    "expected_patch_contains": [],
+    "expected_patch_excludes": [
+      "md5("
+    ],
+    "pass_criteria": [
+      "Research identifies sqli/dao/user.py (check_password) as the credential verification sink",
+      "Fix replaces MD5 with a salted adaptive password hash and constant-time verify",
+      "No MD5 hashing remains in the credential path"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "G-03",
+    "title": "Stored XSS in course reviews — global autoescape disabled (DVPWA)",
+    "repo": {
+      "slug": "Testing-Security-demo",
+      "url": "https://github.com/DTU-PRAGEET/Testing-Security-demo",
+      "commit_sha": "3cc696ecdd18c009b30c7586e7d1b45bd393605a",
+      "target_branch": "main"
+    },
+    "language": "python",
+    "vuln_class": "XSS",
+    "owasp_category": "A03:2021",
+    "cwe": "CWE-79",
+    "severity_label": "High",
+    "difficulty": "medium",
+    "ticket": {
+      "title": "Course review text executes as HTML/JavaScript for other users",
+      "problem_statement": "Review text submitted on a course page is stored and later rendered back into the course page without HTML escaping, so a review like <script>alert(document.cookie)</script> runs in the browser of every user who views the course (stored/persistent XSS). Template output escaping appears to be disabled application-wide. Please make rendered user content HTML-escaped by default so injected markup is shown as literal text.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "High",
+      "priority_normalized": "P1",
+      "module": "courses",
+      "labels": [
+        "security",
+        "xss",
+        "vulnerability"
+      ],
+      "repo_links": [
+        "https://github.com/DTU-PRAGEET/Testing-Security-demo"
+      ],
+      "acceptance_criteria": [
+        "A review containing HTML/script is rendered as literal, escaped text",
+        "Legitimate review text still displays correctly"
+      ],
+      "vulnerability_category": "Injection"
+    },
+    "expected_route": "FULL",
+    "expected_files": [
+      "sqli/app.py",
+      "sqli/templates/course.jinja2"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "sqli/app.py",
+        "start": 33,
+        "end": 35
+      },
+      {
+        "file": "sqli/templates/course.jinja2",
+        "start": 20,
+        "end": 28
+      }
+    ],
+    "expected_fix_type": "output_encoding",
+    "expected_patch_contains": [],
+    "expected_patch_excludes": [
+      "autoescape=False"
+    ],
+    "pass_criteria": [
+      "Research identifies the disabled autoescape in sqli/app.py and the unescaped review sink in course.jinja2",
+      "Fix enables output escaping by default (autoescape) rather than blacklisting input",
+      "No autoescape=False configuration remains"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "G-04",
+    "title": "Debug mode / verbose errors leak internals (DVPWA)",
+    "repo": {
+      "slug": "Testing-Security-demo",
+      "url": "https://github.com/DTU-PRAGEET/Testing-Security-demo",
+      "commit_sha": "3cc696ecdd18c009b30c7586e7d1b45bd393605a",
+      "target_branch": "main"
+    },
+    "language": "python",
+    "vuln_class": "Misconfig",
+    "owasp_category": "A05:2021",
+    "cwe": "CWE-489",
+    "severity_label": "Medium",
+    "difficulty": "easy",
+    "ticket": {
+      "title": "Application runs with debug enabled and DEBUG logging in sqli/app.py and run.py",
+      "problem_statement": "The aiohttp application is constructed with debug=True in sqli/app.py and run.py configures logging at DEBUG level. On any error this exposes stack traces, file paths, and query errors to clients, which accelerates other attacks. Turn debug off (drive it from configuration, default False) and lower the log level outside development.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "Medium",
+      "priority_normalized": "P2",
+      "module": "config",
+      "labels": [
+        "security",
+        "misconfiguration"
+      ],
+      "repo_links": [
+        "https://github.com/DTU-PRAGEET/Testing-Security-demo"
+      ],
+      "acceptance_criteria": [
+        "Application no longer runs with debug enabled by default",
+        "Errors do not return stack traces / internal detail to clients"
+      ],
+      "vulnerability_category": "Security Misconfiguration"
+    },
+    "expected_route": "MICRO",
+    "expected_files": [
+      "sqli/app.py",
+      "run.py"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "sqli/app.py",
+        "start": 24,
+        "end": 24
+      },
+      {
+        "file": "run.py",
+        "start": 11,
+        "end": 11
+      }
+    ],
+    "expected_fix_type": "secure_config",
+    "expected_patch_contains": [
+      "debug=False"
+    ],
+    "expected_patch_excludes": [
+      "debug=True"
+    ],
+    "pass_criteria": [
+      "Plan targets the debug flag in sqli/app.py and the log level in run.py",
+      "Fix disables debug by default (config-driven) rather than leaving it hardcoded on",
+      "No debug=True remains in the application bootstrap"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  },
+  {
+    "case_id": "G-05",
+    "title": "Missing server-side authorization on privileged endpoints (DVPWA)",
+    "repo": {
+      "slug": "Testing-Security-demo",
+      "url": "https://github.com/DTU-PRAGEET/Testing-Security-demo",
+      "commit_sha": "3cc696ecdd18c009b30c7586e7d1b45bd393605a",
+      "target_branch": "main"
+    },
+    "language": "python",
+    "vuln_class": "BAC",
+    "owasp_category": "A01:2021",
+    "cwe": "CWE-862",
+    "severity_label": "High",
+    "difficulty": "hard",
+    "ticket": {
+      "title": "Privileged actions can be invoked directly without authorization",
+      "problem_statement": "Admin-only actions (creating students, creating courses, assigning student evaluations) are only hidden in the UI by template conditionals. The server-side POST handlers perform no authentication or role check, so any anonymous or non-admin user can call these endpoints directly and create/modify data. Authorization must be enforced server-side on every state-changing handler, not just in templates.",
+      "issue_type": "Security",
+      "status": "In Progress",
+      "priority_raw": "High",
+      "priority_normalized": "P1",
+      "module": "views",
+      "labels": [
+        "security",
+        "broken-access-control",
+        "authorization"
+      ],
+      "repo_links": [
+        "https://github.com/DTU-PRAGEET/Testing-Security-demo"
+      ],
+      "acceptance_criteria": [
+        "Anonymous/non-admin POSTs to create-student, create-course and evaluate are rejected (401/403)",
+        "Admin users can still perform these actions",
+        "Public GET pages continue to render for the appropriate roles"
+      ],
+      "vulnerability_category": "Broken Access Control"
+    },
+    "expected_route": "FULL",
+    "expected_files": [
+      "sqli/views.py"
+    ],
+    "expected_line_ranges": [
+      {
+        "file": "sqli/views.py",
+        "start": 54,
+        "end": 57
+      },
+      {
+        "file": "sqli/views.py",
+        "start": 86,
+        "end": 90
+      },
+      {
+        "file": "sqli/views.py",
+        "start": 134,
+        "end": 135
+      }
+    ],
+    "expected_fix_type": "authorization_check",
+    "expected_patch_contains": [
+      "authorize"
+    ],
+    "expected_patch_excludes": [],
+    "pass_criteria": [
+      "Research identifies the unguarded POST branches in sqli/views.py (students, courses, evaluate)",
+      "Fix enforces server-side authorization (authenticated / admin) on the state-changing handlers",
+      "Public GET access is preserved while privileged POSTs are gated"
+    ],
+    "eval_scope": [
+      "routing",
+      "research",
+      "plan",
+      "implement"
+    ],
+    "requires_cursor": true
+  }
+]

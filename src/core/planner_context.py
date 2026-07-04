@@ -26,6 +26,7 @@ _LAST_FILES_MAX = 10
 
 
 def _truncate(text: str, limit: int) -> str:
+    """Truncate for this module."""
     text = (text or "").strip()
     if len(text) <= limit:
         return text
@@ -33,6 +34,7 @@ def _truncate(text: str, limit: int) -> str:
 
 
 def _compact_acceptance(ac: list[str] | str) -> list[str]:
+    """Compact Acceptance for this module."""
     if isinstance(ac, str):
         if not ac or ac == "not_specified":
             return []

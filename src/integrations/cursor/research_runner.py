@@ -41,6 +41,7 @@ def mock_research_report(ticket: JiraTicket) -> ResearchReport:
 
 
 def report_to_research_output(report: ResearchReport) -> ResearchOutput:
+    """Report to research output."""
     return ResearchOutput(
         ticket_id=report.ticket_id,
         research_summary=report.research_summary,

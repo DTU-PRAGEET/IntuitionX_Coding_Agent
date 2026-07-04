@@ -12,6 +12,7 @@ PRIMITIVE_TOOLS = ("read", "write", "edit", "bash", "find", "grep", "ls")
 
 
 def main() -> int:
+    """CLI entry point for this module."""
     configure_logging()
     try:
         from src.tools.registry import ToolRegistry

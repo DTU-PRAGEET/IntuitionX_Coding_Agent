@@ -18,6 +18,8 @@ app = FastAPI(title="Sprinklr Jira Solver API")
 
 
 class CICDErrorPayload(BaseModel):
+    """CI/CD failure webhook body — ticket_id, error_log, optional plan_used snapshot.
+    Handled by `POST /webhook/cicd-error` to seed self-healing AgentState retry."""
     ticket_id: str
     error_log: str
     session_id: str | None = None
@@ -27,6 +29,7 @@ class CICDErrorPayload(BaseModel):
 
 @app.get("/health")
 def health():
+    """Health for this module."""
     return {"status": "ok"}
 
 

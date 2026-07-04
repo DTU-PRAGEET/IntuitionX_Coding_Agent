@@ -22,6 +22,7 @@ _GITHUB_REPO_RE = re.compile(
 
 
 def _run_git(args: list[str], cwd: str) -> subprocess.CompletedProcess:
+    """Run Git for this module."""
     return subprocess.run(
         ["git"] + args,
         cwd=cwd,
@@ -88,6 +89,7 @@ def resolve_github_repo(
 
 
 def _github_request(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Github Request for this module."""
     token = settings.github_token
     if not token:
         raise RuntimeError(
@@ -120,6 +122,7 @@ def _github_request(method: str, path: str, body: dict[str, Any] | None = None) 
 
 
 def _remote_branch_exists(repo_path: str, branch: str) -> bool:
+    """Remote Branch Exists for this module."""
     result = _run_git(["ls-remote", "--heads", "origin", branch], repo_path)
     return bool((result.stdout or "").strip())
 

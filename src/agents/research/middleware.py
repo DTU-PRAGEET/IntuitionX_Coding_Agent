@@ -35,9 +35,16 @@ RESEARCH_EXCLUDED_DEEPAGENT_TOOLS = frozenset(
 )
 
 _LOAD_SKILL_ACK = "Skill loaded — guidance is now in your system instructions. Do not call load_skill again."
+_LOAD_SKILL_ERROR_PREFIX = "load_skill error:"
+
+
+def _is_load_skill_error(content: str) -> bool:
+    """True when load_skill returned a recoverable error string instead of a body."""
+    return str(content).lstrip().startswith(_LOAD_SKILL_ERROR_PREFIX)
 
 
 def _tool_name(tool: object) -> str | None:
+    """Tool Name for this module."""
     if isinstance(tool, dict):
         name = tool.get("name")
         return name if isinstance(name, str) else None
@@ -60,6 +67,7 @@ def _cursor_search_completed(messages: list) -> bool:
 
 
 def _visible_research_tools(messages: list, run_context: ResearchRunContext | None) -> frozenset[str]:
+    """Visible Research Tools for this module."""
     visible = set(RESEARCH_CORE_TOOLS)
     if _cursor_search_completed(messages):
         visible |= RESEARCH_EXTENDED_TOOLS
@@ -69,6 +77,7 @@ def _visible_research_tools(messages: list, run_context: ResearchRunContext | No
 
 
 def _append_text_to_system_message(system_message, text: str):
+    """Append Text To System Message for this module."""
     from langchain_core.messages import SystemMessage
 
     from deepagents.middleware._utils import append_to_system_message
@@ -100,14 +109,17 @@ class ResearchToolFilterMiddleware(AgentMiddleware):
     """Keep only research investigation tools visible to the model."""
 
     def __init__(self, run_context: ResearchRunContext | None = None) -> None:
+        """Initialize ResearchToolFilterMiddleware with the provided arguments."""
         self._run_context = run_context or ResearchRunContext()
 
     def wrap_model_call(self, request, handler):
+        """Wrap Model Call for ResearchToolFilterMiddleware."""
         allowed = _visible_research_tools(request.messages, self._run_context)
         filtered = [t for t in request.tools if _tool_name(t) in allowed]
         return handler(request.override(tools=filtered))
 
     async def awrap_model_call(self, request, handler):
+        """Awrap Model Call for ResearchToolFilterMiddleware."""
         allowed = _visible_research_tools(request.messages, self._run_context)
         filtered = [t for t in request.tools if _tool_name(t) in allowed]
         return await handler(request.override(tools=filtered))
@@ -117,9 +129,11 @@ class ProgressiveSkillMiddleware(AgentMiddleware):
     """Intercept load_skill: inject body into system prompt, keep history compact."""
 
     def __init__(self, run_context: ResearchRunContext | None = None) -> None:
+        """Initialize ProgressiveSkillMiddleware with the provided arguments."""
         self._run_context = run_context or ResearchRunContext()
 
     def wrap_tool_call(self, request, handler):
+        """Wrap Tool Call for ProgressiveSkillMiddleware."""
         if request.tool_call.get("name") != "load_skill":
             return handler(request)
 
@@ -129,17 +143,23 @@ class ProgressiveSkillMiddleware(AgentMiddleware):
 
         skill_key = str(request.tool_call.get("args", {}).get("skill", "skill")).strip()
         body = str(result.content)
-        if body.strip():
+        if body.strip() and not _is_load_skill_error(body):
             self._run_context.loaded_skills[skill_key] = body
             _log.info("skill_injected", skill=skill_key, chars=len(body))
+            return ToolMessage(
+                content=_LOAD_SKILL_ACK,
+                tool_call_id=result.tool_call_id,
+                name="load_skill",
+            )
 
         return ToolMessage(
-            content=_LOAD_SKILL_ACK,
+            content=body,
             tool_call_id=result.tool_call_id,
             name="load_skill",
         )
 
     async def awrap_tool_call(self, request, handler):
+        """Awrap Tool Call for ProgressiveSkillMiddleware."""
         if request.tool_call.get("name") != "load_skill":
             return await handler(request)
 
@@ -149,17 +169,23 @@ class ProgressiveSkillMiddleware(AgentMiddleware):
 
         skill_key = str(request.tool_call.get("args", {}).get("skill", "skill")).strip()
         body = str(result.content)
-        if body.strip():
+        if body.strip() and not _is_load_skill_error(body):
             self._run_context.loaded_skills[skill_key] = body
             _log.info("skill_injected", skill=skill_key, chars=len(body))
+            return ToolMessage(
+                content=_LOAD_SKILL_ACK,
+                tool_call_id=result.tool_call_id,
+                name="load_skill",
+            )
 
         return ToolMessage(
-            content=_LOAD_SKILL_ACK,
+            content=body,
             tool_call_id=result.tool_call_id,
             name="load_skill",
         )
 
     def wrap_model_call(self, request, handler):
+        """Wrap Model Call for ProgressiveSkillMiddleware."""
         messages = _compact_load_skill_messages(request.messages)
         system_message = request.system_message
 
@@ -179,6 +205,7 @@ class ProgressiveSkillMiddleware(AgentMiddleware):
         return handler(request.override(**overrides))
 
     async def awrap_model_call(self, request, handler):
+        """Awrap Model Call for ProgressiveSkillMiddleware."""
         messages = _compact_load_skill_messages(request.messages)
         system_message = request.system_message
 

@@ -30,6 +30,7 @@ class GrepTool(ToolDefinition):
         glob_pattern: str = "**/*",
         limit: int = DEFAULT_LIMIT,
     ) -> ToolResult:
+        """Execute for GrepTool."""
         try:
             root = self.resolve_path(path)
         except ValueError as e:
@@ -44,6 +45,7 @@ class GrepTool(ToolDefinition):
     def _grep_ripgrep(
         self, pattern: str, root: os.PathLike, glob_pattern: str, limit: int, display_path: str
     ) -> ToolResult:
+        """Grep Ripgrep for GrepTool."""
         cmd = ["rg", "--line-number", "--no-heading", "-e", pattern, str(root)]
         if glob_pattern and glob_pattern != "**/*":
             cmd.extend(["--glob", glob_pattern])
@@ -68,6 +70,7 @@ class GrepTool(ToolDefinition):
         return self._wrap_output(body, exit_code=0 if not is_error else result.returncode, is_error=is_error)
 
     def _grep_file(self, pattern: str, path: str, root: os.PathLike, limit: int) -> ToolResult:
+        """Grep File for GrepTool."""
         results: list[str] = []
         try:
             text = open(root, encoding="utf-8", errors="replace").read()
@@ -84,6 +87,7 @@ class GrepTool(ToolDefinition):
     def _grep_python(
         self, pattern: str, root: os.PathLike, glob_pattern: str, limit: int
     ) -> ToolResult:
+        """Grep Python for GrepTool."""
         results: list[str] = []
         search_root = str(root)
         for match in glob_module.glob(os.path.join(search_root, glob_pattern), recursive=True):

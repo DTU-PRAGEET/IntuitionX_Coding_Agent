@@ -8,16 +8,34 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from src.core.logging import get_logger
-from src.core.skill_registry import default_skills_root, module_skills_dir
-from src.core.skills_loader import load_skill_body
+from src.core.skill_manager import default_skills_root, get_skill_registry, load_skill_body, module_skills_dir
 
 _log = get_logger("load_skill_tool")
 
 SKILLS_ROOT = default_skills_root()
 RESEARCH_SKILL_DIR = module_skills_dir("research", SKILLS_ROOT)
 
+# Common LLM aliases / stale vulnerability_category values → canonical skill stems.
+_SKILL_ALIASES: dict[str, str] = {
+    "rce": "injection",
+    "remote-code-execution": "injection",
+    "remote_code_execution": "injection",
+    "sqli": "injection",
+    "sql-injection": "injection",
+    "xss": "injection",
+    "secrets": "cryptographic-failures",
+    "secret": "cryptographic-failures",
+    "hardcoded-secret": "cryptographic-failures",
+    "hardcoded-secrets": "cryptographic-failures",
+    "hardcoded-credentials": "cryptographic-failures",
+    "security-misconfiguration": "security-misconfiguration",
+    "misconfiguration": "security-misconfiguration",
+}
+
 
 class LoadSkillInput(BaseModel):
+    """LangChain tool args for progressive security/domain skill loading.
+    Resolved by `load_skill` tool via SkillRegistry in `agents/research/tools/load_skill.py`."""
     skill: str = Field(
         description=(
             "Skill name or virtual path, e.g. research, injection, "
@@ -27,13 +45,19 @@ class LoadSkillInput(BaseModel):
 
 
 def _normalize_skill_key(skill: str) -> str:
+    """Normalize Skill Key for this module."""
     key = skill.strip().strip("/")
     if not key:
         raise ValueError("skill must be non-empty")
-    return key
+    if key.startswith("security/"):
+        key = key[len("security/") :]
+    if key.endswith(".md"):
+        key = Path(key).stem
+    return _SKILL_ALIASES.get(key.lower(), key)
 
 
 def _resolve_skill_path(skill: str) -> Path:
+    """Resolve Skill Path for this module."""
     key = _normalize_skill_key(skill)
     root = SKILLS_ROOT.resolve()
 
@@ -53,13 +77,23 @@ def _resolve_skill_path(skill: str) -> Path:
         if path.is_file():
             return path
 
+    available = ", ".join(
+        sorted(
+            {
+                s.name
+                for s in get_skill_registry().all_skills()
+                if s.module == "security"
+            }
+        )
+    )
     raise ValueError(
-        f"Unknown skill {skill!r}. Use a name like 'injection' or path like "
-        "'/security/injection.md' from the Skills System section."
+        f"Unknown skill {skill!r}. Pick from the Skills System section, e.g. "
+        f"'injection' or '/security/injection.md'. Available security skills: {available}"
     )
 
 
 def _load_skill_body(skill: str) -> tuple[str, str]:
+    """Load Skill Body for this module."""
     key = _normalize_skill_key(skill)
     path = _resolve_skill_path(skill)
 
@@ -82,7 +116,12 @@ def make_load_skill_tool() -> StructuredTool:
     """Factory — lightweight progressive skill loader."""
 
     def load_skill(skill: str) -> str:
-        key, body = _load_skill_body(skill)
+        """Load skill."""
+        try:
+            key, body = _load_skill_body(skill)
+        except ValueError as exc:
+            _log.warning("load_skill_failed", skill=skill, error=str(exc))
+            return f"load_skill error: {exc}"
         _log.info("load_skill", skill=key, chars=len(body))
         return body
 

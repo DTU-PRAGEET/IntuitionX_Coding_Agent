@@ -23,12 +23,13 @@ from src.core.runner_utils import llm_content, parse_llm_json
 from src.core.skill_scripts.budget import init_budget
 from src.core.token_usage import record_messages_usage
 from src.core.schemas import ResearchReport, Skill
-from src.core.skill_registry import (
+from src.core.skill_manager import (
     default_skills_root,
     get_skill_registry,
+    load_skill_manifest,
     module_skills_dir,
+    select_research_skill,
 )
-from src.core.skills_loader import load_skill_manifest, select_research_skill
 from src.core.state import JiraTicket, RepoProfile
 from src.integrations.cursor.gateway import CursorGateway, get_cursor_gateway
 
@@ -69,6 +70,7 @@ def _register_research_harness_profile(tool_budget: int, llm: BaseChatModel) -> 
 
 
 def _harness_workflow_suffix(tool_budget: int) -> str:
+    """Harness Workflow Suffix for this module."""
     return (
         "Begin every investigation with ONE cursor_search call to locate relevant files, "
         "then use read, ls, and bash to inspect the 2-3 files it surfaces. "
@@ -84,6 +86,7 @@ def _harness_workflow_suffix(tool_budget: int) -> str:
 
 
 def _research_system_prompt(tool_budget: int) -> str:
+    """Research System Prompt for this module."""
     return (
         "Investigate the Jira ticket using progressive skills. "
         "First call load_skill for `research` and the most relevant security skill "
@@ -127,7 +130,7 @@ def _build_react_fallback(
     """LangGraph ReAct fallback when deepagents is unavailable."""
     from langgraph.prebuilt import create_react_agent
 
-    from src.core.prompt_builder import PromptBuilder
+    from src.core.skill_manager import PromptBuilder
 
     _log.warning(
         "deepagents_unavailable",
@@ -146,6 +149,7 @@ def build_research_agent(
     tools: list,
     tool_budget: int,
 ):
+    """Build research agent."""
     try:
         import deepagents  # noqa: F401
 
@@ -157,6 +161,7 @@ def build_research_agent(
 
 
 def resolve_research_skill(ticket: JiraTicket) -> tuple[Skill | None, str]:
+    """Resolve research skill."""
     return select_research_skill(ticket, SKILL_DIR)
 
 
@@ -200,20 +205,39 @@ def _compact_security_enrichment(enrichment: dict | None) -> dict[str, object]:
 
 def _format_domain_skill_pointer(ticket: JiraTicket | None) -> str:
     """Compact skill catalog — bodies load on demand via load_skill tool."""
-    if not ticket:
+    registry = get_skill_registry()
+    security_skills = sorted(
+        (
+            skill
+            for skill in registry.all_skills()
+            if skill.module == "security" and registry._matches_agent(skill, "research")
+        ),
+        key=lambda skill: skill.name,
+    )
+    if not security_skills:
         return ""
+
+    recommended = {
+        skill.name
+        for skill in registry.select("research", ticket=ticket)
+        if skill.module == "security"
+    }
+    if ticket:
+        orch = (ticket.get("ticket_history_summary") or {}).get("orchestrator_analysis") or {}
+        orchestrator_skill = orch.get("recommended_security_skill")
+        if orchestrator_skill:
+            recommended.add(str(orchestrator_skill))
 
     lines = [
         "\n## Skills System",
-        "Load skills progressively with load_skill — call ONCE on `research` plus the "
-        "most relevant security skill below before forming hypotheses; do not re-load.",
+        "Load skills progressively with load_skill — call ONCE on `research` plus ONE "
+        "security skill from this list before forming hypotheses; do not re-load.",
+        "Use exact skill names below only — never invent paths from vulnerability_category.",
         "- `research` — core research workflow",
     ]
 
     skills_root = SKILLS_ROOT.resolve()
-    for skill in get_skill_registry().select("research", ticket=ticket):
-        if skill.module != "security":
-            continue
+    for skill in security_skills:
         try:
             rel = Path(skill.source_path).resolve().relative_to(skills_root)
             path = f"/{rel.as_posix()}"
@@ -222,10 +246,9 @@ def _format_domain_skill_pointer(ticket: JiraTicket | None) -> str:
         desc = " ".join((skill.description or "").split())
         if len(desc) > _SKILL_POINTER_DESC_MAX:
             desc = desc[: _SKILL_POINTER_DESC_MAX - 3].rstrip() + "..."
-        lines.append(f"- `{skill.name}` or `{path}` — {desc}")
+        prefix = "(recommended) " if skill.name in recommended else ""
+        lines.append(f"- {prefix}`{skill.name}` or `{path}` — {desc}")
 
-    if len(lines) <= 3:
-        return ""
     return "\n".join(lines) + "\n"
 
 
@@ -277,16 +300,19 @@ def build_research_prompt(
     user_prompt: str,
     memory: ResearchMemoryStore,
 ) -> str:
+    """Build research prompt."""
     return build_research_user_message(
         ticket, repo_path, repo_profile, anchors, user_prompt, memory
     )
 
 
 def load_skill_manifest_safe():
+    """Load skill manifest safe."""
     return load_skill_manifest(SKILL_DIR)
 
 
 def _resolve_research_report(result: dict[str, Any]) -> ResearchReport:
+    """Resolve Research Report for this module."""
     structured = result.get("structured_response")
     if structured is not None:
         if isinstance(structured, ResearchReport):
@@ -297,6 +323,7 @@ def _resolve_research_report(result: dict[str, Any]) -> ResearchReport:
 
 
 def _extract_final_text(result: dict[str, Any]) -> str:
+    """Extract Final Text for this module."""
     messages = result.get("messages", [])
     if not messages:
         raise ValueError("Research agent returned no messages")

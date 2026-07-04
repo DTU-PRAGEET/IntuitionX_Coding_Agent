@@ -1,6 +1,6 @@
 {
   "ticket_id": "EXEC-DEMO-1",
-  "root_hypothesis": "Demo write and edit steps in an isolated repo directory",
+  "root_hypothesis": "Demo semantic edit steps in an isolated repo directory",
   "files_to_change": ["hello.txt", "app.py"],
   "implementation_constraints": ["Do not modify files outside files_to_change"],
   "execution_steps": [
@@ -8,45 +8,39 @@
       "step_id": 1,
       "action": "EDIT",
       "file": "hello.txt",
-      "target": "Create hello.txt with initial content",
+      "target": "Create hello.txt",
       "reason": "Setup file for subsequent edit demo",
-      "validate": "File exists and contains Hello, world!",
-      "new_string": "Hello, world!\n",
-      "change": "Create hello.txt via write"
+      "validate": "File contains EXEC_MARKER",
+      "target_type": "file",
+      "instruction": "Create hello.txt with greeting content",
+      "intent_marker": "EXEC_MARKER",
+      "change": "Create hello.txt"
     },
     {
       "step_id": 2,
-      "action": "EDIT",
+      "action": "VERIFY",
       "file": "hello.txt",
-      "target": "Update greeting text",
-      "reason": "Demonstrate edit patch application",
-      "validate": "File contains Hello, Executor!",
-      "old_string": "Hello, world!\n",
-      "new_string": "Hello, Executor!\n",
-      "change": "Replace greeting"
+      "target": "Confirm greeting",
+      "reason": "Confirm edit persisted",
+      "validate": "grep for EXEC_MARKER",
+      "intent_marker": "EXEC_MARKER"
     },
     {
       "step_id": 3,
       "action": "EDIT",
       "file": "app.py",
       "target": "Create minimal app module",
-      "reason": "Second file write demo",
-      "validate": "app.py defines VERSION",
-      "new_string": "VERSION = \"1.0.0\"\n",
+      "reason": "Second file demo",
+      "validate": "grep for VERSION",
+      "target_type": "file",
+      "instruction": "Create app.py defining VERSION",
+      "intent_marker": "VERSION",
       "change": "Create app.py"
-    },
-    {
-      "step_id": 4,
-      "action": "VERIFY",
-      "file": "hello.txt",
-      "target": "Hello, Executor!",
-      "reason": "Confirm greeting edit persisted",
-      "validate": "grep for Hello, Executor!"
     }
   ],
   "write_tests": false,
   "create_files": true,
   "risk_level": "low",
   "self_healing_notes": [],
-  "flags": ["Mock execution plan for Executor standalone verification"]
+  "flags": ["Mock semantic execution plan for Executor standalone verification"]
 }

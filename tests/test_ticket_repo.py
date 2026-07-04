@@ -13,6 +13,7 @@ from tests.test_jira_repo_links import SCRUM_5_DESCRIPTION
 
 
 def _scrum_ticket() -> dict:
+    """Scrum Ticket for this module."""
     return {
         "issue_id": "SCRUM-5",
         "title": "SQL Injection vulnerability in user search endpoint",
@@ -39,12 +40,14 @@ def _scrum_ticket() -> dict:
 
 
 def test_ticket_github_repo_from_description():
+    """Test Ticket Github Repo From Description for this module."""
     ticket = _scrum_ticket()
     assert ticket_github_repo(ticket) == "DTU-PRAGEET/Testing-Security-demo"
     assert ticket_target_branch(ticket) == "master"
 
 
 def test_resolve_ticket_repo_clones_when_no_explicit_path(tmp_path):
+    """Test Resolve Ticket Repo Clones When No Explicit Path for this module."""
     ticket = _scrum_ticket()
     cached = tmp_path / "ticket_repos" / "DTU-PRAGEET__Testing-Security-demo"
     cached.mkdir(parents=True)
@@ -63,6 +66,7 @@ def test_resolve_ticket_repo_clones_when_no_explicit_path(tmp_path):
 
 
 def test_resolve_ticket_repo_honors_explicit_override(tmp_path):
+    """Test Resolve Ticket Repo Honors Explicit Override for this module."""
     ticket = _scrum_ticket()
     explicit = tmp_path / "my-local-clone"
     explicit.mkdir()

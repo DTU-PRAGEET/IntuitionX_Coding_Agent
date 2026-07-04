@@ -56,6 +56,7 @@ def _negative_finding_report(ticket_id: str, summary: str, error: str, module: s
 
 
 def _latest_gate_feedback(state: AgentState, gate_type: str) -> str | None:
+    """Latest Gate Feedback for this module."""
     gates = state.get("human_gates") or []
     for gate in reversed(gates):
         if gate.get("gate_type") == gate_type and gate.get("status") == "REVISE":

@@ -33,6 +33,7 @@ def configure_logging(level: int = logging.INFO) -> None:
 
 
 def _prefix_component(_logger: logging.Logger, _method: str, event_dict: dict) -> dict:
+    """Prefix Component for this module."""
     component = event_dict.pop("component", "app")
     event = event_dict.pop("event", "")
     event_dict["event"] = f"[{component}] {event}"

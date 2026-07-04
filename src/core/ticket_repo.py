@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from src.core.config import settings
+from src.core.file_paths import repair_repo_from_cursor_temp_clone
 from src.core.logging import get_logger
 from src.core.state import JiraTicket
 from src.core.github_links import extract_target_branch, github_slugs_from_text
@@ -14,6 +15,7 @@ _log = get_logger("ticket_repo")
 
 
 def _run_git(args: list[str], cwd: str | None = None) -> subprocess.CompletedProcess:
+    """Run Git for this module."""
     return subprocess.run(
         ["git"] + args,
         cwd=cwd,
@@ -59,6 +61,7 @@ def ensure_github_checkout(owner_repo: str, branch: str | None = None) -> str:
     remote = f"https://github.com/{owner_repo}.git"
 
     if dest.exists() and (dest / ".git").exists():
+        repair_repo_from_cursor_temp_clone(str(dest))
         _run_git(["fetch", "origin"], str(dest))
         if branch:
             checkout = _run_git(["checkout", branch], str(dest))
@@ -84,6 +87,7 @@ def ensure_github_checkout(owner_repo: str, branch: str | None = None) -> str:
             )
 
     _log.info("repo_cloned", owner_repo=owner_repo, path=str(dest), branch=branch)
+    repair_repo_from_cursor_temp_clone(str(dest))
     return str(dest.resolve())
 
 

@@ -36,12 +36,16 @@ class EditError(Exception):
 
 @dataclass(frozen=True)
 class EditReplacement:
+    """Internal old_text/new_text pair for the fuzzy edit engine.
+    Built from schemas.EditReplacementInput inside `tools/edit_tool.py`."""
     old_text: str
     new_text: str
 
 
 @dataclass(frozen=True)
 class FuzzyMatchResult:
+    """Outcome of normalized/fuzzy old_string lookup before applying an edit.
+    Returned by `fuzzy_find_text`; drives edit_tool not-found and ambiguity errors."""
     found: bool
     index: int
     match_length: int
@@ -59,22 +63,26 @@ def detect_line_ending(content: str) -> LineEnding:
 
 
 def normalize_to_lf(text: str) -> str:
+    """Normalize To Lf for this module."""
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def restore_line_endings(text: str, ending: LineEnding) -> str:
+    """Restore Line Endings for this module."""
     if ending == "\r\n":
         return text.replace("\n", "\r\n")
     return text
 
 
 def strip_bom(content: str) -> tuple[str, str]:
+    """Strip Bom for this module."""
     if content.startswith(BOM):
         return BOM, content[1:]
     return "", content
 
 
 def normalize_for_fuzzy_match(text: str) -> str:
+    """Normalize For Fuzzy Match for this module."""
     normalized = unicodedata.normalize("NFKC", text)
     for src, dst in _SMART_QUOTES.items():
         normalized = normalized.replace(src, dst)
@@ -87,6 +95,7 @@ def normalize_for_fuzzy_match(text: str) -> str:
 
 
 def fuzzy_find_text(content: str, old_text: str) -> FuzzyMatchResult:
+    """Fuzzy Find Text for this module."""
     exact_index = content.find(old_text)
     if exact_index != -1:
         return FuzzyMatchResult(
@@ -119,6 +128,7 @@ def fuzzy_find_text(content: str, old_text: str) -> FuzzyMatchResult:
 
 
 def _count_occurrences(content: str, old_text: str, *, fuzzy: bool) -> int:
+    """Count Occurrences for this module."""
     if not old_text:
         return 0
     if fuzzy:
@@ -141,6 +151,7 @@ def _count_occurrences(content: str, old_text: str, *, fuzzy: bool) -> int:
 
 
 def _nearby_lines(content: str, old_text: str, limit: int = 3) -> list[str]:
+    """Nearby Lines for this module."""
     first_line = old_text.splitlines()[0] if old_text else ""
     tokens = [t for t in re.split(r"\W+", first_line) if len(t) > 2][:5]
     if not tokens:
@@ -155,6 +166,7 @@ def _nearby_lines(content: str, old_text: str, limit: int = 3) -> list[str]:
 
 
 def _format_not_found(path: str, old_text: str, content: str) -> str:
+    """Format Not Found for this module."""
     first_line = old_text.splitlines()[0] if old_text else "(empty)"
     nearby = _nearby_lines(content, old_text)
     lines = [
@@ -171,6 +183,7 @@ def _format_not_found(path: str, old_text: str, content: str) -> str:
 
 
 def _format_multiple_matches(path: str, old_text: str, count: int) -> str:
+    """Format Multiple Matches for this module."""
     first_line = old_text.splitlines()[0] if old_text else "(empty)"
     return (
         f"Found {count} occurrences of the old text in {path}; it must be unique. "
@@ -180,6 +193,7 @@ def _format_multiple_matches(path: str, old_text: str, count: int) -> str:
 
 
 def _regions_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
+    """Regions Overlap for this module."""
     return a_start < b_end and b_start < a_end
 
 

@@ -1,4 +1,4 @@
-"""Execution plan validation — triad ordering, path checks, and EDIT patch integrity."""
+"""Execution plan validation — triad ordering, path checks, and semantic EDIT integrity."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from pathlib import Path
 
 from src.core.repo_snapshot import old_string_in_file
 from src.core.schemas import ExecutionPlan, ResearchReport
+from src.core.semantic_target import is_semantic_edit, validate_semantic_edits
 
 # Minimum new_string length when old_string is longer — detects LLM truncation.
 _TRUNCATION_RATIO = 0.6
@@ -54,13 +55,23 @@ def old_string_occurrence_count(file_content: str, old_string: str) -> int:
     return 0
 
 
+def _new_string_is_incomplete_prefix(old_string: str, new_string: str) -> bool:
+    """True when new_string looks like a cut-off prefix of old_string (LLM stopped mid-edit)."""
+    new_stripped = new_string.rstrip("\n")
+    return len(new_stripped) < len(old_string) and old_string.startswith(new_stripped)
+
+
 def is_truncated_patch(old_string: str, new_string: str) -> bool:
+    """Is Truncated Patch for this module."""
     if not old_string or not new_string:
         return False
     if old_string == new_string:
         return True
     # Short patches are valid — only apply ratio check on substantial blocks.
     if len(old_string) < 80 and len(new_string) < 80:
+        return False
+    # Replacing a large block with unrelated shorter content (e.g. secret removal) is valid.
+    if not _new_string_is_incomplete_prefix(old_string, new_string):
         return False
     threshold = max(len(old_string) * _TRUNCATION_RATIO, _TRUNCATION_MIN_NEW_LEN)
     if len(new_string) < threshold:
@@ -73,7 +84,26 @@ def is_truncated_patch(old_string: str, new_string: str) -> bool:
     return False
 
 
+def sync_files_to_change_from_edit_steps(plan: ExecutionPlan) -> ExecutionPlan:
+    """Union EDIT-step file paths into files_to_change (planner LLM often omits some)."""
+    edit_files = [
+        step.file
+        for step in plan.execution_steps
+        if step.action == "EDIT" and step.file
+    ]
+    if not edit_files:
+        return plan
+    merged = list(dict.fromkeys([*plan.files_to_change, *edit_files]))
+    if merged != plan.files_to_change:
+        plan.files_to_change = merged
+        plan.flags = list(
+            dict.fromkeys([*plan.flags, "files_to_change_synced_from_edit_steps"])
+        )
+    return plan
+
+
 def validate_plan_triad(plan: ExecutionPlan) -> list[str]:
+    """Validate plan triad."""
     errors: list[str] = []
     steps = plan.execution_steps
     for i, step in enumerate(steps):
@@ -94,6 +124,7 @@ def validate_plan_paths(
     research: ResearchReport | None,
     repo_path: str,
 ) -> list[str]:
+    """Validate plan paths."""
     errors: list[str] = []
     repo = Path(repo_path)
     research_paths: set[str] = set()
@@ -179,6 +210,7 @@ def validate_execution_plan(
     repo_path: str,
     research: ResearchReport | None = None,
 ) -> list[str]:
+    """Validate execution plan."""
     return validate_plan_triad(plan) + validate_plan_paths(plan, research, repo_path)
 
 
@@ -187,7 +219,7 @@ def validate_execution_plan_strict(
     repo_path: str,
     research: ResearchReport | None = None,
 ) -> list[str]:
-    """All validation errors including hard EDIT patch failures."""
+    """All validation errors including hard semantic EDIT failures."""
     triad_and_paths = validate_execution_plan(plan, repo_path, research)
-    hard, _soft = validate_edit_patches(plan, repo_path)
+    hard, _soft = validate_semantic_edits(plan, repo_path)
     return triad_and_paths + hard

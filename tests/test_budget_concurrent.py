@@ -10,9 +10,11 @@ from src.core.skill_scripts.budget import check_and_decrement, init_budget
 
 
 def test_budget_concurrent_decrements(tmp_path):
+    """Test Budget Concurrent Decrements for this module."""
     init_budget("research", "parallel-thread", hard_limit=10, budget_dir=tmp_path)
 
     def _decrement() -> int:
+        """Decrement for this module."""
         state = check_and_decrement("research", "parallel-thread", 10, budget_dir=tmp_path)
         return state["calls_made"]
 

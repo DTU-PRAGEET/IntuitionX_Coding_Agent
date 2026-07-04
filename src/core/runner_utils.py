@@ -46,6 +46,7 @@ def parse_llm_json(content: str, model: Type[T]) -> T:
 
 
 def llm_content(response) -> str:
+    """Llm Content for this module."""
     raw = response.content if hasattr(response, "content") else response
     return _flatten_content_blocks(raw)
 

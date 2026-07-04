@@ -45,6 +45,7 @@ def bootstrap_repo_context(repo_path: str, *, max_entries: int = 12) -> dict[str
 
 
 def profile_repository(repo_path: str) -> RepoProfile:
+    """Profile Repository for this module."""
     root = Path(repo_path).resolve()
     if not root.exists():
         return RepoProfile(

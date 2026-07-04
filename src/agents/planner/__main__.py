@@ -9,7 +9,8 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from src.agents.planner.agent import build_planner_prompt, load_research_report, run_planner
+from src.integrations.cursor.semantic_plan_runner import build_semantic_plan_prompt
+from src.agents.planner.agent import load_research_report, run_planner
 from src.core.config import settings
 from src.core.logging import configure_logging, get_logger
 
@@ -17,6 +18,7 @@ _log = get_logger("planner_cli")
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for this module."""
     configure_logging()
     parser = argparse.ArgumentParser(description="Run Planner Agent standalone")
     parser.add_argument(
@@ -69,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     _log.info("report_loaded", ticket_id=report.ticket_id, path=str(report_path))
 
     if args.dry_run:
-        prompt = build_planner_prompt(report, repo_path, routing_route=args.routing_route)
+        prompt = build_semantic_plan_prompt(report, repo_path, routing_route=args.routing_route)
         print(
             json.dumps(
                 {

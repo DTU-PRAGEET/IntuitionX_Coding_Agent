@@ -29,6 +29,7 @@ from src.tools.registry import ToolRegistry
 
 
 def _parse_lines(spec: str | None) -> tuple[int, int | None]:
+    """Parse Lines for this module."""
     if not spec:
         return 1, None
     match = re.match(r"^(\d+):(\d+)$", spec.strip())
@@ -47,6 +48,7 @@ def read_file_lines(
     start_line: int = 1,
     end_line: int | None = None,
 ) -> tuple[bool, str, int]:
+    """Read File Lines for this module."""
     registry = ToolRegistry(repo_path)
     try:
         result = registry.execute(
@@ -65,6 +67,7 @@ def read_file_lines(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for this module."""
     parser = argparse.ArgumentParser(description="Read file with optional line range")
     parser.add_argument("--repo", required=True, help="Repository root path")
     parser.add_argument("--file", required=True, help="Relative file path")

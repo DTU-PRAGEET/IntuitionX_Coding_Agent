@@ -22,6 +22,7 @@ class ToolRegistry:
     """Registry of hardened L1 tools scoped to a workspace cwd."""
 
     def __init__(self, cwd: str):
+        """Initialize ToolRegistry with the provided arguments."""
         self.cwd = cwd
         self._tools: dict[str, ToolDefinition] = {
             "read": ReadTool(cwd),
@@ -35,12 +36,15 @@ class ToolRegistry:
         _log.info("initialized", cwd=cwd, tools=list(self._tools.keys()))
 
     def get(self, name: str) -> ToolDefinition | None:
+        """Get for ToolRegistry."""
         return self._tools.get(name)
 
     def list_names(self) -> list[str]:
+        """List Names for ToolRegistry."""
         return list(self._tools.keys())
 
     def execute(self, name: str, **kwargs) -> ToolResult:
+        """Execute for ToolRegistry."""
         tool = self._tools.get(name)
         if tool is None:
             available = ", ".join(self.list_names())
@@ -58,7 +62,9 @@ class ToolRegistry:
             schema = tool.input_schema
 
             def _make_fn(t: ToolDefinition):
+                """Make Fn for ToolRegistry."""
                 def fn(**kwargs):
+                    """Fn for ToolRegistry."""
                     result = t.execute(**kwargs)
                     return result.to_llm_string()
 
