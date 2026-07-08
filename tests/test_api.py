@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from src.api.execution_events import ExecutionEventStore
 from src.api.redis_store import DictRedisClient
 from src.api.schemas import TicketJobStatus
 from src.api.ticket_jobs import TicketJobStore
@@ -19,19 +21,26 @@ def redis_client():
 
 
 @pytest.fixture
-def job_store(redis_client):
-    """Isolated job store for each test."""
-    return TicketJobStore(redis_client=redis_client)
+def event_store(redis_client):
+    """In-memory event store for tests."""
+    return ExecutionEventStore(redis_client=redis_client)
 
 
 @pytest.fixture
-def client(monkeypatch, job_store):
+def job_store(redis_client, event_store):
+    """Isolated job store for each test."""
+    return TicketJobStore(redis_client=redis_client, events=event_store)
+
+
+@pytest.fixture
+def client(monkeypatch, job_store, event_store):
     """FastAPI test client with mocked worker lifecycle."""
     from src.api import main as api_main
     from src.api import ticket_jobs as ticket_jobs_mod
 
     monkeypatch.setattr(ticket_jobs_mod, "ticket_job_store", job_store)
     monkeypatch.setattr(api_main, "ticket_job_store", job_store)
+    monkeypatch.setattr(api_main, "event_store", event_store)
     with patch.object(job_store, "start_worker", new=AsyncMock()), patch.object(
         job_store, "stop_worker", new=AsyncMock()
     ):
@@ -122,3 +131,175 @@ def test_approve_unknown_thread(client):
         json={"status": "APPROVE"},
     )
     assert response.status_code == 404
+
+
+def test_enqueue_emits_job_queued_event(client, job_store, event_store):
+    """POST /run enqueues a job_queued lifecycle event."""
+    response = client.post("/run", json={"ticket_id": "PLAT-EVT"})
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+    events = event_store.list_events(job_id).events
+    assert len(events) == 1
+    assert events[0].type == "job_queued"
+    assert events[0].payload["ticket_id"] == "PLAT-EVT"
+
+
+def test_list_events_not_found(client):
+    """GET /jobs/{job_id}/events returns 404 for unknown job."""
+    response = client.get("/jobs/nonexistent-job-id/events")
+    assert response.status_code == 404
+
+
+def test_list_events_after_enqueue(client, job_store, event_store):
+    """GET /jobs/{job_id}/events returns queued event."""
+    job = job_store.enqueue("PLAT-42")
+    response = client.get(f"/jobs/{job.job_id}/events")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job_id"] == job.job_id
+    assert len(body["events"]) == 1
+    assert body["events"][0]["type"] == "job_queued"
+    assert body["latest_seq"] == 1
+
+
+def test_ticket_status_includes_latest_event_seq(client, job_store):
+    """GET /tickets includes latest_event_seq when events exist."""
+    job = job_store.enqueue("PLAT-SEQ")
+    response = client.get(f"/tickets/{job.job_id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["latest_event_seq"] == 1
+    assert body.get("pause_context") is None
+
+
+def test_ticket_status_pause_context_when_paused(client, job_store):
+    """GET /tickets returns pause_context and display_message when job is paused."""
+    job = job_store.enqueue("PLAT-PAUSE")
+    job.status = TicketJobStatus.PAUSED
+    job.paused_gate = "GATE_1"
+    job.pause_context = {
+        "gate": "GATE_1",
+        "message": "--- APPROVAL REQUIRED: GATE 1 ---\nTicket: PLAT-PAUSE\nPlease respond with: APPROVE",
+        "research_output": {"ticket_id": "PLAT-PAUSE"},
+    }
+    job_store._save_job(job)
+    response = client.get(f"/tickets/{job.job_id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "paused"
+    assert body["pause_context"]["gate"] == "GATE_1"
+    assert "APPROVAL REQUIRED" in body["display_message"]
+    assert body["pause_context"]["research_output"]["ticket_id"] == "PLAT-PAUSE"
+
+
+def test_pause_display_plain_text(client, job_store):
+    """GET /tickets/{id}/pause returns human-readable plain text."""
+    job = job_store.enqueue("PLAT-TEXT")
+    job.status = TicketJobStatus.PAUSED
+    job.pause_context = {
+        "gate": "GATE_1",
+        "message": "--- APPROVAL REQUIRED: GATE 1 ---\nRoot Cause: hardcoded secret in Dockerfile",
+    }
+    job_store._save_job(job)
+    response = client.get(f"/tickets/{job.job_id}/pause")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    text = response.text
+    assert "APPROVAL REQUIRED" in text
+    assert "hardcoded secret" in text
+    assert job.thread_id in text
+    assert "approve" in text.lower()
+
+
+def test_pause_display_not_paused_returns_409(client, job_store):
+    """GET /tickets/{id}/pause returns 409 when job is not paused."""
+    job = job_store.enqueue("PLAT-RUN")
+    response = client.get(f"/tickets/{job.job_id}/pause")
+    assert response.status_code == 409
+
+
+def test_sse_stream_delivers_events(client, job_store, event_store):
+    """GET /jobs/{job_id}/events/stream yields SSE data lines."""
+    job = job_store.enqueue("PLAT-SSE")
+    event_store.append(job.job_id, job.thread_id, "execution_completed", {"ticket_id": "PLAT-SSE"})
+    with client.stream("GET", f"/jobs/{job.job_id}/events/stream?after_seq=0") as response:
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers.get("content-type", "")
+        chunks = []
+        for chunk in response.iter_bytes():
+            chunks.append(chunk)
+            if b"execution_completed" in chunk:
+                break
+        text = b"".join(chunks).decode()
+        assert "data: " in text
+        assert "job_queued" in text or "execution_completed" in text
+
+
+def test_cancel_paused_job_releases_ticket(client, job_store):
+    """DELETE /tickets/{id} cancels a paused job and allows POST /run again."""
+    job = job_store.enqueue("PLAT-CANCEL")
+    job.status = TicketJobStatus.PAUSED
+    job_store._save_job(job)
+
+    response = client.delete("/tickets/PLAT-CANCEL")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "cancelled"
+    assert body["ticket_id"] == "PLAT-CANCEL"
+    assert job_store.get_active_for_ticket("PLAT-CANCEL") is None
+
+    rerun = client.post("/run", json={"ticket_id": "PLAT-CANCEL"})
+    assert rerun.status_code == 200
+    assert rerun.json()["job_id"] != job.job_id
+
+
+def test_cancel_queued_job_removes_from_queue(client, job_store, redis_client):
+    """DELETE /tickets/{id} removes a queued job from the Redis work queue."""
+    from src.api.redis_store import QUEUE_KEY
+
+    job = job_store.enqueue("PLAT-QUEUE")
+    assert job.job_id in (redis_client.lrange(QUEUE_KEY, 0, -1) or [])
+
+    response = client.delete(f"/tickets/{job.job_id}")
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+    assert job.job_id not in (redis_client.lrange(QUEUE_KEY, 0, -1) or [])
+
+
+def test_cancel_not_found(client):
+    """DELETE /tickets/{id} returns 404 for unknown ids."""
+    response = client.delete("/tickets/UNKNOWN-999")
+    assert response.status_code == 404
+
+
+def test_cancel_completed_returns_409(client, job_store):
+    """DELETE /tickets/{id} returns 409 when job is already terminal."""
+    job = job_store.enqueue("PLAT-DONE")
+    job.status = TicketJobStatus.COMPLETED
+    job_store._save_job(job)
+    job_store._release_active(job)
+
+    response = client.delete("/tickets/PLAT-DONE")
+    assert response.status_code == 409
+    assert response.json()["detail"]["status"] == "completed"
+
+
+def test_cancel_running_in_flight_returns_409(client, job_store):
+    """DELETE /tickets/{id} returns 409 while worker is actively executing."""
+    job = job_store.enqueue("PLAT-BUSY")
+    job.status = TicketJobStatus.RUNNING
+    job_store._save_job(job)
+    job_store._in_flight.add(job.job_id)
+
+    response = client.delete("/tickets/PLAT-BUSY")
+    assert response.status_code == 409
+    assert "executing" in response.json()["detail"]["detail"].lower()
+
+
+def test_cancel_emits_job_cancelled_event(client, job_store, event_store):
+    """DELETE /tickets/{id} emits a job_cancelled lifecycle event."""
+    job = job_store.enqueue("PLAT-CEVT")
+    response = client.delete(f"/tickets/{job.job_id}")
+    assert response.status_code == 200
+    events = event_store.list_events(job.job_id).events
+    assert any(e.type == "job_cancelled" for e in events)

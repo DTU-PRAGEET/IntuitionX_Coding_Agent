@@ -7,6 +7,14 @@
 
 ---
 
+# Test_Case Category =
+
+| Category | Cases | Count |
+|----------|-------|------:|
+| **Too Specific** | G-04, G-06, G-07, G-08, G-09, G-17, G-18 | **7** |
+| **Moderately Specific** | G-01, G-03, G-05, G-10, G-12, G-13, G-14 | **7** |
+| **Vague / Realistic(Not very Clear)** | G-02, G-11, G-15, G-16 | **4** |
+
 ## 1. Executive Summary
 
 This document records the **end-to-end integration eval baseline** for the Sprinklr Jira Solver agent pipeline. Two benchmark passes were executed on the same 18 golden cases:

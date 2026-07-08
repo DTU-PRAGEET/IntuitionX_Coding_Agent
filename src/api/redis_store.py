@@ -42,6 +42,16 @@ def ticket_latest_key(ticket_id: str) -> str:
     return f"{KEY_PREFIX}:ticket_latest:{ticket_id.upper()}"
 
 
+def events_key(job_id: str) -> str:
+    """Redis list key for ordered pipeline events."""
+    return f"{KEY_PREFIX}:events:{job_id}"
+
+
+def events_seq_key(job_id: str) -> str:
+    """Redis counter key for monotonic event sequence numbers."""
+    return f"{KEY_PREFIX}:events:{job_id}:seq"
+
+
 class RedisCommands(Protocol):
     """Protocol subset of Redis commands used by the job store."""
 
@@ -73,6 +83,18 @@ class RedisCommands(Protocol):
         """Return a slice of list elements by index range."""
         ...
 
+    def lrem(self, name: str, count: int, value: str) -> int:
+        """Remove list elements equal to value (count=0 removes all matches)."""
+        ...
+
+    def incr(self, name: str) -> int:
+        """Increment a counter and return the new value."""
+        ...
+
+    def expire(self, name: str, time: int) -> bool:
+        """Set a TTL in seconds on a key."""
+        ...
+
 
 class DictRedisClient:
     """Minimal in-memory Redis subset for unit tests."""
@@ -81,6 +103,8 @@ class DictRedisClient:
         """Initialize the DictRedisClient with the given configuration."""
         self._kv: dict[str, str] = {}
         self._lists: dict[str, list[str]] = {}
+        self._counters: dict[str, int] = {}
+        self._ttl: dict[str, int] = {}
 
     def get(self, name: str) -> str | None:
         """Return get for the pipeline."""
@@ -132,6 +156,39 @@ class DictRedisClient:
         if end == -1:
             end = len(items) - 1
         return items[start : end + 1]
+
+    def lrem(self, name: str, count: int, value: str) -> int:
+        """Lrem on DictRedisClient."""
+        items = self._lists.get(name) or []
+        removed = 0
+        if count == 0:
+            while value in items:
+                items.remove(value)
+                removed += 1
+        elif count > 0:
+            for _ in range(count):
+                if value in items:
+                    items.remove(value)
+                    removed += 1
+        else:
+            for idx in range(len(items) - 1, -1, -1):
+                if items[idx] == value:
+                    items.pop(idx)
+                    removed += 1
+                    if removed >= abs(count):
+                        break
+        return removed
+
+    def incr(self, name: str) -> int:
+        """Incr on DictRedisClient."""
+        self._counters[name] = self._counters.get(name, 0) + 1
+        self._kv[name] = str(self._counters[name])
+        return self._counters[name]
+
+    def expire(self, name: str, time: int) -> bool:
+        """Expire on DictRedisClient (records TTL for test introspection)."""
+        self._ttl[name] = time
+        return True
 
 
 def create_redis_client(url: str | None = None) -> RedisCommands:

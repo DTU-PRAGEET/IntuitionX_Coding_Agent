@@ -82,6 +82,8 @@ def run_orchestrator_routing(
     )
     try:
         response = invoke_tracked(llm, routing_prompt, agent="orchestrator")
+        # print("***********************************************************************")
+        # print(response)
         decision = parse_llm_json(llm_content(response), RoutingDecision)
         return sanitize_routing_decision(decision)
     except Exception as e:

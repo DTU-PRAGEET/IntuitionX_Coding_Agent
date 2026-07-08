@@ -17,3 +17,4 @@ class GraphRunOutcome:
     state: dict[str, Any]
     gate: str | None = None
     error: str | None = None
+    interrupt_payload: dict[str, Any] | None = None

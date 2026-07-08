@@ -6,12 +6,14 @@ from typing import Any
 
 from langgraph.types import Command
 
+from src.api.execution_events import ExecutionEventSink
 from src.core.checkpointing import ensure_async_checkpointer
 from src.core.graph import build_graph
 from src.core.logging import get_logger
 from src.core.state import AgentState, initial_state
 from src.core.token_usage import start_pipeline_tracking, stop_pipeline_tracking
 from src.pipeline.graph_outcome import GraphRunOutcome
+from src.pipeline.pipeline_event_factory import PipelineEventFactory
 
 _log = get_logger("graph_runner")
 
@@ -23,10 +25,26 @@ def _apply_state(final_state: dict[str, Any] | None, node_output: dict[str, Any]
     return {**(final_state or {}), **node_output}
 
 
+def _emit_node_event(
+    event_sink: ExecutionEventSink | None,
+    node_name: str,
+    merged_state: dict[str, Any],
+) -> None:
+    """Emit a semantic event for a completed graph node."""
+    if event_sink is None:
+        return
+    event = PipelineEventFactory.from_node(node_name, merged_state)
+    if event:
+        event_type, payload = event
+        event_sink.emit(event_type, payload)
+
+
 async def _stream_graph_segment(
     graph,
     config: dict[str, Any],
     state: AgentState | Command,
+    *,
+    event_sink: ExecutionEventSink | None = None,
 ) -> tuple[GraphRunOutcome | None, AgentState | Command | None]:
     """Run until completion or first interrupt. Returns resume input when paused."""
     final_state: dict[str, Any] | None = None
@@ -45,11 +63,20 @@ async def _stream_graph_segment(
             if isinstance(node_output, dict):
                 final_state = _apply_state(final_state, node_output)
                 _log.info("graph_node_complete", node=node_name)
+                _emit_node_event(event_sink, node_name, final_state)
 
     if interrupted and interrupt_payload:
+        if event_sink is not None:
+            event_type, payload = PipelineEventFactory.from_interrupt(interrupt_payload)
+            event_sink.emit(event_type, payload)
         gate = interrupt_payload.get("gate", "GATE")
         return (
-            GraphRunOutcome(kind="paused", state=final_state or {}, gate=gate),
+            GraphRunOutcome(
+                kind="paused",
+                state=final_state or {},
+                gate=gate,
+                interrupt_payload=interrupt_payload,
+            ),
             None,
         )
 
@@ -70,6 +97,7 @@ async def run_graph_until_pause(
     thread_id: str,
     user_prompt: str = "",
     repo_path: str | None = None,
+    event_sink: ExecutionEventSink | None = None,
 ) -> GraphRunOutcome:
     """Start or continue a pipeline run until done, failure, or HITL pause."""
     checkpointer = await ensure_async_checkpointer()
@@ -83,7 +111,7 @@ async def run_graph_until_pause(
 
     tracker = start_pipeline_tracking()
     try:
-        outcome, _ = await _stream_graph_segment(graph, config, state)
+        outcome, _ = await _stream_graph_segment(graph, config, state, event_sink=event_sink)
         return outcome or GraphRunOutcome(kind="failed", state={}, error="empty graph result")
     except Exception as exc:
         _log.exception("graph_run_failed", ticket=jira_ticket_id, thread_id=thread_id)
@@ -96,6 +124,8 @@ async def run_graph_until_pause(
 async def resume_graph_until_pause(
     thread_id: str,
     decision: dict[str, Any],
+    *,
+    event_sink: ExecutionEventSink | None = None,
 ) -> GraphRunOutcome:
     """Resume a paused graph from POST /approve/{thread_id}."""
     checkpointer = await ensure_async_checkpointer()
@@ -104,7 +134,12 @@ async def resume_graph_until_pause(
 
     tracker = start_pipeline_tracking()
     try:
-        outcome, _ = await _stream_graph_segment(graph, config, Command(resume=decision))
+        outcome, _ = await _stream_graph_segment(
+            graph,
+            config,
+            Command(resume=decision),
+            event_sink=event_sink,
+        )
         return outcome or GraphRunOutcome(kind="failed", state={}, error="empty resume result")
     except Exception as exc:
         _log.exception("graph_resume_failed", thread_id=thread_id)

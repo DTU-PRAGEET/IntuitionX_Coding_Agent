@@ -15,6 +15,7 @@ class TicketJobStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     PAUSED = "paused"
+    CANCELLED = "cancelled"
 
 
 class RunTicketRequest(BaseModel):
@@ -53,6 +54,32 @@ class TicketStatusResponse(BaseModel):
     mr_url: str | None = None
     exit_message: str | None = None
     paused_gate: str | None = None
+    pause_context: dict | None = None
+    latest_event_seq: int | None = None
+    display_message: str | None = Field(
+        default=None,
+        description="Human-readable gate message when status is paused (same as Chainlit)",
+    )
+
+
+class PipelineEvent(BaseModel):
+    """One ordered pipeline execution event."""
+
+    seq: int
+    timestamp: str
+    type: str
+    job_id: str
+    thread_id: str
+    payload: dict = Field(default_factory=dict)
+
+
+class EventsListResponse(BaseModel):
+    """Paginated list of pipeline events."""
+
+    job_id: str
+    events: list[PipelineEvent]
+    latest_seq: int
+    has_more: bool = False
 
 
 class TicketConflictResponse(BaseModel):
@@ -63,3 +90,12 @@ class TicketConflictResponse(BaseModel):
     ticket_id: str
     status: TicketJobStatus
     thread_id: str | None = None
+
+
+class CancelJobResponse(BaseModel):
+    """Response after cancelling an active pipeline job."""
+
+    job_id: str
+    ticket_id: str
+    status: TicketJobStatus
+    message: str

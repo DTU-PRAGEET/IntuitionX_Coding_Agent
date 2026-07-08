@@ -8,6 +8,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from src.api.execution_events import (
+    ExecutionEventStore,
+    RedisEventSink,
+    event_store,
+)
+from src.api.pause_display import pause_display_message
 from src.api.redis_store import (
     ACTIVE_TTL_SECONDS,
     QUEUE_KEY,
@@ -25,6 +31,7 @@ from src.api.schemas import TicketJobStatus, TicketStatusResponse
 from src.core.config import settings
 from src.core.logging import get_logger
 from src.pipeline.graph_outcome import GraphRunOutcome
+from src.pipeline.pipeline_event_factory import PipelineEventFactory
 
 _log = get_logger("ticket_jobs")
 
@@ -45,6 +52,19 @@ class TicketJobConflict(Exception):
         self.existing_job_id = existing_job_id
         self.job = job
         super().__init__(f"Active job already exists for {job.ticket_id}")
+
+
+class TicketJobNotFound(Exception):
+    """Raised when no job exists for the given id."""
+
+
+class TicketJobNotCancellable(Exception):
+    """Raised when a job cannot be cancelled (not active or still executing)."""
+
+    def __init__(self, job: "TicketJob", detail: str) -> None:
+        self.job = job
+        self.detail = detail
+        super().__init__(detail)
 
 
 def _now_iso() -> str:
@@ -70,6 +90,7 @@ class TicketJob:
     mr_url: str | None = None
     exit_message: str | None = None
     paused_gate: str | None = None
+    pause_context: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize job for Redis storage."""
@@ -88,6 +109,7 @@ class TicketJob:
             "mr_url": self.mr_url,
             "exit_message": self.exit_message,
             "paused_gate": self.paused_gate,
+            "pause_context": self.pause_context,
         }
 
     @classmethod
@@ -108,10 +130,14 @@ class TicketJob:
             mr_url=data.get("mr_url"),
             exit_message=data.get("exit_message"),
             paused_gate=data.get("paused_gate"),
+            pause_context=data.get("pause_context"),
         )
 
-    def to_response(self) -> TicketStatusResponse:
+    def to_response(self, store: ExecutionEventStore | None = None) -> TicketStatusResponse:
         """Build API status response."""
+        latest_seq = None
+        if store is not None:
+            latest_seq = store.latest_seq(self.job_id) or None
         return TicketStatusResponse(
             job_id=self.job_id,
             ticket_id=self.ticket_id,
@@ -125,19 +151,40 @@ class TicketJob:
             mr_url=self.mr_url,
             exit_message=self.exit_message,
             paused_gate=self.paused_gate,
+            pause_context=self.pause_context if self.status == TicketJobStatus.PAUSED else None,
+            latest_event_seq=latest_seq,
+            display_message=pause_display_message(
+                status=self.status,
+                pause_context=self.pause_context,
+            ),
         )
 
 
 class TicketJobStore:
     """Redis job store + asyncio worker pool (Semaphore-bound)."""
 
-    def __init__(self, redis_client: RedisCommands | None = None) -> None:
+    def __init__(
+        self,
+        redis_client: RedisCommands | None = None,
+        *,
+        events: ExecutionEventStore | None = None,
+    ) -> None:
         """Initialize the TicketJobStore with the given configuration."""
         self._redis = redis_client or create_redis_client()
+        self._events = events or event_store
         self._semaphore = asyncio.Semaphore(settings.api_max_concurrency)
         self._worker_task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
         self._in_flight: set[str] = set()
+
+    def _make_sink(self, job: TicketJob) -> RedisEventSink:
+        """Create an immutable event sink for one job execution segment."""
+        return RedisEventSink(job.job_id, job.thread_id, self._events)
+
+    def _emit_lifecycle(self, job: TicketJob, event_type: str, payload: dict[str, Any] | None = None) -> None:
+        """Emit a job lifecycle event through the job's sink."""
+        event_type, event_payload = PipelineEventFactory.lifecycle(event_type, payload)
+        self._make_sink(job).emit(event_type, event_payload)
 
     def _save_job(self, job: TicketJob) -> None:
         """Persist job to Redis."""
@@ -181,6 +228,56 @@ class TicketJobStore:
         if job:
             return job
         return self.get_latest_for_ticket(ticket_or_job_id)
+
+    def _remove_from_queue(self, job_id: str) -> None:
+        """Remove a job id from the Redis work queue (no-op if absent)."""
+        self._redis.lrem(QUEUE_KEY, 0, job_id)
+
+    def cancel_active_job(
+        self,
+        ticket_or_job_id: str,
+        *,
+        reason: str = "Cancelled by user",
+    ) -> TicketJob:
+        """Cancel queued/paused job and release the ticket lock so POST /run can start fresh."""
+        job = self.resolve(ticket_or_job_id)
+        if job is None:
+            raise TicketJobNotFound(f"No job found for {ticket_or_job_id!r}")
+
+        if job.status.value not in ACTIVE_STATUSES:
+            raise TicketJobNotCancellable(
+                job,
+                f"Job is not active (current status: {job.status.value})",
+            )
+
+        if job.status == TicketJobStatus.RUNNING and job.job_id in self._in_flight:
+            raise TicketJobNotCancellable(
+                job,
+                "Job is currently executing; wait until it pauses or fails, then cancel",
+            )
+
+        previous_status = job.status.value
+        self._remove_from_queue(job.job_id)
+        job.status = TicketJobStatus.CANCELLED
+        job.error = reason
+        job.exit_message = reason
+        job.paused_gate = None
+        job.pause_context = None
+        job.updated_at = _now_iso()
+        self._release_active(job)
+        self._save_job(job)
+        self._emit_lifecycle(
+            job,
+            "job_cancelled",
+            {"ticket_id": job.ticket_id, "reason": reason},
+        )
+        _log.info(
+            "ticket_job_cancelled",
+            job_id=job.job_id,
+            ticket_id=job.ticket_id,
+            previous_status=previous_status,
+        )
+        return job
 
     def enqueue(
         self,
@@ -231,6 +328,7 @@ class TicketJobStore:
         self._save_job(job)
         self._redis.set(thread_key(thread_id), job_id, ex=ACTIVE_TTL_SECONDS)
         self._redis.rpush(QUEUE_KEY, job_id)
+        self._emit_lifecycle(job, "job_queued", {"ticket_id": ticket_id})
         _log.info("ticket_enqueued", job_id=job_id, ticket_id=ticket_id)
         return job
 
@@ -284,14 +382,21 @@ class TicketJobStore:
         if outcome.kind == "paused":
             job.status = TicketJobStatus.PAUSED
             job.paused_gate = outcome.gate
+            job.pause_context = outcome.interrupt_payload
             self._save_job(job)
             return job
 
+        job.pause_context = None
         if outcome.kind == "failed":
             job.status = TicketJobStatus.FAILED
             job.error = outcome.error or state.get("current_error_log")
             self._release_active(job)
             self._save_job(job)
+            self._emit_lifecycle(
+                job,
+                "execution_failed",
+                {"error": job.error, "ticket_id": job.ticket_id},
+            )
             return job
 
         job.status = TicketJobStatus.COMPLETED
@@ -300,8 +405,22 @@ class TicketJobStore:
             job.status = TicketJobStatus.FAILED
             job.error = str(state["current_error_log"])[:4000]
             self._release_active(job)
+            self._emit_lifecycle(
+                job,
+                "execution_failed",
+                {"error": job.error, "ticket_id": job.ticket_id},
+            )
         else:
             self._release_active(job)
+            self._emit_lifecycle(
+                job,
+                "execution_completed",
+                {
+                    "ticket_id": job.ticket_id,
+                    "mr_url": job.mr_url,
+                    "routing_route": job.routing_route,
+                },
+            )
         self._save_job(job)
         return job
 
@@ -313,17 +432,40 @@ class TicketJobStore:
         if outcome.kind == "paused":
             job.status = TicketJobStatus.PAUSED
             job.paused_gate = outcome.gate
+            job.pause_context = outcome.interrupt_payload
         elif outcome.kind == "failed":
             job.status = TicketJobStatus.FAILED
             job.error = outcome.error
+            job.pause_context = None
             self._release_active(job)
+            self._emit_lifecycle(
+                job,
+                "execution_failed",
+                {"error": job.error, "ticket_id": job.ticket_id},
+            )
         else:
             job.status = TicketJobStatus.COMPLETED
             job.paused_gate = None
+            job.pause_context = None
             state = outcome.state or {}
             if state.get("current_error_log"):
                 job.status = TicketJobStatus.FAILED
                 job.error = str(state["current_error_log"])[:4000]
+                self._emit_lifecycle(
+                    job,
+                    "execution_failed",
+                    {"error": job.error, "ticket_id": job.ticket_id},
+                )
+            else:
+                self._emit_lifecycle(
+                    job,
+                    "execution_completed",
+                    {
+                        "ticket_id": job.ticket_id,
+                        "mr_url": job.mr_url,
+                        "routing_route": job.routing_route,
+                    },
+                )
             self._release_active(job)
         job.updated_at = _now_iso()
         state = outcome.state or {}
@@ -397,21 +539,28 @@ class TicketJobStore:
         job = self.get_job(job_id)
         if job is None:
             return
+        if job.status == TicketJobStatus.CANCELLED:
+            _log.info("ticket_job_skip_cancelled", job_id=job_id)
+            return
 
         job.status = TicketJobStatus.RUNNING
         job.updated_at = _now_iso()
         job.paused_gate = None
+        job.pause_context = None
         self._save_job(job)
+        self._emit_lifecycle(job, "job_running", {"ticket_id": job.ticket_id})
         _log.info("ticket_job_running", job_id=job_id, ticket_id=job.ticket_id)
 
         from src.pipeline.graph_runner import run_graph_until_pause
 
+        sink = self._make_sink(job)
         try:
             outcome = await run_graph_until_pause(
                 jira_ticket_id=job.ticket_id,
                 thread_id=job.thread_id,
                 user_prompt=job.user_prompt,
                 repo_path=job.repo_path,
+                event_sink=sink,
             )
         except Exception as exc:
             _log.exception("ticket_job_failed", job_id=job_id, ticket_id=job.ticket_id)
