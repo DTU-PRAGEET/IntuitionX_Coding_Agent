@@ -10,18 +10,26 @@ from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langsmith import traceable
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from src.agents.executor.tools.builder import build_executor_tools
+from src.agents.executor.structural_check import check_file_structure, is_python_hard_fail
 from src.agents.executor.validation import (
+    EditStepOutcome,
+    FailedEditStep,
     PreEditCapture,
     ValidationResult,
     build_retry_note,
     capture_pre_edit,
     load_validation_policy,
+    log_edit_outcome,
+    noop_failure_result,
     read_modified_snippet,
+    structural_failure_result,
     validate_edit,
+    validate_edit_progressive,
 )
+from src.core.edit_step import is_instruction_edit
 from src.core.llm import TaskComplexity, get_llm
 from src.core.logging import configure_logging, get_logger
 from src.core.file_paths import repair_repo_from_cursor_temp_clone, remap_cursor_path
@@ -35,7 +43,6 @@ from src.core.skill_scripts.run_tests import run_tests_for_file
 from src.core.skill_scripts.verify_edit import verify_intent_marker
 from src.core.plan_validation import sync_files_to_change_from_edit_steps
 from src.core.schemas import ExecutionPlan, ToolResult
-from src.core.semantic_target import ResolvedTarget, is_semantic_edit, resolve_semantic_target
 from src.core.state import AgentState, ExecutionOutput
 from src.core.config import settings
 from src.integrations.cursor.gateway import (
@@ -62,6 +69,7 @@ class ExecutionResult(BaseModel):
     steps_completed: int
     step_results: list[dict[str, Any]]
     plan_deviations: list[str] = []
+    validation_failed_steps: list[int] = Field(default_factory=list)
 
 
 def _load_skills(ticket: dict[str, Any] | None = None) -> str:
@@ -127,71 +135,53 @@ def _cursor_edit_ok(result: CursorEditResult) -> tuple[bool, str]:
     return True, result.text or "edit applied via CursorGateway"
 
 
-def _resolved_target_excerpt(resolved: ResolvedTarget | None, max_lines: int = 30) -> str:
-    """Trim resolved snippet for Cursor edit brief."""
-    if not resolved:
-        return "(target not resolved on disk)"
-    lines = resolved.snippet.splitlines()
-    if len(lines) > max_lines:
-        return "\n".join(lines[:max_lines]) + "\n..."
-    return resolved.snippet
-
-
 def _build_edit_instruction(
     step: dict[str, Any],
     plan: ExecutionPlan,
     *,
-    resolved: ResolvedTarget | None = None,
     retry_note: str = "",
 ) -> str:
-    """Build semantic edit instruction for Cursor."""
+    """Build instruction-based edit brief for Cursor — planner instruction is verbatim."""
     path = _step_path(step)
+    instruction = (step.get("instruction") or step.get("change") or step.get("target") or "").strip()
     parts = [
         f"Ticket: {plan.ticket_id}",
         f"File: {path}",
         f"Reason: {step.get('reason') or step.get('why', '')}",
+        "",
+        "## Instruction (from planner — includes acceptance criteria)",
+        instruction,
+        "",
     ]
-    if is_semantic_edit(step):
-        target_type = step.get("target_type") or "block"
-        target_name = step.get("target_name") or ""
-        approx = step.get("approximate_line")
-        parent = step.get("parent_name")
-        parts.append(
-            f"Target: {target_type} `{target_name}`"
-            + (f" (lines ~{approx})" if approx else "")
-            + (f", parent: {parent}" if parent else "")
-        )
-        parts.append(f"Instruction: {step.get('instruction') or step.get('change') or step.get('target')}")
-        if resolved:
-            parts.append(
-                f"Resolved context (lines {resolved.start_line}-{resolved.end_line} from disk):"
-            )
-            parts.append(_resolved_target_excerpt(resolved))
-    else:
-        parts.append(f"Change: {step.get('change') or step.get('target') or step.get('what', '')}")
-        old_s = step.get("old_string") or ""
-        new_s = step.get("new_string") or ""
-        if old_s or new_s:
-            parts.append("Action: REPLACE the following exact text:")
-            parts.append(old_s)
-            parts.append("WITH:")
-            parts.append(new_s)
-    if step.get("intent_marker"):
-        parts.append(f"After edit, file MUST contain intent marker: {step['intent_marker']}")
+    if step.get("approximate_line"):
+        parts.append(f"Approximate location: line ~{step['approximate_line']}")
+    for hint in ("target_type", "target_name", "parent_name"):
+        if step.get(hint):
+            parts.append(f"Semantic target — {hint}: {step[hint]}")
+    if step.get("caution_flag"):
+        parts.extend([
+            "",
+            "## Ambiguity caution (from planner — NOT an error)",
+            step["caution_flag"],
+            "The file path is correct. target_type/target_name may match multiple locations.",
+            "Use the instruction and security context to fix the correct occurrence.",
+            "Do not treat ambiguity as a failure condition.",
+        ])
+    marker = (step.get("intent_marker") or "").strip()
+    if marker:
+        parts.append(f"Mechanical constraint: after edit, file MUST contain intent_marker: {marker}")
+    parts.append("Mechanical constraint: modify ONLY this file. Preserve code style.")
     if retry_note:
         parts.append(retry_note)
-    parts.append("Apply ONLY this change. Do not modify unrelated files. Preserve code style.")
     return "\n".join(parts)
 
 
 def _semantic_edit_metadata(
     step: dict[str, Any],
     plan: ExecutionPlan,
-    *,
-    resolved: ResolvedTarget | None = None,
 ) -> dict[str, Any]:
-    """Metadata payload for gateway.edit — semantic fields, no patches."""
-    meta: dict[str, Any] = {
+    """Metadata payload for gateway.edit — instruction fields, no patches."""
+    return {
         "step_id": step.get("step_id"),
         "ticket_id": plan.ticket_id,
         "intent_marker": step.get("intent_marker"),
@@ -200,32 +190,69 @@ def _semantic_edit_metadata(
         "target_name": step.get("target_name"),
         "approximate_line": step.get("approximate_line"),
         "parent_name": step.get("parent_name"),
+        "caution_flag": step.get("caution_flag"),
         "end_line": step.get("end_line"),
-        "create_file": bool(
-            plan.create_files and step.get("target_type") == "file"
-        ),
+        "create_file": bool(plan.create_files and step.get("target_type") == "file"),
     }
-    if resolved:
-        meta["resolved_start_line"] = resolved.start_line
-        meta["resolved_end_line"] = resolved.end_line
-    return meta
 
 
-def _apply_edit_via_cursor(
+def _apply_batched_edits(
     gateway: CursorGateway,
-    step: dict[str, Any],
     plan: ExecutionPlan,
+    steps: list[dict[str, Any]],
     *,
-    repo_path: str,
-    retry_note: str = "",
+    retry_notes: dict[int, str] | None = None,
+    batch_pass: int = 1,
 ) -> tuple[bool, str]:
-    """Apply semantic edit via CursorGateway."""
-    path = _step_path(step)
-    resolved = resolve_semantic_target(repo_path, step) if is_semantic_edit(step) else None
-    instruction = _build_edit_instruction(step, plan, resolved=resolved, retry_note=retry_note)
-    metadata = _semantic_edit_metadata(step, plan, resolved=resolved)
-    result = gateway.edit(instruction, files=[path], metadata=metadata)
+    """Send the given EDIT steps to Cursor in one consolidated call."""
+    if not steps:
+        return True, "no edits to batch"
+    notes = retry_notes or {}
+    files = list(dict.fromkeys(_step_path(s) for s in steps if _step_path(s)))
+    edits = []
+    for step in steps:
+        meta = _semantic_edit_metadata(step, plan)
+        edits.append(meta | {"file": _step_path(step)})
+    instruction = _build_batched_instruction(plan, steps, retry_notes=notes)
+    metadata = {
+        "ticket_id": plan.ticket_id,
+        "create_files": plan.create_files,
+        "edits": edits,
+        "semantic": True,
+        "batch_pass": batch_pass,
+    }
+    _log.info(
+        "cursor_batched_edit",
+        files=files,
+        edit_count=len(edits),
+        batch_pass=batch_pass,
+    )
+    result = gateway.edit(instruction, files=files, metadata=metadata)
     return _cursor_edit_ok(result)
+
+
+def _build_batched_instruction(
+    plan: ExecutionPlan,
+    steps: list[dict[str, Any]],
+    *,
+    retry_notes: dict[int, str] | None = None,
+) -> str:
+    """Build batched instruction-based edit brief."""
+    notes = retry_notes or {}
+    parts = [
+        f"Apply ALL of the following edits in a single pass for ticket {plan.ticket_id} "
+        f"(risk={plan.risk_level}).",
+        "Do not stop after the first file — every edit below must be applied.",
+        "",
+    ]
+    for step in steps:
+        path = _step_path(step)
+        sid = step.get("step_id", 0)
+        parts.append(f"--- [step {sid}] {path} ---")
+        parts.append(_build_edit_instruction(step, plan, retry_note=notes.get(sid, "")))
+        parts.append("")
+    parts.append("Do not modify unrelated files. Preserve code style.")
+    return "\n".join(parts)
 
 
 def _edit_steps(plan: ExecutionPlan) -> list[dict[str, Any]]:
@@ -237,93 +264,57 @@ def _edit_steps(plan: ExecutionPlan) -> list[dict[str, Any]]:
     ]
 
 
-def _independent_edits(plan: ExecutionPlan) -> bool:
-    """True when every file has at most one EDIT (no chained same-file edits).
-
-    Chained edits depend on prior edits already being on disk, so they can only be
-    applied sequentially — batching them into one call would break ordering.
-    """
-    counts: dict[str, int] = {}
-    for step in _edit_steps(plan):
-        path = _step_path(step)
-        counts[path] = counts.get(path, 0) + 1
-    return bool(counts) and all(count == 1 for count in counts.values())
-
-
-def _build_batched_instruction(
-    plan: ExecutionPlan,
-    steps: list[dict[str, Any]],
-    *,
-    repo_path: str,
-) -> str:
-    """Build batched semantic edit instruction."""
-    parts = [
-        f"Apply ALL of the following edits in a single pass for ticket {plan.ticket_id} "
-        f"(risk={plan.risk_level}).",
-        "Do not stop after the first file — every edit below must be applied.",
-        "",
+def _format_aggregate_edit_failure(failures: list[FailedEditStep]) -> str:
+    """Build a RuntimeError message listing every step still failing after batch passes."""
+    lines = [
+        f"Executor edit validation failed after {settings.cursor_max_edit_attempts} "
+        f"batch pass(es). {len(failures)} step(s) still failing:"
     ]
-    for step in steps:
-        path = _step_path(step)
-        resolved = resolve_semantic_target(repo_path, step) if is_semantic_edit(step) else None
-        parts.append(f"--- [step {step.get('step_id')}] {path} ---")
-        parts.append(_build_edit_instruction(step, plan, resolved=resolved))
-        parts.append("")
-    parts.append("Do not modify unrelated files. Preserve code style.")
-    return "\n".join(parts)
+    for failure in failures:
+        lines.append(f"  - step {failure.step_id} ({failure.file}): {failure.reason}")
+        if failure.missing_requirements:
+            lines.append(f"    missing: {failure.missing_requirements}")
+    return "\n".join(lines)
 
 
-def _apply_batched_edits(
-    gateway: CursorGateway,
-    plan: ExecutionPlan,
-    *,
-    repo_path: str,
-) -> tuple[bool, str]:
-    """Send every EDIT step to Cursor in one consolidated call."""
-    steps = _edit_steps(plan)
-    if not steps:
-        return True, "no edits to batch"
-    files = list(dict.fromkeys(_step_path(s) for s in steps if _step_path(s)))
-    edits = []
-    for step in steps:
-        resolved = resolve_semantic_target(repo_path, step) if is_semantic_edit(step) else None
-        meta = _semantic_edit_metadata(step, plan, resolved=resolved)
-        edits.append(meta | {"file": _step_path(step)})
-    instruction = _build_batched_instruction(plan, steps, repo_path=repo_path)
-    metadata = {
-        "ticket_id": plan.ticket_id,
-        "create_files": plan.create_files,
-        "edits": edits,
-        "semantic": True,
-    }
-    _log.info("cursor_batched_edit", files=files, edit_count=len(edits))
-    result = gateway.edit(instruction, files=files, metadata=metadata)
-    return _cursor_edit_ok(result)
-
-
-def _accept_batched_edit(
-    registry: ToolRegistry,
+def _outcome_from_result(
     step: dict[str, Any],
-    plan: ExecutionPlan,
+    result: ValidationResult,
     *,
-    llm: BaseChatModel,
-    validation_policy: str,
-    pre_edit: PreEditCapture,
-) -> tuple[bool, str, list[str]]:
-    """Validate that the batched Cursor call already applied this EDIT."""
-    modified = read_modified_snippet(registry.cwd, step, pre_edit)
-    result = validate_edit(
-        llm,
-        plan,
-        step,
-        original_snippet=pre_edit.original_snippet,
-        modified_snippet=modified,
-        validation_policy=validation_policy,
-        attempt=1,
+    required_repair: bool = False,
+    output: str = "",
+) -> EditStepOutcome:
+    """Wrap a ValidationResult as an EditStepOutcome."""
+    step_id = step.get("step_id", 0)
+    path = _step_path(step)
+    deviations: list[str] = []
+    if required_repair:
+        deviations.append(f"step {step_id}: edit required batch pass 2 repair")
+    msg = output or (result.reason if result.passed else f"Edit incomplete: {result.reason}")
+    return EditStepOutcome(
+        step_id=step_id,
+        step=step,
+        file=path,
+        passed=result.passed,
+        result=result,
+        output=msg,
+        deviations=deviations,
+        required_repair=required_repair,
     )
-    if result.passed:
-        return True, "applied via single batched cursor call", []
-    return False, result.reason, list(result.missing_requirements)
+
+
+def _failed_from_result(step: dict[str, Any], result: ValidationResult) -> FailedEditStep:
+    """Wrap a failed ValidationResult as a FailedEditStep."""
+    step_id = step.get("step_id", 0)
+    return FailedEditStep(
+        step_id=step_id,
+        file=_step_path(step),
+        step=step,
+        reason=result.reason,
+        missing_requirements=list(result.missing_requirements),
+        retry_note=build_retry_note(result),
+        result=result,
+    )
 
 
 def _log_step(step_id: int, action: str, file_path: str) -> None:
@@ -511,16 +502,11 @@ def _validate_edit_intent(
     if not ok_read:
         return False, content
 
-    if is_semantic_edit(step):
+    if is_instruction_edit(step):
         intent_marker = (step.get("intent_marker") or "").strip()
         if intent_marker and intent_marker not in content:
             return False, f"intent marker not found: {intent_marker}"
         return True, "edit intent validated"
-
-    planned_new = step.get("new_string") or ""
-    planned_old = step.get("old_string") or ""
-    if planned_old and planned_new and planned_old == planned_new:
-        return False, "planned patch has no changes"
 
     errors: list[str] = []
 
@@ -642,10 +628,8 @@ def _execute_verify(
         ok, out, code = verify_intent_marker(registry.cwd, path, intent_marker)
         if not ok:
             return False, out
-        ok_read, content = _read_file_snippet(registry, path)
-        if ok_read and intent_marker in content:
-            _log.info("verification", mode="intent_marker", path=path, marker=intent_marker[:80])
-            return True, f"intent marker verified: {intent_marker}"
+        _log.info("verification", mode="intent_marker", path=path, marker=intent_marker[:80])
+        return True, f"intent marker verified: {intent_marker}"
 
     patterns, forbidden = _resolve_verify_patterns(step, plan)
 
@@ -686,6 +670,12 @@ def _assert_snapshot_consistency(plan: ExecutionPlan, repo_path: str) -> None:
     if not planner_head:
         return
     snap = git_repo_snapshot(repo_path)
+    if not snap["is_git"]:
+        raise RuntimeError(
+            f"Executor worktree is not a git repository at {repo_path}. "
+            f"Planner used HEAD {planner_head[:12]}. "
+            "The worktree directory may be corrupt (missing .git) — remove it and retry."
+        )
     if not snapshots_match(planner_head, snap["head"]):
         raise RuntimeError(
             f"Repository snapshot mismatch: planner HEAD {planner_head[:12]} != "
@@ -694,103 +684,244 @@ def _assert_snapshot_consistency(plan: ExecutionPlan, repo_path: str) -> None:
         )
 
 
-def _execute_edit(
+def _read_full_file(registry: ToolRegistry, path: str) -> tuple[bool, str]:
+    """Read entire file content for structural checks."""
+    ok, content = _read_file_snippet(registry, path)
+    return ok, content
+
+
+def _evaluate_post_edit(
     registry: ToolRegistry,
     step: dict[str, Any],
     plan: ExecutionPlan,
     *,
-    create_files: bool,
     llm: BaseChatModel,
-    gateway: CursorGateway,
-    ticket: dict[str, Any] | None = None,
-    validation_policy: str = "",
-    pre_edit: PreEditCapture | None = None,
-    cursor_attempts_used: int = 0,
-    skip_initial_cursor: bool = False,
-) -> tuple[bool, str, list[str]]:
-    """Execute EDIT via Cursor with LLM semantic validation and configurable retry budget."""
+    pre_edit: PreEditCapture,
+    policy: str,
+    prior_failure: ValidationResult | None,
+    validation_attempt: int,
+    pre_hash: str,
+    post_hash: str,
+    cursor_called: bool,
+) -> ValidationResult:
+    """Run noop, structural, then progressive LLM validation after a Cursor edit."""
     path = _step_path(step)
-    deviations: list[str] = []
-    step_id = step.get("step_id", 0)
     repo_path = registry.cwd
-    max_attempts = settings.cursor_max_edit_attempts
-    policy = validation_policy or load_validation_policy(ticket)
 
-    _log.info(
-        "executor_edit_start",
-        step_id=step_id,
-        file=path,
-        semantic=is_semantic_edit(step),
-        cursor_attempts_used=cursor_attempts_used,
-    )
+    if cursor_called and pre_hash == post_hash:
+        from src.agents.executor.validation import _validation_snippets
+        from src.agents.executor.validation_context import ContextLevel
 
-    if pre_edit is None:
-        pre_edit = capture_pre_edit(repo_path, step)
-
-    ok_read, read_err = _read_file_snippet(registry, path)
-    if not ok_read and not (create_files and step.get("target_type") == "file"):
-        return False, read_err, deviations
-
-    last_out = ""
-    prior_failure: ValidationResult | None = None
-    retry_note = ""
-
-    for attempt_num in range(cursor_attempts_used + 1, max_attempts + 1):
-        should_call_cursor = not (
-            skip_initial_cursor and attempt_num == cursor_attempts_used + 1
+        original_snippet, modified_snippet, _, _ = _validation_snippets(
+            repo_path, step, pre_edit, level=ContextLevel.DIFF_SEMANTIC
         )
-
-        if should_call_cursor:
-            ok, last_out = _apply_edit_via_cursor(
-                gateway, step, plan, repo_path=repo_path, retry_note=retry_note
-            )
-            post_hash = file_content_hash(repo_path, path)
-            _log.info(
-                "executor_post_edit_file",
-                step_id=step_id,
-                file=path,
-                file_sha256=post_hash,
-                edit_ok=ok,
-                cursor_attempt=attempt_num,
-            )
-            if not ok:
-                is_noop = "No changes made" in last_out or "identical content" in last_out
-                if not is_noop:
-                    return False, last_out, deviations
-
-        modified_snippet = read_modified_snippet(repo_path, step, pre_edit)
-        validation_attempt = attempt_num - cursor_attempts_used
-        result = validate_edit(
+        noop_check = validate_edit(
             llm,
             plan,
             step,
-            original_snippet=pre_edit.original_snippet,
+            original_snippet=original_snippet,
             modified_snippet=modified_snippet,
             validation_policy=policy,
             prior_failure=prior_failure,
             attempt=validation_attempt,
         )
+        if noop_check.passed:
+            return noop_check
+        return noop_failure_result()
 
+    structural_warnings: list[str] = []
+    intent_marker_in_file: bool | None = None
+    ok_read, content = _read_full_file(registry, path)
+    if ok_read:
+        marker = (step.get("intent_marker") or "").strip()
+        if marker:
+            intent_marker_in_file = marker in content
+        structural_errors = check_file_structure(path, content)
+        if structural_errors:
+            if is_python_hard_fail(path):
+                return structural_failure_result(structural_errors)
+            structural_warnings = structural_errors
+
+    return validate_edit_progressive(
+        llm,
+        plan,
+        step,
+        repo_path=repo_path,
+        pre_edit=pre_edit,
+        validation_policy=policy,
+        prior_failure=prior_failure,
+        structural_warnings=structural_warnings or None,
+        intent_marker_in_file=intent_marker_in_file,
+        attempt=validation_attempt,
+    )
+
+
+def _validate_all_edits(
+    registry: ToolRegistry,
+    plan: ExecutionPlan,
+    steps: list[dict[str, Any]],
+    *,
+    llm: BaseChatModel,
+    validation_policy: str,
+    pre_edit_by_step: dict[int, PreEditCapture],
+    pre_hash_by_step: dict[int, str],
+    batch_pass: int = 1,
+    required_repair_step_ids: set[int] | None = None,
+) -> tuple[list[EditStepOutcome], list[FailedEditStep]]:
+    """Validate each EDIT step after a batch Cursor call."""
+    passed: list[EditStepOutcome] = []
+    failed: list[FailedEditStep] = []
+    repair_ids = required_repair_step_ids or set()
+
+    for step in steps:
+        step_id = step.get("step_id", 0)
+        path = _step_path(step)
+        pre_edit = pre_edit_by_step.get(step_id)
+        if pre_edit is None:
+            pre_edit = capture_pre_edit(registry.cwd, step)
+        pre_hash = pre_hash_by_step.get(step_id, file_content_hash(registry.cwd, path))
+        post_hash = file_content_hash(registry.cwd, path)
+
+        result = _evaluate_post_edit(
+            registry,
+            step,
+            plan,
+            llm=llm,
+            pre_edit=pre_edit,
+            policy=validation_policy,
+            prior_failure=None,
+            validation_attempt=batch_pass,
+            pre_hash=pre_hash,
+            post_hash=post_hash,
+            cursor_called=True,
+        )
+
+        log_edit_outcome(
+            ticket_id=plan.ticket_id,
+            step_id=step_id,
+            file_path=path,
+            retry_count=batch_pass - 1,
+            result=result,
+            noop_diff=pre_hash == post_hash and not result.passed,
+        )
+
+        required_repair = step_id in repair_ids and result.passed
         if result.passed:
-            if attempt_num > cursor_attempts_used + 1:
-                deviations.append(f"step {step_id}: semantic edit required one retry")
-            return True, last_out or result.reason, deviations
-
-        if attempt_num < max_attempts:
-            _log.info(
-                "executor_validation_retry",
-                ticket_id=plan.ticket_id,
-                step_id=step_id,
-                file=path,
-                cursor_attempt=attempt_num + 1,
-                prior_reason=result.reason,
+            output = (
+                "applied via batched cursor call (pass 2 repair)"
+                if required_repair
+                else "applied via batched cursor call"
             )
-            prior_failure = result
-            retry_note = build_retry_note(result)
+            passed.append(
+                _outcome_from_result(
+                    step,
+                    result,
+                    required_repair=required_repair,
+                    output=output,
+                )
+            )
         else:
-            return False, f"Edit incomplete: {result.reason}", list(result.missing_requirements)
+            failed.append(_failed_from_result(step, result))
 
-    return False, "Edit incomplete: max cursor attempts exhausted", deviations
+    return passed, failed
+
+
+def _run_edit_batch_phase(
+    registry: ToolRegistry,
+    plan: ExecutionPlan,
+    *,
+    gateway: CursorGateway,
+    llm: BaseChatModel,
+    validation_policy: str,
+    repo_path: str,
+    continue_on_validation_failure: bool = False,
+) -> tuple[dict[int, EditStepOutcome], list[str], list[FailedEditStep]]:
+    """Apply all EDIT steps in up to two batch Cursor calls; validate between passes."""
+    edit_steps = _edit_steps(plan)
+    edit_outcomes: dict[int, EditStepOutcome] = {}
+    plan_deviations: list[str] = []
+    if not edit_steps:
+        return edit_outcomes, plan_deviations, []
+
+    max_passes = settings.cursor_max_edit_attempts
+    pre_edit_by_step: dict[int, PreEditCapture] = {}
+    pre_hash_by_step: dict[int, str] = {}
+
+    for step in edit_steps:
+        sid = step.get("step_id", 0)
+        pre_edit_by_step[sid] = capture_pre_edit(repo_path, step)
+        pre_hash_by_step[sid] = file_content_hash(repo_path, _step_path(step))
+
+    b_ok, b_msg = _apply_batched_edits(gateway, plan, edit_steps, batch_pass=1)
+    if b_ok:
+        plan_deviations.append("cursor: batch pass 1 applied all edits")
+    else:
+        plan_deviations.append(f"cursor: batch pass 1 incomplete ({b_msg})")
+
+    passed, failed = _validate_all_edits(
+        registry,
+        plan,
+        edit_steps,
+        llm=llm,
+        validation_policy=validation_policy,
+        pre_edit_by_step=pre_edit_by_step,
+        pre_hash_by_step=pre_hash_by_step,
+        batch_pass=1,
+    )
+    for outcome in passed:
+        edit_outcomes[outcome.step_id] = outcome
+
+    still_failed = failed
+    if failed and max_passes >= 2:
+        retry_notes = {f.step_id: f.retry_note for f in failed}
+        failed_step_ids = {f.step_id for f in failed}
+        for failure in failed:
+            sid = failure.step_id
+            pre_edit_by_step[sid] = capture_pre_edit(repo_path, failure.step)
+            pre_hash_by_step[sid] = file_content_hash(repo_path, failure.file)
+
+        repair_steps = [f.step for f in failed]
+        r_ok, r_msg = _apply_batched_edits(
+            gateway,
+            plan,
+            repair_steps,
+            retry_notes=retry_notes,
+            batch_pass=2,
+        )
+        if r_ok:
+            plan_deviations.append("cursor: batch pass 2 repair applied for failed steps")
+        else:
+            plan_deviations.append(f"cursor: batch pass 2 incomplete ({r_msg})")
+
+        passed2, still_failed = _validate_all_edits(
+            registry,
+            plan,
+            repair_steps,
+            llm=llm,
+            validation_policy=validation_policy,
+            pre_edit_by_step=pre_edit_by_step,
+            pre_hash_by_step=pre_hash_by_step,
+            batch_pass=2,
+            required_repair_step_ids=failed_step_ids,
+        )
+        for outcome in passed2:
+            edit_outcomes[outcome.step_id] = outcome
+
+    if still_failed:
+        if continue_on_validation_failure:
+            for failure in still_failed:
+                edit_outcomes[failure.step_id] = _outcome_from_result(
+                    failure.step,
+                    failure.result,
+                    output=f"Edit incomplete: {failure.reason}",
+                )
+            plan_deviations.append(
+                f"edit validation: {len(still_failed)} step(s) failed after batch passes"
+            )
+            return edit_outcomes, plan_deviations, still_failed
+        raise RuntimeError(_format_aggregate_edit_failure(still_failed))
+
+    return edit_outcomes, plan_deviations, []
 
 
 def _execute_step(
@@ -801,18 +932,17 @@ def _execute_step(
     gateway: CursorGateway,
     ticket: dict[str, Any] | None = None,
     *,
-    batched: bool = False,
-    validation_policy: str = "",
-    pre_edit_by_step: dict[int, PreEditCapture] | None = None,
-) -> tuple[bool, str, list[str]]:
+    edit_outcomes: dict[int, EditStepOutcome] | None = None,
+) -> tuple[bool, str, list[str], dict[str, Any] | None]:
     """Execute Step for this module."""
+    del llm, gateway, ticket
     action = step.get("action", "")
     path = _step_path(step)
     step_id = step.get("step_id", 0)
     _log_step(step_id, action, path)
     deviations: list[str] = []
-    policy = validation_policy or load_validation_policy(ticket)
-    pre_edit_map = pre_edit_by_step or {}
+    edit_outcome: dict[str, Any] | None = None
+    outcomes = edit_outcomes or {}
 
     try:
         if action == "READ":
@@ -820,44 +950,14 @@ def _execute_step(
         elif action == "VERIFY":
             ok, out = _execute_verify(registry, step, plan)
         elif action == "EDIT":
-            if batched:
-                pre_edit = pre_edit_map.get(step_id) or capture_pre_edit(registry.cwd, step)
-                ok, out, deviations = _accept_batched_edit(
-                    registry,
-                    step,
-                    plan,
-                    llm=llm,
-                    validation_policy=policy,
-                    pre_edit=pre_edit,
-                )
-                if not ok:
-                    ok, out, repair_devs = _execute_edit(
-                        registry,
-                        step,
-                        plan,
-                        create_files=plan.create_files,
-                        llm=llm,
-                        gateway=gateway,
-                        ticket=ticket,
-                        validation_policy=policy,
-                        pre_edit=pre_edit,
-                        cursor_attempts_used=1,
-                        skip_initial_cursor=True,
-                    )
-                    deviations = deviations + repair_devs + [
-                        f"step {step_id}: batched edit needed per-file repair"
-                    ]
+            outcome = outcomes.get(step_id)
+            if outcome is None:
+                ok, out = False, f"No edit outcome recorded for step {step_id}"
             else:
-                ok, out, deviations = _execute_edit(
-                    registry,
-                    step,
-                    plan,
-                    create_files=plan.create_files,
-                    llm=llm,
-                    gateway=gateway,
-                    ticket=ticket,
-                    validation_policy=policy,
-                )
+                ok = outcome.passed
+                out = outcome.output
+                deviations = list(outcome.deviations)
+                edit_outcome = outcome.to_telemetry_dict(plan.ticket_id)
         elif action == "RUN_TESTS":
             ok, out = _execute_run_tests(registry, step)
         else:
@@ -869,7 +969,7 @@ def _execute_step(
         ) from e
 
     _log_step_result(step_id, ok, out)
-    return ok, out, deviations
+    return ok, out, deviations, edit_outcome
 
 
 def _assert_file_allowed(step: dict[str, Any], plan: ExecutionPlan) -> None:
@@ -917,8 +1017,9 @@ def run_executor(
     gateway: CursorGateway | None = None,
     dry_run: bool = False,
     ticket: dict[str, Any] | None = None,
+    continue_on_edit_validation_failure: bool = False,
 ) -> ExecutionResult:
-    """Execute all plan steps in order; stop on first failure."""
+    """Execute all plan steps in order; stop on first failure unless continue mode."""
     configure_logging()
     plan = _normalize_executor_plan(plan, repo_path)
     log_repo_snapshot(_log, "start", repo_path, ticket_id=plan.ticket_id, steps=len(plan.execution_steps))
@@ -941,50 +1042,47 @@ def run_executor(
     changed_files: set[str] = set()
     plan_deviations: list[str] = []
 
-    # Single-call contract: when edits are independent (one EDIT per file), send them all
-    # to Cursor in ONE consolidated call up front. Chained same-file edits fall back to the
-    # sequential per-step path because they depend on prior edits already being on disk.
-    batched = _independent_edits(plan)
-    pre_edit_by_step: dict[int, PreEditCapture] = {}
-    if batched:
-        for edit_step in _edit_steps(plan):
-            sid = edit_step.get("step_id", 0)
-            pre_edit_by_step[sid] = capture_pre_edit(repo_path, edit_step)
-        b_ok, b_msg = _apply_batched_edits(gateway, plan, repo_path=repo_path)
-        if b_ok:
-            plan_deviations.append("cursor: all edits applied in a single batched call")
-        else:
-            plan_deviations.append(
-                f"cursor: batched edit incomplete ({b_msg}); repairing failed files per-step"
-            )
-
     try:
+        edit_outcomes, edit_deviations, validation_failures = _run_edit_batch_phase(
+            registry,
+            plan,
+            gateway=gateway,
+            llm=llm,
+            validation_policy=validation_policy,
+            repo_path=repo_path,
+            continue_on_validation_failure=continue_on_edit_validation_failure,
+        )
+        plan_deviations.extend(edit_deviations)
+        validation_failed_steps = [f.step_id for f in validation_failures]
+
         for raw_step in plan.execution_steps:
             step = _step_to_dict(raw_step)
             _assert_file_allowed(step, plan)
-            ok, out, deviations = _execute_step(
+            ok, out, deviations, edit_outcome = _execute_step(
                 registry,
                 step,
                 plan,
                 llm,
                 gateway,
                 ticket=ticket,
-                batched=batched,
-                validation_policy=validation_policy,
-                pre_edit_by_step=pre_edit_by_step,
+                edit_outcomes=edit_outcomes,
             )
             plan_deviations.extend(deviations)
-            step_results.append(
-                {
-                    "step_id": step.get("step_id"),
-                    "action": step.get("action"),
-                    "file": _step_path(step),
-                    "ok": ok,
-                    "output": out[:500],
-                    "deviations": deviations,
-                }
-            )
+            step_entry: dict[str, Any] = {
+                "step_id": step.get("step_id"),
+                "action": step.get("action"),
+                "file": _step_path(step),
+                "ok": ok,
+                "output": out[:500],
+                "deviations": deviations,
+            }
+            if edit_outcome:
+                step_entry["edit_outcome"] = edit_outcome
+            step_results.append(step_entry)
             if not ok:
+                if continue_on_edit_validation_failure and step.get("action") == "EDIT":
+                    changed_files.add(_step_path(step))
+                    continue
                 raise RuntimeError(
                     f"Executor step {step.get('step_id')} action={step.get('action')!r} "
                     f"file={_step_path(step)!r} failed: {out}"
@@ -999,6 +1097,7 @@ def run_executor(
             steps_completed=len(step_results),
             step_results=step_results,
             plan_deviations=list(dict.fromkeys(plan_deviations)),
+            validation_failed_steps=validation_failed_steps,
         )
         _log.info("complete", ticket_id=plan.ticket_id, steps=result.steps_completed)
         return result

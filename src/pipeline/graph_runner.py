@@ -68,7 +68,6 @@ async def run_graph_until_pause(
     *,
     jira_ticket_id: str,
     thread_id: str,
-    job_id: str,
     user_prompt: str = "",
     repo_path: str | None = None,
 ) -> GraphRunOutcome:
@@ -80,7 +79,6 @@ async def run_graph_until_pause(
         jira_ticket_id=jira_ticket_id,
         user_prompt=user_prompt,
         repo_path=repo_path,
-        job_id=job_id,
     )
 
     tracker = start_pipeline_tracking()

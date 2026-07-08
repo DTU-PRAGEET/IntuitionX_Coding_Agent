@@ -16,7 +16,7 @@ from src.core.logging import configure_logging, get_logger
 from src.core.plan_validation import (
     sync_files_to_change_from_edit_steps,
     validate_execution_plan,
-    validate_semantic_edits,
+    validate_instruction_edits,
 )
 from src.core.file_paths import extract_repo_file_paths_from_texts, repair_repo_from_cursor_temp_clone, remap_cursor_path
 from src.core.repo_snapshot import git_repo_snapshot, log_repo_snapshot
@@ -223,11 +223,11 @@ def run_planner(
                 f"Planner failed for ticket={report.ticket_id!r} repo={repo_path!r}: {e}"
             ) from e
 
-        hard_errors, soft_flags = validate_semantic_edits(plan, repo_path)
+        hard_errors, soft_flags = validate_instruction_edits(plan, repo_path)
         if hard_errors:
-            _log.error("semantic_edit_validation_failed", errors=hard_errors)
+            _log.error("instruction_edit_validation_failed", errors=hard_errors)
             raise ValueError(
-                "Planner produced invalid semantic EDIT steps: " + "; ".join(hard_errors)
+                "Planner produced invalid EDIT steps: " + "; ".join(hard_errors)
             )
 
         validation_flags = _validate_plan_files(plan, repo_path)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional, TYPE_CHECKING
+from typing import Callable, Literal, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from evals.harness.prediction import Prediction
@@ -26,8 +26,10 @@ class EvaluatorSpec:
     Collected in `evaluators/__init__.py`; consumed by `runners/run_eval.score_case`."""
     key: str
     scope: str                   # routing | research | plan | implement
-    fn: "Callable[[EvalCase, Prediction], EvalScore]"
+    fn: "Callable[..., EvalScore]"
     threshold: float = 1.0       # per-case pass cutoff
+    kind: Literal["deterministic", "llm_judge"] = "deterministic"
+    requires_artifact: bool = False
 
 
 def normalize_path(p: str) -> str:

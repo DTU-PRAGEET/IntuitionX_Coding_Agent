@@ -58,7 +58,6 @@ def _load_dataset_examples(
         golden = [c for c in golden if scope in c.eval_scope]
     if mode in ("routing", "research", "plan", "implement"):
         golden = [c for c in golden if c.case_kind == "unit"]
-    # allowed_by_scope = {c.case_id for c in golden}
     #     examples = [
     #         ex
     #         for ex in examples
@@ -115,6 +114,22 @@ def run_langsmith_experiment(
     evaluators = MODE_EVALUATORS[mode]
     examples = _load_dataset_examples(dataset, mode, case_ids, cases_dir=cases_dir)
 
+    if mode in ("integration", "e2e", "implement"):
+        from evals.artifacts.pipeline_result import RunMetadata, allocate_run_dir, now_iso, save_run_metadata
+        from evals.langsmith_adapter import set_langsmith_run_id
+
+        run_id, run_path = allocate_run_dir()
+        set_langsmith_run_id(run_id)
+        save_run_metadata(RunMetadata(
+            run_id=run_id,
+            created_at=now_iso(),
+            mode=mode,
+            cases_path=cases_dir,
+            dry_run=(mode == "implement"),
+            experiment=experiment_prefix or f"week2-{mode}",
+        ))
+        print(f"  artifacts → evals/runs/{run_id}/\n", flush=True)
+
     prefix = experiment_prefix or f"week2-{mode}"
     print(
         f"\nLangSmith experiment: mode={mode} dataset={dataset!r} "
@@ -143,7 +158,7 @@ def main() -> int:
     ap.add_argument(
         "--mode",
         required=True,
-        choices=["routing", "research", "plan", "implement", "e2e"],
+        choices=["routing", "research", "plan", "implement", "integration", "e2e"],
         help="Agent stage to evaluate",
     )
     ap.add_argument(

@@ -7,12 +7,20 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env.local first, then .env
-_env_local = Path(__file__).resolve().parents[2] / ".env.local"
-_env_file = Path(__file__).resolve().parents[2] / ".env"
-if _env_local.exists():
-    load_dotenv(_env_local)
-elif _env_file.exists():
-    load_dotenv(_env_file)
+_root = Path(__file__).resolve().parents[2]
+_env_local = _root / ".env.local"
+_env_file = _root / ".env"
+
+
+def load_project_env() -> None:
+    """Load `.env.local` / `.env` into os.environ. Safe to call from CLI entry points."""
+    if _env_local.exists():
+        load_dotenv(_env_local, override=True)
+    if _env_file.exists():
+        load_dotenv(_env_file, override=False)
+
+
+load_project_env()
 
 
 @dataclass(frozen=True)
@@ -62,7 +70,15 @@ class Settings:
 
     cursor_api_key: str = os.getenv("CURSOR_API_KEY", "")
     cursor_model: str = os.getenv("CURSOR_MODEL", "composer-2.5")
-    cursor_max_edit_attempts: int = int(os.getenv("CURSOR_MAX_EDIT_ATTEMPTS", "2"))
+    cursor_max_edit_attempts: int = int(
+        os.getenv("CURSOR_MAX_EDIT_ATTEMPTS", "2")
+    )  # Whole-plan Cursor batch passes (1 = apply only; 2 = apply + one repair batch)
+    semantic_soft_validation_enabled: bool = (
+        os.getenv("SEMANTIC_SOFT_VALIDATION_ENABLED", "true").lower() == "true"
+    )
+    semantic_warning_density_threshold: float = float(
+        os.getenv("SEMANTIC_WARNING_DENSITY_THRESHOLD", "0.5")
+    )
 
     langchain_tracing: bool = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
     langchain_project: str = os.getenv("LANGCHAIN_PROJECT", "sprinklr-jira-solver-dev")
@@ -70,6 +86,8 @@ class Settings:
     max_research_iterations: int = int(os.getenv("MAX_RESEARCH_ITERATIONS", "5"))
     max_files_per_research_cycle: int = int(os.getenv("MAX_FILES_PER_RESEARCH_CYCLE", "10"))
     max_lines_per_read: int = int(os.getenv("MAX_LINES_PER_READ", "500"))
+
+    api_max_concurrency: int = int(os.getenv("API_MAX_CONCURRENCY", "2"))
 
 
 settings = Settings()

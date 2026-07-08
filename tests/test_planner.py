@@ -20,7 +20,7 @@ from src.agents.planner.agent import (
 from src.agents.planner.tools.builder import build_planner_tools
 from src.core.tool_permissions import get_allowed_tools
 from src.core.schemas import ExecutionPlan, ExecutionStep, ResearchReport
-from src.core.plan_validation import validate_semantic_edits
+from src.core.plan_validation import validate_instruction_edits
 from src.integrations.cursor.gateway import CursorGatewayResult
 from src.integrations.cursor.semantic_plan_runner import build_semantic_plan_prompt
 
@@ -53,7 +53,7 @@ def _semantic_edit_step(**overrides) -> dict:
     return base
 
 
-def test_execution_step_maps_legacy_keys():
+def test_execution_step_maps_legacy_where_keys():
     """Legacy where/what/why keys still normalize."""
     step = ExecutionStep.model_validate(
         {
@@ -62,12 +62,10 @@ def test_execution_step_maps_legacy_keys():
             "where": "foo.py",
             "what": "replace sql",
             "why": "fix injection",
-            "instruction": "fix it",
-            "target_type": "block",
-            "end_line": 5,
+            "instruction": "fix it with acceptance checklist",
             "intent_marker": "FIXED",
-            "old_string": "bad",
-            "new_string": "good",
+            "target_type": "block",
+            "target_name": "fix_region",
         }
     )
     assert step.file == "foo.py"
@@ -75,8 +73,26 @@ def test_execution_step_maps_legacy_keys():
     assert step.reason == "fix injection"
 
 
-def test_execution_step_semantic_edit_requires_instruction_and_marker():
-    """Semantic EDIT requires instruction, target_type, and intent_marker."""
+def test_execution_step_rejects_legacy_patch_fields():
+    with pytest.raises(ValidationError, match="legacy patch"):
+        ExecutionStep(
+            step_id=1,
+            action="EDIT",
+            file="foo.py",
+            target="fix",
+            reason="security",
+            validate="grep clean",
+            instruction="fix it",
+            intent_marker="FIXED",
+            target_type="block",
+            target_name="fix_region",
+            old_string="bad",
+            new_string="good",
+        )
+
+
+def test_execution_step_edit_requires_instruction_and_marker():
+    """Instruction EDIT requires instruction and intent_marker."""
     with pytest.raises(ValidationError, match="instruction"):
         ExecutionStep(
             step_id=1,
@@ -85,8 +101,7 @@ def test_execution_step_semantic_edit_requires_instruction_and_marker():
             target="fix",
             reason="security",
             validate="grep clean",
-            target_type="function",
-            target_name="foo",
+            intent_marker="FIXED",
         )
 
 
@@ -113,13 +128,20 @@ def test_planner_tools_read_grep_find_only(tmp_path):
         registry.dispose()
 
 
+def test_build_semantic_plan_prompt_requires_semantic_targets():
+    report = load_research_report(FIXTURE_REPORT)
+    prompt = build_semantic_plan_prompt(report, str(REPO_ROOT))
+    assert "target_type and target_name" in prompt
+    assert "caution_flag" in prompt
+
+
 def test_build_semantic_plan_prompt_includes_research():
     report = load_research_report(FIXTURE_REPORT)
     prompt = build_semantic_plan_prompt(report, str(REPO_ROOT))
     assert "PLAT-1234" in prompt
     assert "research_output" in prompt
-    assert "target_type" in prompt
-    assert "old_string" in prompt.lower()
+    assert "instruction" in prompt
+    assert "acceptance checklist" in prompt.lower()
 
 
 def test_run_planner_uses_mock_without_cursor(tmp_path):
@@ -136,7 +158,7 @@ def test_run_planner_uses_mock_without_cursor(tmp_path):
     edit_steps = [s for s in plan.execution_steps if s.action == "EDIT"]
     assert len(edit_steps) == 1
     assert edit_steps[0].instruction
-    assert edit_steps[0].target_type
+    assert edit_steps[0].intent_marker
 
 
 def test_run_planner_with_cursor_single_ask(tmp_path, monkeypatch):
@@ -249,11 +271,11 @@ def test_normalize_plan_remaps_temp_clone_paths(tmp_path):
                 target="edit",
                 reason="r",
                 validate="x",
-                target_type="block",
                 approximate_line=1,
-                end_line=1,
-                instruction="Enable autoescape",
+                instruction="Enable autoescape. Acceptance: (1) autoescape=True.",
                 intent_marker="autoescape=True",
+                target_type="assignment",
+                target_name="autoescape",
             ),
             ExecutionStep(
                 step_id=3,
@@ -269,7 +291,7 @@ def test_normalize_plan_remaps_temp_clone_paths(tmp_path):
     )
     plan = _normalize_plan_paths(plan, report, str(tmp_path))
     assert plan.files_to_change == ["sqli/app.py"]
-    hard, _soft = validate_semantic_edits(plan, str(tmp_path))
+    hard, _soft = validate_instruction_edits(plan, str(tmp_path))
     assert hard == []
 
 

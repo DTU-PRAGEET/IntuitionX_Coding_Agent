@@ -1,4 +1,4 @@
-<!-- CHANGELOG (2026-07-03): Semantic EDIT steps — target_type/instruction replace old_string/new_string patches. -->
+<!-- CHANGELOG (2026-07-06): Required semantic targeting — target_type + target_name; caution_flag for ambiguity. -->
 
 ---
 # plan_schema.md
@@ -30,25 +30,23 @@
 | `target` | yes | yes | yes | yes |
 | `reason` | yes | yes | yes | yes |
 | `validate` | yes | yes | yes | yes |
-| `target_type` | — | yes | — | — |
-| `target_name` | — | yes* | — | — |
 | `instruction` | — | yes | — | — |
+| `intent_marker` | — | yes | recommended | — |
+| `target_type` | — | **yes** | — | — |
+| `target_name` | — | **yes** | — | — |
 | `approximate_line` | optional | optional | — | — |
-| `end_line` | — | block only | — | — |
+| `caution_flag` | — | optional* | — | — |
 | `parent_name` | — | optional | — | — |
 | `occurrence_index` | — | optional | — | — |
-| `intent_marker` | — | yes | recommended | — |
 | `change` | — | recommended | — | — |
 | `read_start_line` | optional | — | — | — |
 | `read_end_line` | optional | — | — | — |
 
-\* `target_name` optional for `target_type=file` or `block`.
+\* `caution_flag` required when READ shows the target symbol appears more than once in the file.
 
-### target_type values
+`target_type` values: `function`, `method`, `class`, `variable`, `assignment`, `import`, `block`, `file`.
 
-`function` | `method` | `class` | `variable` | `assignment` | `import` | `block` | `file`
-
-## Example Plan (semantic EDIT)
+## Example Plan (instruction-based EDIT with semantic targeting)
 
 ```json
 {
@@ -72,10 +70,10 @@
       "target": "Parameterize JWT secret",
       "reason": "Fix hypothesis rank=1: committed secret",
       "validate": "grep for os.environ",
+      "approximate_line": 120,
       "target_type": "function",
       "target_name": "validate_user",
-      "approximate_line": 120,
-      "instruction": "Replace the hardcoded JWT secret with an environment variable.",
+      "instruction": "In validate_user, replace the hardcoded JWT secret with an environment variable. Do not change public API signatures. Acceptance: (1) os.environ or equivalent used, (2) no hardcoded secret string, (3) function still returns token.",
       "intent_marker": "os.environ",
       "change": "Use env var for JWT secret"
     },
@@ -97,12 +95,32 @@
 }
 ```
 
+## Example Plan (duplicate symbol with caution_flag)
+
+```json
+{
+  "step_id": 2,
+  "action": "EDIT",
+  "file": "frontend/src/app/search-result/search-result.component.ts",
+  "target": "Fix searchValue sanitizer bypass",
+  "reason": "Fix hypothesis rank=1: direct assignment bypasses sanitizer",
+  "validate": "grep for bypassSecurityTrustHtml",
+  "target_type": "variable",
+  "target_name": "this.searchValue",
+  "approximate_line": 42,
+  "caution_flag": "CAUTION: 'this.searchValue' appears 4 times (lines 42, 67, 89, 112). The security issue is the direct assignment in ngOnInit (~line 42). Other occurrences may be test mocks — do not fail if unchanged.",
+  "instruction": "In ngOnInit, stop assigning user input directly to this.searchValue; route through DomSanitizer. Do not modify test mocks. Acceptance: (1) sanitizer used, (2) no direct bypass, (3) component still renders.",
+  "intent_marker": "bypassSecurityTrustHtml"
+}
+```
+
 ## Triad Validation Checklist
 
 Before emitting, confirm for each modified file:
 - [ ] Every hypothesis rank has a corresponding step block
 - [ ] READ step immediately before EDIT on same `file`
 - [ ] VERIFY step immediately after EDIT on same `file`
-- [ ] EDIT has `instruction`, `target_type`, `intent_marker`
-- [ ] Semantic target resolves uniquely on disk (use `parent_name` / `occurrence_index` if ambiguous)
+- [ ] EDIT has `instruction` with inline acceptance checklist and `intent_marker`
+- [ ] EDIT has `target_type` and `target_name`
+- [ ] EDIT has `caution_flag` when target symbol appears multiple times
 - [ ] All `file` paths ∈ `files_to_change` (unless `create_files=true`)

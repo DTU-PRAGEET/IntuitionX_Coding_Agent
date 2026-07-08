@@ -242,23 +242,52 @@ python -m evals.runners.run_eval --mode implement \
 
 ---
 
-## 5. Full pipeline (e2e)
+## 5. Integration pipeline (recommended — one Cursor run, LLM judges offline)
 
-**Runs:** routing → research → planner → executor  
-**Evaluates (LangSmith e2e mode):** all five scorers  
+**Runs once:** routing → research → planner → executor  
+**Captures:** `evals/runs/run_XXX/artifacts/{case_id}.json` (immutable)  
+**Evaluates:** `planner_preflight`, `planner_judge`, `executor_preflight`, `executor_judge` (+ routing/research when in scope)  
+**Legacy evaluators** (`fix_type_match`, `patch_contains`, …) still used for offline fixture scoring (`--mode score`).
 
-### Unit e2e (21 cases)
+### Unit integration (18 security cases)
 
 ```bash
+# Full pipeline + artifact capture + LLM judges
 make evals
 # or
-python -m evals.runners.run_eval --mode e2e \
+python -m evals.runners.run_eval --mode integration \
   --cases evals/golden/unit_test \
-  --no-dry-run \
-  --out evals/reports/e2e
+  --no-dry-run
+
+# Capture artifacts only (skip LLM judge during run)
+python -m evals.runners.run_eval --mode integration \
+  --cases evals/golden/unit_test --no-dry-run --skip-judge
+
+# Judge saved run offline (no Cursor)
+make evals-integration-judge RUN_ID=run_001
+# or
+python -m evals.runners.run_judge_eval --run-id run_001 --gate
+
+# Compare two runs
+python -m evals.runners.compare_runs run_012 run_018
 ```
 
-### Integration e2e (5 single-repo, multi-issue cases)
+### LangSmith integration (judges as evaluators)
+
+```bash
+python -m evals.runners.run_langsmith --mode integration \
+  --experiment-prefix integration-judge \
+  --case-ids G-01
+```
+
+Judge model tier: `EVAL_JUDGE_TIER=dev` (Gemini Flash) or `benchmark` (GPT-5.2).
+
+---
+
+## 6. Full pipeline (e2e — alias)
+
+**Runs:** routing → research → planner → executor (same as integration)  
+**Evaluates (LangSmith):** routing + research + planner_judge + executor_judge
 
 Each integration case bundles multiple security findings from one Tier-1 benchmark repo
 (DVPWA, VAmPI, WebGoat, Juice Shop, WrongSecrets — see `docs/Testing_repos_info/`).
@@ -266,14 +295,14 @@ Each integration case bundles multiple security findings from one Tier-1 benchma
 ```bash
 make evals-integration
 # or
-python -m evals.runners.run_eval --mode e2e \
+python -m evals.runners.run_eval --mode integration \
   --cases evals/golden/integration_test \
   --no-dry-run \
   --out evals/reports/integration
 
-# Single integration smoke
+# Single integration smoke (LangSmith)
 python -m evals.runners.run_langsmith \
-  --mode e2e \
+  --mode integration \
   --dataset IntuitionX-Integration-5-v1 \
   --case-ids I-01 \
   --cases-dir evals/golden/integration_test \
@@ -384,3 +413,38 @@ python -m evals.runners.run_eval --mode score \
 
 Use `--cases evals/golden/unit_test/dvpwa.json` for repo-level unit runs.
 Use `--cases evals/golden/integration_test` for single-repo multi-issue e2e runs.
+
+
+
+
+
+
+
+Unit cases (G-*):
+
+python -m evals.runners.run_langsmith \
+  --mode integration \
+  --dataset IntuitionX-Golden-20-v1 \
+  --cases-dir evals/golden/unit_test \
+  --case-ids G-01,G-03,G-05,G-06,G-08,G-10,G-14,G-17 \
+  --experiment-prefix mixed-10-unit
+
+
+
+
+python -m evals.runners.run_langsmith \
+  --mode integration \
+  --dataset IntuitionX-Golden-20-v1 \
+  --cases-dir evals/golden/unit_test \
+  --case-ids G-02,G-04,G-07,G-09,G-11,G-12,G-13,G-15,G-16,G-18 \
+  --experiment-prefix mixed-10-unit
+
+
+Integration cases (I-*):
+
+python -m evals.runners.run_langsmith \
+  --mode integration \
+  --dataset IntuitionX-Integration-5-v1 \
+  --cases-dir evals/golden/integration_test \
+  --case-ids I-03,I-04 \
+  --experiment-prefix mixed-10-integration

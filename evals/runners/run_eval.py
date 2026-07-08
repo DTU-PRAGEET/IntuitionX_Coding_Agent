@@ -6,6 +6,7 @@ Modes (Milestone 2.3 sub-agent unit evals):
   research   live — research agent only (file identification).
   plan       live — routing + research + planner.
   implement  live — routing + research + planner + executor (dry_run default).
+  integration live — full pipeline + artifact capture (alias of e2e with artifacts).
   e2e        live — full pipeline (implement with dry_run=False).
 
 Examples:
@@ -23,6 +24,12 @@ import json
 from pathlib import Path
 
 from evals.evaluators import EVALUATORS
+from evals.evaluators.base import EvaluatorSpec
+from evals.evaluators.legacy_scoring import (
+    fix_type_match,
+    patch_contains_excludes,
+    plan_line_overlap,
+)
 from evals.gates import all_gates_passed, format_gate_report, gates_from_scorecard
 from evals.harness.prediction import Prediction, load_predictions
 from evals.harness.targets import MODE_TO_SCOPE, TARGETS
@@ -36,21 +43,49 @@ MODE_ACTIVE_SCOPES: dict[str, frozenset[str] | None] = {
     "research": frozenset({"research"}),
     "plan": frozenset({"routing", "research", "plan"}),
     "implement": frozenset({"routing", "research", "plan", "implement"}),
+    "integration": None,
     "e2e": None,
     "score": None,
 }
 
+LEGACY_EVALUATOR_SPECS: list[EvaluatorSpec] = [
+    EvaluatorSpec("fix_type_match", "plan", fix_type_match, threshold=1.0),
+    EvaluatorSpec("plan_line_overlap", "plan", plan_line_overlap, threshold=0.5),
+    EvaluatorSpec("patch_contains", "implement", patch_contains_excludes, threshold=1.0),
+]
 
-def score_case(case: EvalCase, pred: Prediction, *, mode: str = "score") -> CaseResult:
+
+def _evaluators_for_pred(pred: Prediction, *, legacy: bool = False) -> list[EvaluatorSpec]:
+    """Pick evaluator set — legacy fixtures vs integration artifacts."""
+    if legacy or not pred.artifact_path:
+        return EVALUATORS[:2] + LEGACY_EVALUATOR_SPECS
+    return EVALUATORS
+
+
+def score_case(
+    case: EvalCase,
+    pred: Prediction,
+    *,
+    mode: str = "score",
+    legacy: bool = False,
+    run_judges: bool = True,
+) -> CaseResult:
     """Score Case for this module."""
     active = MODE_ACTIVE_SCOPES.get(mode)
+    use_legacy = legacy or not pred.artifact_path
+    specs = _evaluators_for_pred(pred, legacy=use_legacy)
+
     scores: dict[str, float] = {}
     comments: dict[str, str] = {}
     pass_flags: list[bool] = []
-    for spec in EVALUATORS:
+    for spec in specs:
         if spec.scope not in case.eval_scope:
             continue
         if active is not None and spec.scope not in active:
+            continue
+        if spec.kind == "llm_judge" and not run_judges:
+            continue
+        if spec.requires_artifact and not pred.artifact_path:
             continue
         res = spec.fn(case, pred)
         if not res.applicable:
@@ -79,6 +114,8 @@ def score_cases(
     predictions: dict[str, Prediction],
     *,
     mode: str = "score",
+    legacy: bool = False,
+    run_judges: bool = True,
 ) -> list[CaseResult]:
     """Score Cases for this module."""
     return [
@@ -86,12 +123,19 @@ def score_cases(
             c,
             predictions.get(c.case_id) or Prediction(case_id=c.case_id, error="no prediction"),
             mode=mode,
+            legacy=legacy,
+            run_judges=run_judges,
         )
         for c in cases
     ]
 
 
-def filter_cases_for_mode(cases: list[EvalCase], mode: str) -> list[EvalCase]:
+def filter_cases_for_mode(
+    cases: list[EvalCase],
+    mode: str,
+    *,
+    case_ids: list[str] | None = None,
+) -> list[EvalCase]:
     """Filter Cases For Mode for this module."""
     scope = MODE_TO_SCOPE.get(mode)
     if scope is None:
@@ -101,6 +145,9 @@ def filter_cases_for_mode(cases: list[EvalCase], mode: str) -> list[EvalCase]:
     # Per-agent unit modes exclude integration cases (run those via e2e on integration_test/).
     if mode in ("routing", "research", "plan", "implement"):
         filtered = [c for c in filtered if c.case_kind == "unit"]
+    if case_ids:
+        allowed = set(case_ids)
+        filtered = [c for c in filtered if c.case_id in allowed]
     return filtered
 
 
@@ -110,6 +157,7 @@ def predict_case(
     fixtures: dict[str, Prediction],
     *,
     dry_run: bool = True,
+    run_id: str = "",
 ) -> Prediction:
     """Predict Case for this module."""
     if mode == "score":
@@ -122,8 +170,16 @@ def predict_case(
     if target is None:
         raise ValueError(f"unknown mode: {mode}")
 
-    if mode in ("implement", "e2e"):
-        return target(case, dry_run=dry_run if mode == "implement" else False)
+    if mode in ("implement", "integration", "e2e"):
+        effective_dry = dry_run if mode == "implement" else False
+        if mode == "integration":
+            effective_dry = dry_run
+        return target(
+            case,
+            dry_run=effective_dry if mode != "e2e" else False,
+            run_id=run_id,
+            save_artifact=mode in ("integration", "e2e", "implement"),
+        )
     return target(case)
 
 
@@ -138,15 +194,19 @@ def run_experiment(
     check_gates: bool = False,
     fixtures_only: bool = False,
     export_predictions: str = "",
+    run_id: str = "",
+    run_judges: bool = True,
+    case_ids: list[str] | None = None,
 ) -> tuple[Scorecard, list[CaseResult], int]:
     """Run predict + score + optional gate check. Returns (scorecard, results, exit_code)."""
     all_cases = load_cases(cases_path)
     if not all_cases:
         raise SystemExit(f"no cases found in {cases_path}")
 
-    cases = filter_cases_for_mode(all_cases, mode)
+    cases = filter_cases_for_mode(all_cases, mode, case_ids=case_ids)
     if not cases:
-        raise SystemExit(f"no cases with scope for mode={mode!r} in {cases_path}")
+        hint = f" case_ids={case_ids}" if case_ids else ""
+        raise SystemExit(f"no cases with scope for mode={mode!r} in {cases_path}{hint}")
 
     fixtures: dict[str, Prediction] = {}
     if mode == "score":
@@ -159,13 +219,32 @@ def run_experiment(
         if not cases:
             raise SystemExit(f"no cases with recorded predictions in {predictions_path}")
 
+    if mode in ("integration", "e2e", "implement") and not run_id:
+        from evals.artifacts.pipeline_result import allocate_run_dir, save_run_metadata, RunMetadata, now_iso
+
+        run_id, run_path = allocate_run_dir()
+        save_run_metadata(RunMetadata(
+            run_id=run_id,
+            created_at=now_iso(),
+            mode=mode,
+            cases_path=cases_path,
+            dry_run=dry_run,
+            experiment=experiment or f"week2-{mode}",
+        ))
+        print(f"  run directory: {run_path}")
+
     results: list[CaseResult] = []
     exported: list[dict] = []
+    use_legacy_gates = fixtures_only or mode == "score"
     for c in cases:
-        pred = predict_case(c, mode, fixtures, dry_run=dry_run)
+        pred = predict_case(c, mode, fixtures, dry_run=dry_run, run_id=run_id)
         if export_predictions and mode != "score":
             exported.append(pred.model_dump(exclude_none=True))
-        results.append(score_case(c, pred, mode=mode))
+        results.append(score_case(
+            c, pred, mode=mode,
+            legacy=use_legacy_gates,
+            run_judges=run_judges,
+        ))
 
     if export_predictions and mode != "score":
         export_path = Path(export_predictions)
@@ -196,10 +275,18 @@ def run_experiment(
 
     exit_code = 0
     if check_gates:
-        gates = gates_from_scorecard(scorecard, all_cases)
+        gates = gates_from_scorecard(
+            scorecard, all_cases, legacy=use_legacy_gates,
+        )
         print(f"\n{format_gate_report(gates)}")
         if not all_gates_passed(gates):
             exit_code = 1
+
+    if run_id and mode in ("integration", "e2e", "implement"):
+        from evals.artifacts.pipeline_result import run_dir
+        report_path = run_dir(run_id) / "report.json"
+        write_json(scorecard, report_path)
+        print(f"  run report: {report_path}")
 
     return scorecard, results, exit_code
 
@@ -238,7 +325,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Run an eval experiment and emit a scorecard.")
     ap.add_argument(
         "--mode", default="score",
-        choices=["score", "routing", "research", "plan", "implement", "e2e"],
+        choices=["score", "routing", "research", "plan", "implement", "integration", "e2e"],
     )
     ap.add_argument("--cases", default="evals/golden/unit_test", help="dir or single case file")
     ap.add_argument("--predictions", default="evals/fixtures/predictions.json",
@@ -255,10 +342,21 @@ def main() -> int:
                     help="score mode: only cases with a recorded prediction file")
     ap.add_argument("--export-predictions", default="",
                     help="live modes: write agent outputs to this JSON file for offline rescore")
+    ap.add_argument("--run-id", default="", help="reuse existing evals/runs/RUN_ID for artifacts")
+    ap.add_argument("--skip-judge", action="store_true",
+                    help="skip LLM judge evaluators (capture artifacts only)")
+    ap.add_argument("--case-ids", default="",
+                    help="comma-separated case IDs to run (e.g. G-01,G-06,G-10)")
     args = ap.parse_args()
 
+    from src.core.config import load_project_env
+
+    load_project_env()
+
+    case_ids = [c.strip() for c in args.case_ids.split(",") if c.strip()] or None
+
     dry_run = True
-    if args.mode == "e2e":
+    if args.mode in ("e2e", "integration"):
         dry_run = not args.no_dry_run
     elif args.mode == "implement":
         dry_run = not args.no_dry_run
@@ -273,6 +371,9 @@ def main() -> int:
         check_gates=args.gate,
         fixtures_only=args.fixtures_only,
         export_predictions=args.export_predictions,
+        run_id=args.run_id,
+        run_judges=not args.skip_judge,
+        case_ids=case_ids,
     )
     return exit_code
 

@@ -40,6 +40,7 @@ def resolve_snapshot_path(case_id: str, snap: "RepoSnapshot") -> str:
     sha = snap.commit_sha or snap.target_branch
     dest = CACHE_ROOT / f"{snap.slug or 'repo'}@{sha[:12]}"
     if (dest / ".git").exists():
+        _reset_cached_checkout(dest, snap)
         return str(dest)
 
     _run(["git", "clone", "--no-checkout", snap.url, str(dest)])
@@ -49,6 +50,17 @@ def resolve_snapshot_path(case_id: str, snap: "RepoSnapshot") -> str:
     else:
         _run(["git", "checkout", snap.target_branch], cwd=dest)
     return str(dest)
+
+
+def _reset_cached_checkout(dest: Path, snap: "RepoSnapshot") -> None:
+    """Return a cached eval checkout to the pinned snapshot (discard prior run edits)."""
+    if snap.commit_sha:
+        _run(["git", "fetch", "--depth", "1", "origin", snap.commit_sha], cwd=dest)
+        _run(["git", "reset", "--hard", snap.commit_sha], cwd=dest)
+    elif snap.target_branch:
+        _run(["git", "fetch", "origin", snap.target_branch], cwd=dest)
+        _run(["git", "reset", "--hard", f"origin/{snap.target_branch}"], cwd=dest)
+    _run(["git", "clean", "-fd"], cwd=dest)
 
 
 def resolve_repo_path(case: "EvalCase") -> str:

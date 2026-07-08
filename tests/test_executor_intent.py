@@ -85,6 +85,7 @@ def test_validate_edit_intent_skips_sql_heuristics_for_non_sql_edits(tmp_path):
                 reason="XSS fix",
                 validate="autoescape=True",
                 target_type="block",
+                target_name="setup_jinja",
                 approximate_line=1,
                 end_line=1,
                 instruction="Enable autoescape in setup_jinja",

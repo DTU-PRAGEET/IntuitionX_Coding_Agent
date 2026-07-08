@@ -1,17 +1,15 @@
-"""Pydantic models for the FastAPI webhook layer."""
+"""Pydantic models for the FastAPI layer."""
 
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
 
 from pydantic import BaseModel, Field
 
 
 class TicketJobStatus(str, Enum):
-    """Ticket Job Status.
-    Encapsulates related behavior for the Ticket Job Status component.
-    """
+    """Lifecycle of a pipeline job started via the API."""
+
     QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -19,38 +17,34 @@ class TicketJobStatus(str, Enum):
     PAUSED = "paused"
 
 
-class JiraWebhookPayload(BaseModel):
-    """Minimal Jira webhook body — extra fields are ignored."""
+class RunTicketRequest(BaseModel):
+    """Body for POST /run — start the full pipeline for one Jira ticket."""
 
-    webhookEvent: str | None = None
-    issue: dict[str, Any] | None = None
-    ticket_id: str | None = Field(
-        default=None,
-        description="Optional direct ticket key for testing without full Jira payload",
-    )
+    ticket_id: str = Field(..., description="Jira issue key, e.g. PLAT-1234")
     user_prompt: str = ""
-    repo_path: str | None = None
+    repo_path: str | None = Field(
+        default=None,
+        description="Optional repo path override; default resolves from Jira ticket",
+    )
 
 
 class EnqueueTicketResponse(BaseModel):
-    """Enqueue Ticket Response.
-    Encapsulates related behavior for the Enqueue Ticket Response component.
-    """
+    """Response after enqueueing a pipeline run."""
+
     job_id: str
     ticket_id: str
     status: TicketJobStatus
+    thread_id: str
     message: str
 
 
 class TicketStatusResponse(BaseModel):
-    """Ticket Status Response.
-    Encapsulates related behavior for the Ticket Status Response component.
-    """
+    """Current status of a pipeline job."""
+
     job_id: str
     ticket_id: str
     status: TicketJobStatus
     thread_id: str | None = None
-    webhook_event: str | None = None
     created_at: str
     updated_at: str
     error: str | None = None
@@ -61,19 +55,9 @@ class TicketStatusResponse(BaseModel):
     paused_gate: str | None = None
 
 
-class WebhookIgnoredResponse(BaseModel):
-    """Webhook Ignored Response.
-    Encapsulates related behavior for the Webhook Ignored Response component.
-    """
-    status: str = "ignored"
-    ticket_id: str | None = None
-    message: str
-
-
 class TicketConflictResponse(BaseModel):
-    """Ticket Conflict Response.
-    Encapsulates related behavior for the Ticket Conflict Response component.
-    """
+    """Returned when the same ticket already has an active job."""
+
     detail: str
     job_id: str
     ticket_id: str

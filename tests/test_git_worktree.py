@@ -45,6 +45,9 @@ def test_reused_worktree_checks_out_new_branch(tmp_path):
         "src.agents.executor.tools.git_worktree._worktree_is_dirty",
         return_value=True,
     ), patch(
+        "src.agents.executor.tools.git_worktree._is_git_checkout",
+        return_value=True,
+    ), patch(
         "src.agents.executor.tools.git_worktree.git_repo_snapshot",
         side_effect=[
             {"head": "abc123", "branch": "fix/x", "status_short": " M f.py", "repo_path": str(worktree), "cwd": "", "diff_stat": "", "is_git": True},
@@ -66,6 +69,44 @@ def test_reused_worktree_checks_out_new_branch(tmp_path):
         if call.args and call.args[0][:2] == ["checkout", "-B"]
     ]
     assert checkout_calls == [["checkout", "-B", "fix/space-129068-20260629-1800"]]
+
+
+def test_reused_worktree_recreated_when_not_git(tmp_path):
+    """A leftover non-git directory must be removed and replaced with a real worktree."""
+    worktree_root = tmp_path / "worktrees"
+    worktree = worktree_root / "space_129070"
+    worktree.mkdir(parents=True)
+    (worktree / "README.md").write_text("stale checkout\n", encoding="utf-8")
+
+    patched_settings = SimpleNamespace(**{**vars(gw_mod.settings), "worktree_base": str(worktree_root)})
+    with patch("src.agents.executor.tools.git_worktree.settings", patched_settings), patch(
+        "src.agents.executor.tools.git_worktree._run_git",
+    ) as mock_git, patch(
+        "src.agents.executor.tools.git_worktree.resolve_base_branch",
+        return_value="main",
+    ), patch(
+        "src.agents.executor.tools.git_worktree.make_branch_name",
+        return_value="fix/space-129070-20260707-0900",
+    ), patch(
+        "src.agents.executor.tools.git_worktree._is_git_checkout",
+        side_effect=[False, True],
+    ):
+        mock_git.return_value.returncode = 0
+        mock_git.return_value.stdout = ""
+        info = create_worktree(
+            str(tmp_path),
+            "SPACE-129070",
+            planner_snapshot_head="3f6156bf12206535ccb7e2da533c4a0a49ef7b19",
+        )
+
+    assert info["status"] == "created"
+    assert info["branch_name"] == "fix/space-129070-20260707-0900"
+    worktree_add_calls = [
+        call.args[0]
+        for call in mock_git.call_args_list
+        if call.args and call.args[0][:2] == ["worktree", "add"]
+    ]
+    assert worktree_add_calls
 
 
 def test_stage_commit_push_reports_no_changes_without_remote_branch(tmp_path):

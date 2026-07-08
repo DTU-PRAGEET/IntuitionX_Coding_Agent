@@ -33,6 +33,45 @@ def _flatten_content_blocks(raw: object) -> str:
     return str(raw)
 
 
+def _sanitize_json_string_literals(raw: str) -> str:
+    """Escape raw control characters inside JSON string literals."""
+    out: list[str] = []
+    in_string = False
+    escape = False
+    for ch in raw:
+        if not in_string:
+            out.append(ch)
+            if ch == '"':
+                in_string = True
+            continue
+        if escape:
+            out.append(ch)
+            escape = False
+            continue
+        if ch == "\\":
+            out.append(ch)
+            escape = True
+            continue
+        if ch == '"':
+            out.append(ch)
+            in_string = False
+            continue
+        if ch == "\n":
+            out.append("\\n")
+            continue
+        if ch == "\r":
+            out.append("\\r")
+            continue
+        if ch == "\t":
+            out.append("\\t")
+            continue
+        if ord(ch) < 0x20:
+            out.append(f"\\u{ord(ch):04x}")
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
 def parse_llm_json(content: str, model: Type[T]) -> T:
     """Extract and validate JSON from LLM response."""
     if not isinstance(content, str):
@@ -42,7 +81,11 @@ def parse_llm_json(content: str, model: Type[T]) -> T:
     json_match = re.search(r"\{.*\}", content, re.DOTALL)
     if not json_match:
         raise ValueError(f"Could not parse JSON from LLM response: {content[:200]}")
-    return model.model_validate_json(json_match.group())
+    raw_json = json_match.group()
+    try:
+        return model.model_validate_json(raw_json)
+    except ValueError:
+        return model.model_validate_json(_sanitize_json_string_literals(raw_json))
 
 
 def llm_content(response) -> str:

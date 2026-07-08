@@ -305,6 +305,10 @@ class ExecutionStep(BaseModel):
     read_end_line: Optional[int] = Field(
         default=None, ge=1, description="Optional line range end for READ step"
     )
+    caution_flag: Optional[str] = Field(
+        default=None,
+        description="Ambiguity warning for executor when target symbol appears multiple times",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -339,18 +343,19 @@ class ExecutionStep(BaseModel):
         if not self.reason:
             raise ValueError(f"step {self.step_id}: missing required field 'reason'")
         if self.action == "EDIT":
-            has_semantic = bool(self.instruction and self.target_type)
-            has_legacy_patch = bool(self.new_string)
-            if not has_semantic and not has_legacy_patch:
+            if not (self.instruction or "").strip():
+                raise ValueError(f"step {self.step_id}: EDIT requires instruction")
+            if not (self.intent_marker or "").strip():
+                raise ValueError(f"step {self.step_id}: EDIT requires intent_marker")
+            if not self.target_type:
+                raise ValueError(f"step {self.step_id}: EDIT requires target_type")
+            if self.target_type != "file" and not (self.target_name or "").strip():
                 raise ValueError(
-                    f"step {self.step_id}: EDIT requires semantic fields "
-                    "(instruction + target_type) or legacy new_string"
+                    f"step {self.step_id}: EDIT requires target_name for {self.target_type}"
                 )
-            if has_semantic and not self.intent_marker:
-                raise ValueError(f"step {self.step_id}: semantic EDIT requires intent_marker")
-            if self.target_type == "block" and not self.end_line:
+            if self.old_string or self.new_string:
                 raise ValueError(
-                    f"step {self.step_id}: block target requires end_line"
+                    f"step {self.step_id}: legacy patch fields deprecated; use instruction"
                 )
         if self.action == "VERIFY" and not self.intent_marker and not self.step_validate:
             raise ValueError(f"step {self.step_id}: VERIFY requires intent_marker or validate")

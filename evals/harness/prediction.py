@@ -36,6 +36,13 @@ class Prediction(BaseModel):
     changed_files: list[str] = Field(default_factory=list)
     compilation_status: str = ""
 
+    # judge / artifact (integration eval)
+    artifact_path: str = ""
+    planner_judge: float | None = None
+    executor_judge: float | None = None
+    planner_preflight: float | None = None
+    executor_preflight: float | None = None
+
     # diagnostics
     error: Optional[str] = None
     stage_failed: Optional[str] = None

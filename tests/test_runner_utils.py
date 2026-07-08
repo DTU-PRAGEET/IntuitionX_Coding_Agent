@@ -69,3 +69,22 @@ def test_parse_llm_json_rejects_non_string():
     """Test Parse Llm Json Rejects Non String for this module."""
     with pytest.raises(ValueError, match="expected str"):
         parse_llm_json(["not", "a", "string"], ResearchReport)  # type: ignore[arg-type]
+
+
+def test_parse_llm_json_sanitizes_raw_newlines_in_strings():
+    """Judge/validator responses may include unescaped newlines inside string fields."""
+    from evals.evaluators.llm_judge_base import JudgeVerdict
+
+    raw = """{
+  "score": 35,
+  "passed": false,
+  "criteria": {},
+  "hard_failures": [],
+  "soft_failures": [],
+  "reasoning": "Line one
+Line two with control chars in reasoning."
+}"""
+    verdict = parse_llm_json(raw, JudgeVerdict)
+    assert verdict.score == 35
+    assert "Line one" in verdict.reasoning
+    assert "Line two" in verdict.reasoning

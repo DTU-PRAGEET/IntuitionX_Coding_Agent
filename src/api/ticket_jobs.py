@@ -28,13 +28,6 @@ from src.pipeline.graph_outcome import GraphRunOutcome
 
 _log = get_logger("ticket_jobs")
 
-SUPPORTED_WEBHOOK_EVENTS = frozenset(
-    {
-        "jira:issue_created",
-        "jira:issue_updated",
-    }
-)
-
 ACTIVE_STATUSES = frozenset(
     {
         TicketJobStatus.QUEUED.value,
@@ -55,38 +48,20 @@ class TicketJobConflict(Exception):
 
 
 def _now_iso() -> str:
-    """Now Iso.
-    Supports the surrounding module workflow.
-    """
+    """Return current UTC timestamp in ISO format."""
     return datetime.now(timezone.utc).isoformat()
-
-
-def extract_ticket_id_from_webhook(payload: dict[str, Any]) -> str | None:
-    """Return Jira issue key from a webhook or test payload."""
-    direct = payload.get("ticket_id")
-    if isinstance(direct, str) and direct.strip():
-        return direct.strip().upper()
-
-    issue = payload.get("issue")
-    if isinstance(issue, dict):
-        key = issue.get("key")
-        if isinstance(key, str) and key.strip():
-            return key.strip().upper()
-    return None
 
 
 @dataclass
 class TicketJob:
-    """Ticket Job.
-    Encapsulates related behavior for the Ticket Job component.
-    """
+    """One pipeline run started via POST /run."""
+
     job_id: str
     ticket_id: str
     status: TicketJobStatus
     thread_id: str
     created_at: str
     updated_at: str
-    webhook_event: str | None = None
     user_prompt: str = ""
     repo_path: str | None = None
     error: str | None = None
@@ -97,7 +72,7 @@ class TicketJob:
     paused_gate: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        """To Dict on TicketJob."""
+        """Serialize job for Redis storage."""
         return {
             "job_id": self.job_id,
             "ticket_id": self.ticket_id,
@@ -105,7 +80,6 @@ class TicketJob:
             "thread_id": self.thread_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
-            "webhook_event": self.webhook_event,
             "user_prompt": self.user_prompt,
             "repo_path": self.repo_path,
             "error": self.error,
@@ -118,7 +92,7 @@ class TicketJob:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TicketJob":
-        """From Dict on TicketJob."""
+        """Deserialize job from Redis storage."""
         return cls(
             job_id=data["job_id"],
             ticket_id=data["ticket_id"],
@@ -126,7 +100,6 @@ class TicketJob:
             thread_id=data["thread_id"],
             created_at=data["created_at"],
             updated_at=data["updated_at"],
-            webhook_event=data.get("webhook_event"),
             user_prompt=data.get("user_prompt") or "",
             repo_path=data.get("repo_path"),
             error=data.get("error"),
@@ -138,13 +111,12 @@ class TicketJob:
         )
 
     def to_response(self) -> TicketStatusResponse:
-        """To Response on TicketJob."""
+        """Build API status response."""
         return TicketStatusResponse(
             job_id=self.job_id,
             ticket_id=self.ticket_id,
             status=self.status,
             thread_id=self.thread_id,
-            webhook_event=self.webhook_event,
             created_at=self.created_at,
             updated_at=self.updated_at,
             error=self.error,
@@ -162,36 +134,37 @@ class TicketJobStore:
     def __init__(self, redis_client: RedisCommands | None = None) -> None:
         """Initialize the TicketJobStore with the given configuration."""
         self._redis = redis_client or create_redis_client()
-        self._semaphore = asyncio.Semaphore(settings.webhook_max_concurrency)
+        self._semaphore = asyncio.Semaphore(settings.api_max_concurrency)
         self._worker_task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
+        self._in_flight: set[str] = set()
 
     def _save_job(self, job: TicketJob) -> None:
-        """Save Job on TicketJobStore."""
+        """Persist job to Redis."""
         self._redis.set(job_key(job.job_id), dump_job(job.to_dict()))
         self._redis.set(ticket_latest_key(job.ticket_id), job.job_id)
 
     def get_job(self, job_id: str) -> TicketJob | None:
-        """Return get job for the pipeline."""
+        """Load job by job_id."""
         data = load_job(self._redis.get(job_key(job_id)))
         return TicketJob.from_dict(data) if data else None
 
     def get_job_by_thread(self, thread_id: str) -> TicketJob | None:
-        """Return get job by thread for the pipeline."""
+        """Load job by LangGraph thread_id."""
         job_id = self._redis.get(thread_key(thread_id))
         if not job_id:
             return None
         return self.get_job(job_id)
 
     def get_latest_for_ticket(self, ticket_id: str) -> TicketJob | None:
-        """Return get latest for ticket for the pipeline."""
+        """Load most recent job for a ticket id."""
         job_id = self._redis.get(ticket_latest_key(ticket_id.upper()))
         if not job_id:
             return None
         return self.get_job(job_id)
 
     def get_active_for_ticket(self, ticket_id: str) -> TicketJob | None:
-        """Return get active for ticket for the pipeline."""
+        """Return active job for ticket if one exists."""
         job_id = self._redis.get(ticket_active_key(ticket_id))
         if not job_id:
             return None
@@ -202,18 +175,17 @@ class TicketJobStore:
             self._redis.delete(ticket_active_key(ticket_id))
         return None
 
-    def resolve(self, ticket_id: str) -> TicketJob | None:
-        """Resolve resolve for the pipeline."""
-        job = self.get_job(ticket_id)
+    def resolve(self, ticket_or_job_id: str) -> TicketJob | None:
+        """Resolve by job_id uuid or ticket id (e.g. PLAT-1234)."""
+        job = self.get_job(ticket_or_job_id)
         if job:
             return job
-        return self.get_latest_for_ticket(ticket_id)
+        return self.get_latest_for_ticket(ticket_or_job_id)
 
     def enqueue(
         self,
         ticket_id: str,
         *,
-        webhook_event: str | None = None,
         user_prompt: str = "",
         repo_path: str | None = None,
     ) -> TicketJob:
@@ -221,8 +193,8 @@ class TicketJobStore:
         ticket_id = ticket_id.upper()
         existing_id = self._redis.get(ticket_active_key(ticket_id))
         if existing_id:
-            existing = self.get_job(existing_id)
-            if existing and existing.status.value in ACTIVE_STATUSES:
+            existing = self._clear_active_if_not_running(ticket_id, existing_id)
+            if existing is not None:
                 raise TicketJobConflict(existing_id, existing)
 
         now = _now_iso()
@@ -235,7 +207,6 @@ class TicketJobStore:
             thread_id=thread_id,
             created_at=now,
             updated_at=now,
-            webhook_event=webhook_event,
             user_prompt=user_prompt,
             repo_path=repo_path,
         )
@@ -248,8 +219,12 @@ class TicketJobStore:
         )
         if not claimed:
             existing_id = self._redis.get(ticket_active_key(ticket_id)) or ""
-            existing = self.get_job(existing_id) if existing_id else None
-            if existing:
+            existing = (
+                self._clear_active_if_not_running(ticket_id, existing_id)
+                if existing_id
+                else None
+            )
+            if existing is not None:
                 raise TicketJobConflict(existing_id, existing)
             raise TicketJobConflict(existing_id, job)
 
@@ -260,13 +235,44 @@ class TicketJobStore:
         return job
 
     def _release_active(self, job: TicketJob) -> None:
-        """Release Active on TicketJobStore."""
+        """Clear active-ticket lock when job finishes."""
         active = self._redis.get(ticket_active_key(job.ticket_id))
         if active == job.job_id:
             self._redis.delete(ticket_active_key(job.ticket_id))
 
+    def _reconcile_stale_job(self, job: TicketJob) -> bool:
+        """Mark zombie RUNNING jobs failed after worker crash/restart."""
+        if job.status != TicketJobStatus.RUNNING:
+            return False
+        if job.job_id in self._in_flight:
+            return False
+        job.status = TicketJobStatus.FAILED
+        job.error = job.error or "Previous run lost (worker restarted or crashed)"
+        job.updated_at = _now_iso()
+        self._release_active(job)
+        self._save_job(job)
+        _log.warning(
+            "ticket_job_reconciled",
+            job_id=job.job_id,
+            ticket_id=job.ticket_id,
+        )
+        return True
+
+    def _clear_active_if_not_running(self, ticket_id: str, existing_id: str) -> TicketJob | None:
+        """Return blocking active job, reconciling stale/orphan locks first."""
+        existing = self.get_job(existing_id)
+        if existing is None:
+            self._redis.delete(ticket_active_key(ticket_id))
+            return None
+        if self._reconcile_stale_job(existing):
+            return None
+        if existing.status.value not in ACTIVE_STATUSES:
+            self._release_active(existing)
+            return None
+        return existing
+
     def _apply_outcome(self, job: TicketJob, outcome: GraphRunOutcome) -> TicketJob:
-        """Apply Outcome on TicketJobStore."""
+        """Update job fields from a graph run outcome."""
         job.updated_at = _now_iso()
         state = outcome.state or {}
         job.routing_route = state.get("routing_route")
@@ -300,7 +306,7 @@ class TicketJobStore:
         return job
 
     async def apply_resume_outcome(self, thread_id: str, outcome: GraphRunOutcome) -> TicketJob | None:
-        """Apply apply resume outcome for the pipeline."""
+        """Update job after POST /approve resumes the graph."""
         job = self.get_job_by_thread(thread_id)
         if job is None:
             return None
@@ -331,14 +337,14 @@ class TicketJobStore:
         return job
 
     async def start_worker(self) -> None:
-        """Start start worker for the pipeline."""
+        """Start background worker that drains the job queue."""
         if self._worker_task is not None and not self._worker_task.done():
             return
         self._stop_event.clear()
         self._worker_task = asyncio.create_task(self._worker_loop(), name="ticket-job-worker")
 
     async def stop_worker(self) -> None:
-        """Stop stop worker for the pipeline."""
+        """Stop background worker."""
         self._stop_event.set()
         if self._worker_task is None:
             return
@@ -350,10 +356,10 @@ class TicketJobStore:
         self._worker_task = None
 
     async def _worker_loop(self) -> None:
-        """Worker Loop on TicketJobStore."""
+        """Poll Redis queue and spawn bounded concurrent job runs."""
         _log.info(
             "ticket_worker_started",
-            max_concurrency=settings.webhook_max_concurrency,
+            max_concurrency=settings.api_max_concurrency,
         )
         while not self._stop_event.is_set():
             job_id = await asyncio.to_thread(self._blocking_dequeue, 1)
@@ -362,7 +368,7 @@ class TicketJobStore:
             asyncio.create_task(self._run_with_semaphore(job_id))
 
     def _blocking_dequeue(self, timeout: int) -> str | None:
-        """Blocking Dequeue on TicketJobStore."""
+        """Blocking Redis BLPOP for the next job id."""
         result = self._redis.blpop([QUEUE_KEY], timeout=timeout)
         if not result:
             return None
@@ -370,12 +376,24 @@ class TicketJobStore:
         return job_id
 
     async def _run_with_semaphore(self, job_id: str) -> None:
-        """Run With Semaphore on TicketJobStore."""
-        async with self._semaphore:
-            await self._process_job(job_id)
+        """Run one job under the concurrency semaphore."""
+        self._in_flight.add(job_id)
+        try:
+            async with self._semaphore:
+                await self._process_job(job_id)
+        except Exception as exc:
+            _log.exception("ticket_job_worker_failed", job_id=job_id)
+            job = self.get_job(job_id)
+            if job and job.status == TicketJobStatus.RUNNING:
+                self._apply_outcome(
+                    job,
+                    GraphRunOutcome(kind="failed", state={}, error=str(exc)[:4000]),
+                )
+        finally:
+            self._in_flight.discard(job_id)
 
     async def _process_job(self, job_id: str) -> None:
-        """Process Job on TicketJobStore."""
+        """Execute one queued pipeline job."""
         job = self.get_job(job_id)
         if job is None:
             return
@@ -388,13 +406,16 @@ class TicketJobStore:
 
         from src.pipeline.graph_runner import run_graph_until_pause
 
-        outcome = await run_graph_until_pause(
-            jira_ticket_id=job.ticket_id,
-            thread_id=job.thread_id,
-            job_id=job.job_id,
-            user_prompt=job.user_prompt,
-            repo_path=job.repo_path,
-        )
+        try:
+            outcome = await run_graph_until_pause(
+                jira_ticket_id=job.ticket_id,
+                thread_id=job.thread_id,
+                user_prompt=job.user_prompt,
+                repo_path=job.repo_path,
+            )
+        except Exception as exc:
+            _log.exception("ticket_job_failed", job_id=job_id, ticket_id=job.ticket_id)
+            outcome = GraphRunOutcome(kind="failed", state={}, error=str(exc)[:4000])
         self._apply_outcome(job, outcome)
         _log.info(
             "ticket_job_finished",

@@ -32,6 +32,7 @@ def _semantic_step(**kw) -> dict:
         reason="security fix",
         validate="grep for SAFE",
         target_type="block",
+        target_name="secret",
         approximate_line=1,
         end_line=3,
         instruction="Replace hardcoded secret with env var",
@@ -63,10 +64,37 @@ def test_validation_prompt_scoped_as_edit_verifier():
         original_snippet="password=hardcoded",
         modified_snippet="password=${PASSWORD:changeme}",
     )
-    assert "EDIT VERIFIER" in prompt
-    assert "NOT to audit the entire file" in prompt
+    assert "SECURITY-INTENT VERIFIER" in prompt
+    assert "security property" in prompt
+    assert "NOT to audit the entire file" not in prompt
     assert "observations" in prompt
     assert "Do NOT fail because of" in prompt
+    assert "equivalent" in prompt.lower()
+
+
+def test_validation_prompt_includes_structural_warnings():
+    """Structural warnings for JS/TS are passed to the LLM, not hard-failed."""
+    from src.agents.executor.validation import _build_validation_prompt
+
+    plan = ExecutionPlan(
+        ticket_id="T-1",
+        root_hypothesis="fix",
+        files_to_change=["app.tsx"],
+        execution_steps=[],
+        risk_level="low",
+    )
+    step = _semantic_step(file="app.tsx")
+    prompt = _build_validation_prompt(
+        "policy",
+        plan,
+        step,
+        original_snippet="const x = 1;",
+        modified_snippet="const x = `${1}`;",
+        structural_warnings=["unclosed '{'"],
+    )
+    assert "structural_warnings" in prompt
+    assert "unclosed '{'" in prompt
+    assert "false positives" in prompt
 
 
 def test_validate_edit_accepts_pass_with_out_of_scope_observations():

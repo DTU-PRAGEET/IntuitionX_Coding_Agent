@@ -14,6 +14,7 @@ Milestone 2.3 unit modes:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -51,6 +52,7 @@ _FIX_TYPE_FIELD_NAMES = (
     "target",
     "reason",
     "change",
+    "instruction",
     "new_string",
     "old_string",
 )
@@ -135,7 +137,8 @@ def _plan_line_ranges(
 
   Priority per step/file:
     1. explicit read_start_line / read_end_line on the step
-    2. EDIT old_string position on disk
+    2. approximate_line hint on EDIT steps
+    3. legacy EDIT old_string position on disk (deprecated)
     """
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, int, int]] = set()
@@ -160,7 +163,10 @@ def _plan_line_ranges(
 
         if start <= 0 or end <= 0:
             action = getattr(step, "action", "") or ""
-            if action == "EDIT" and repo_path:
+            approx = int(getattr(step, "approximate_line", 0) or 0)
+            if action == "EDIT" and approx > 0:
+                start, end = approx, approx + 5
+            elif action == "EDIT" and repo_path:
                 old_string = getattr(step, "old_string", "") or ""
                 inferred = _infer_range_from_old_string(repo_path, file_path, old_string)
                 if inferred:
@@ -289,17 +295,89 @@ def run_plan_target(case: "EvalCase", *, llm=None) -> Prediction:
     return pred
 
 
-def run_implement_target(case: "EvalCase", *, llm=None, dry_run: bool = True) -> Prediction:
+def run_implement_target(
+    case: "EvalCase",
+    *,
+    llm=None,
+    dry_run: bool = True,
+    run_id: str = "",
+    save_artifact: bool = True,
+) -> Prediction:
     """Routing + Research + Planner + Executor — measures patch quality."""
+    return run_integration_target(
+        case,
+        llm=llm,
+        dry_run=dry_run,
+        run_id=run_id,
+        save_artifact=save_artifact,
+    )
+
+
+def run_integration_target(
+    case: "EvalCase",
+    *,
+    llm=None,
+    dry_run: bool = True,
+    run_id: str = "",
+    save_artifact: bool = True,
+) -> Prediction:
+    """Full pipeline with optional PipelineArtifact capture to evals/runs/{run_id}/."""
+    from evals.harness.artifact_capture import (
+        build_pipeline_artifact,
+        capture_edit_contexts,
+    )
+
     pred = Prediction(case_id=case.case_id)
+    plan = None
+    result = None
+    report = None
+    repo_path: str | None = None
+    before_context = []
+    after_context = []
+    artifact_run_id = run_id or os.environ.get("EVAL_RUN_ID", "")
+
+    if save_artifact and not artifact_run_id:
+        from evals.artifacts.pipeline_result import allocate_run_dir
+
+        artifact_run_id, _ = allocate_run_dir()
+
     if not _resolve_route(case, pred, llm=llm):
+        if save_artifact and artifact_run_id:
+            from evals.artifacts.pipeline_result import save_artifact as _save
+
+            art = build_pipeline_artifact(
+                case,
+                run_id=artifact_run_id,
+                repo_path=repo_path or "",
+                route=pred.route,
+                error=pred.error,
+                stage_failed=pred.stage_failed,
+                dry_run=dry_run,
+            )
+            path = _save(art)
+            pred.artifact_path = str(path)
         return pred
 
     report = _run_research(case, pred, llm=llm)
     if report is None:
+        if save_artifact and artifact_run_id:
+            from evals.artifacts.pipeline_result import save_artifact as _save
+
+            art = build_pipeline_artifact(
+                case,
+                run_id=artifact_run_id,
+                repo_path=repo_path or "",
+                route=pred.route,
+                report=report,
+                error=pred.error,
+                stage_failed=pred.stage_failed,
+                dry_run=dry_run,
+            )
+            path = _save(art)
+            pred.artifact_path = str(path)
         return pred
 
-    repo_path = getattr(pred, "_repo_path", None)
+    repo_path = getattr(pred, "_repo_path", None) or ""
     ticket = build_jira_ticket(case)
     try:
         from src.agents.planner.agent import run_planner
@@ -308,27 +386,91 @@ def run_implement_target(case: "EvalCase", *, llm=None, dry_run: bool = True) ->
             report, repo_path, routing_route=pred.route or "FULL", ticket=ticket,
         )
         _fill_plan_fields(pred, plan, report=report, repo_path=repo_path)
+        before_context = capture_edit_contexts(plan, repo_path, phase="before")
     except Exception as e:  # noqa: BLE001
         pred.error = str(e)
         pred.stage_failed = "planner"
+        if save_artifact and artifact_run_id:
+            from evals.artifacts.pipeline_result import save_artifact as _save
+
+            art = build_pipeline_artifact(
+                case,
+                run_id=artifact_run_id,
+                repo_path=repo_path,
+                route=pred.route,
+                report=report,
+                plan=plan,
+                before_context=before_context,
+                error=pred.error,
+                stage_failed=pred.stage_failed,
+                dry_run=dry_run,
+            )
+            path = _save(art)
+            pred.artifact_path = str(path)
         return pred
 
     try:
         from src.agents.executor.agent import run_executor
 
-        result = run_executor(plan, repo_path, dry_run=dry_run, ticket=ticket, llm=llm)
+        result = run_executor(
+            plan,
+            repo_path,
+            dry_run=dry_run,
+            ticket=ticket,
+            llm=llm,
+            continue_on_edit_validation_failure=True,
+        )
         pred.changed_files = list(getattr(result, "changed_files", []) or [])
-        pred.patch_text = getattr(result, "git_diff_full", "") or getattr(result, "git_diff_summary", "")
+        after_context = capture_edit_contexts(plan, repo_path, phase="after")
+        pred.patch_text = _repo_git_diff_for_pred(repo_path)
         pred.compilation_status = getattr(result, "compilation_status", "") or ""
+        failed_steps = list(getattr(result, "validation_failed_steps", []) or [])
+        if failed_steps:
+            pred.error = (
+                f"Executor edit validation failed for step(s) {failed_steps} "
+                "(pipeline continued for judge evaluation)"
+            )
     except Exception as e:  # noqa: BLE001
         pred.error = str(e)
         pred.stage_failed = "executor"
+        if repo_path and plan is not None:
+            after_context = capture_edit_contexts(plan, repo_path, phase="after")
+
+    if save_artifact and artifact_run_id:
+        from evals.artifacts.pipeline_result import save_artifact as _save
+
+        art = build_pipeline_artifact(
+            case,
+            run_id=artifact_run_id,
+            repo_path=repo_path,
+            route=pred.route,
+            report=report,
+            plan=plan,
+            execution=result,
+            before_context=before_context,
+            after_context=after_context,
+            error=pred.error,
+            stage_failed=pred.stage_failed,
+            dry_run=dry_run,
+        )
+        path = _save(art)
+        pred.artifact_path = str(path)
+
     return pred
 
 
-def run_e2e_target(case: "EvalCase", *, dry_run: bool = False, llm=None) -> Prediction:
+def _repo_git_diff_for_pred(repo_path: str) -> str:
+    """Git diff for Prediction.patch_text."""
+    from evals.harness.artifact_capture import _repo_git_diff
+
+    return _repo_git_diff(repo_path)
+
+
+def run_e2e_target(case: "EvalCase", *, dry_run: bool = False, llm=None, run_id: str = "", save_artifact: bool = True) -> Prediction:
     """Full Research -> Plan -> Execute via the production pipeline body."""
-    return run_implement_target(case, llm=llm, dry_run=dry_run)
+    return run_integration_target(
+        case, llm=llm, dry_run=dry_run, run_id=run_id, save_artifact=save_artifact,
+    )
 
 
 TARGETS = {
@@ -336,6 +478,7 @@ TARGETS = {
     "research": run_research_target,
     "plan": run_plan_target,
     "implement": run_implement_target,
+    "integration": run_integration_target,
     "e2e": run_e2e_target,
 }
 
@@ -344,5 +487,6 @@ MODE_TO_SCOPE = {
     "research": "research",
     "plan": "plan",
     "implement": "implement",
+    "integration": None,
     "e2e": None,
 }

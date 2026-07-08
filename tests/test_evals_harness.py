@@ -107,8 +107,8 @@ def test_plan_line_overlap_ignores_zero_ranges():
     assert plan_line_overlap(case, pred).score == 1.0
 
 
-def test_infer_fix_type_from_edit_new_string():
-    """Test Infer Fix Type From Edit New String for this module."""
+def test_infer_fix_type_from_edit_instruction():
+    """Test infer fix type from instruction text."""
     plan = ExecutionPlan(
         ticket_id="G-10",
         root_hypothesis="SQLi",
@@ -121,7 +121,10 @@ def test_infer_fix_type_from_edit_new_string():
                 target="method injectableQuery",
                 reason="Replace concatenated SQL",
                 validate="patched",
-                new_string="PreparedStatement pstmt = connection.prepareStatement(query);\npstmt.setString(1, accountName);",
+                instruction="Use PreparedStatement with pstmt.setString for accountName parameterization.",
+                intent_marker="PreparedStatement",
+                target_type="method",
+                target_name="injectableQuery",
             )
         ],
         risk_level="high",
@@ -129,17 +132,12 @@ def test_infer_fix_type_from_edit_new_string():
     assert _infer_fix_type(plan) == "parameterize_sql"
 
 
-def test_plan_line_ranges_inferred_from_old_string_on_disk():
-    """Test Plan Line Ranges Inferred From Old String On Disk for this module."""
+def test_plan_line_ranges_inferred_from_approximate_line():
+    """Test plan line ranges from approximate_line hint."""
     repo = Path(WEBGOAT_REPO)
     if not (repo / WEBGOAT_FILE).is_file():
         return
 
-    vulnerable = (
-        "      query =\n"
-        "          \"SELECT * FROM user_data WHERE first_name = 'John' and last_name = '\""
-        " + accountName + \"'\";"
-    )
     plan = ExecutionPlan(
         ticket_id="G-10",
         root_hypothesis="SQLi",
@@ -152,8 +150,11 @@ def test_plan_line_ranges_inferred_from_old_string_on_disk():
                 target="injectableQuery",
                 reason="parameterize",
                 validate="patched",
-                old_string=vulnerable,
-                new_string="query = \"SELECT * FROM user_data WHERE first_name = 'John' and last_name = ?\";",
+                approximate_line=47,
+                instruction="Parameterize SQL in injectableQuery using PreparedStatement.",
+                intent_marker="PreparedStatement",
+                target_type="method",
+                target_name="injectableQuery",
             )
         ],
         risk_level="high",
@@ -170,11 +171,6 @@ def test_fill_plan_fields_scores_g10_plan_mode():
     if not (repo / WEBGOAT_FILE).is_file():
         return
 
-    vulnerable = (
-        "      query =\n"
-        "          \"SELECT * FROM user_data WHERE first_name = 'John' and last_name = '\""
-        " + accountName + \"'\";"
-    )
     plan = ExecutionPlan(
         ticket_id="G-10",
         root_hypothesis="SQLi",
@@ -187,8 +183,11 @@ def test_fill_plan_fields_scores_g10_plan_mode():
                 target="method injectableQuery",
                 reason="Bind account name via PreparedStatement",
                 validate="patched",
-                old_string=vulnerable,
-                new_string="PreparedStatement pstmt = connection.prepareStatement(query);\npstmt.setString(1, accountName);",
+                approximate_line=47,
+                instruction="Use PreparedStatement with pstmt.setString(1, accountName) for SQL parameterization.",
+                intent_marker="PreparedStatement",
+                target_type="method",
+                target_name="injectableQuery",
             )
         ],
         risk_level="high",
@@ -197,7 +196,7 @@ def test_fill_plan_fields_scores_g10_plan_mode():
     _fill_plan_fields(pred, plan, repo_path=str(repo))
 
     case = next(c for c in load_cases(GOLDEN) if c.case_id == "G-10")
-    result = score_case(case, pred, mode="plan")
+    result = score_case(case, pred, mode="plan", legacy=not pred.artifact_path)
     assert pred.plan_fix_type == "parameterize_sql"
     assert pred.plan_line_ranges[0]["start"] > 0
     assert fix_type_match(case, pred).score == 1.0
@@ -235,10 +234,9 @@ def test_milestone_gates_pass_on_fixtures():
     """Test Milestone Gates Pass On Fixtures for this module."""
     cases = load_cases(GOLDEN)
     fixtures = load_predictions(PREDS)
-    results = [score_case(c, fixtures[c.case_id]) for c in cases if c.case_id in fixtures]
+    results = [score_case(c, fixtures[c.case_id], legacy=True) for c in cases if c.case_id in fixtures]
     sc = build_scorecard("gate-test", "score", results)
-    gates = gates_from_scorecard(sc, cases)
-    # G-00/G-01 fixtures are authored to pass their in-scope evaluators
+    gates = gates_from_scorecard(sc, cases, legacy=True)
     assert all_gates_passed(gates)
 
 
@@ -260,3 +258,307 @@ def test_offline_scorecard_end_to_end(tmp_path: Path):
     by_id = {c.case_id: c for c in sc.cases}
     assert by_id["G-00"].passed is True
     assert by_id["G-01"].passed is True
+
+
+def test_pipeline_artifact_roundtrip(tmp_path: Path):
+    """PipelineArtifact saves and loads with hash."""
+    from evals.artifacts.pipeline_result import (
+        FileContext,
+        PipelineArtifact,
+        allocate_run_dir,
+        load_artifact,
+        save_artifact,
+    )
+
+    run_id, _ = allocate_run_dir(tmp_path / "runs")
+    art = PipelineArtifact(
+        case_id="G-01",
+        run_id=run_id,
+        captured_at="2026-01-01T00:00:00Z",
+        ticket={"issue_id": "G-01"},
+        plan={"execution_steps": [{"action": "EDIT", "file": "sqli/dao/student.py"}]},
+        before_context=[FileContext(file="sqli/dao/student.py", function="create", code="line1")],
+        after_context=[FileContext(file="sqli/dao/student.py", function="create", code="line2")],
+    ).finalize()
+    path = save_artifact(art, runs_root=tmp_path / "runs")
+    loaded = load_artifact(run_id, "G-01", runs_root=tmp_path / "runs")
+    assert loaded.case_id == "G-01"
+    assert loaded.artifact_hash == art.artifact_hash
+    assert path.exists()
+
+
+def test_executor_preflight_validation_failure_not_fatal():
+    """Edit validation failures are warnings — executor judge should still run."""
+    from evals.artifacts.pipeline_result import PipelineArtifact
+    from evals.evaluators.preflight import executor_preflight
+
+    case = next(c for c in load_cases(GOLDEN) if c.case_id == "G-01")
+    art = PipelineArtifact(
+        case_id="G-01",
+        run_id="run_test",
+        captured_at="2026-01-01T00:00:00Z",
+        plan={
+            "files_to_change": ["sqli/dao/student.py"],
+            "execution_steps": [
+                {
+                    "step_id": 1,
+                    "action": "EDIT",
+                    "file": "sqli/dao/student.py",
+                    "instruction": "parameterize",
+                    "target_type": "function",
+                    "target_name": "create",
+                    "intent_marker": "execute",
+                }
+            ],
+        },
+        git_diff="diff --git a/sqli/dao/student.py",
+        changed_files=["sqli/dao/student.py"],
+        executor_validations=[
+            {
+                "step_id": 1,
+                "file": "sqli/dao/student.py",
+                "passed": False,
+                "confidence": 0.0,
+                "reason": "validator disagreed with equivalent API",
+            }
+        ],
+        error=(
+            "Executor edit validation failed after 2 batch pass(es). "
+            "1 step(s) still failing: - step 1"
+        ),
+        stage_failed="executor",
+    )
+    result = executor_preflight(case, art)
+    assert not result.skip_judge
+    assert not result.fatals
+    assert any("validation failed" in w for w in result.warnings)
+
+
+def test_planner_preflight_warning_not_fatal():
+    """match_count=0 is a warning — judge should not be skipped."""
+    from evals.artifacts.pipeline_result import PipelineArtifact
+    from evals.evaluators.preflight import planner_preflight
+
+    case = next(c for c in load_cases(GOLDEN) if c.case_id == "G-01")
+    art = PipelineArtifact(
+        case_id="G-01",
+        run_id="run_test",
+        captured_at="2026-01-01T00:00:00Z",
+        plan={
+            "files_to_change": ["sqli/dao/student.py"],
+            "execution_steps": [
+                {
+                    "step_id": 1,
+                    "action": "EDIT",
+                    "file": "sqli/dao/student.py",
+                    "instruction": "parameterize",
+                    "target_type": "function",
+                    "target_name": "create",
+                    "intent_marker": "execute",
+                }
+            ],
+        },
+        plan_validation={
+            "fatals": [],
+            "warnings": ["EDIT step 1: missing approximate_line hint"],
+            "edit_outcomes": [{"step_id": 1, "noop_diff": True, "passed": False}],
+        },
+    )
+    result = planner_preflight(case, art)
+    assert not result.skip_judge
+    assert result.warnings
+
+
+def test_planner_preflight_fatal_invalid_json():
+    """Missing plan is fatal — skip judge."""
+    from evals.artifacts.pipeline_result import PipelineArtifact
+    from evals.evaluators.preflight import planner_preflight
+
+    case = next(c for c in load_cases(GOLDEN) if c.case_id == "G-01")
+    art = PipelineArtifact(
+        case_id="G-01",
+        run_id="run_test",
+        captured_at="2026-01-01T00:00:00Z",
+        plan=None,
+        stage_failed="planner",
+        error="Invalid JSON",
+    )
+    result = planner_preflight(case, art)
+    assert result.skip_judge
+    assert result.fatals
+
+
+def test_judge_verdict_weighted_score():
+    """JudgeVerdict computes weighted composite."""
+    from evals.evaluators.llm_judge_base import EXECUTOR_CRITERIA_WEIGHTS, CriterionScore, JudgeVerdict
+
+    verdict = JudgeVerdict(
+        score=80,
+        passed=True,
+        criteria={
+            "intent_implementation": CriterionScore(score=90, reason="ok"),
+            "security_fix_quality": CriterionScore(score=85, reason="ok"),
+            "code_correctness": CriterionScore(score=80, reason="ok"),
+            "precision": CriterionScore(score=75, reason="ok"),
+            "regression_risk": CriterionScore(score=70, reason="ok"),
+            "validation_honesty": CriterionScore(score=85, reason="ok"),
+            "response_accuracy": CriterionScore(score=80, reason="ok"),
+        },
+    )
+    assert verdict.normalized(EXECUTOR_CRITERIA_WEIGHTS) > 0.7
+
+
+def test_format_judge_comment_includes_full_reasoning_and_criteria():
+    """LangSmith comment must not truncate judge reasoning or per-criterion detail."""
+    from evals.evaluators.llm_judge_base import CriterionScore, JudgeVerdict, format_judge_comment
+
+    long_reason = (
+        "The executor largely followed the plan's intended remediation by replacing committed "
+        "Secrets with SealedSecret manifests, but the post-edit excerpts show corrupted apiVersion "
+        "lines that would prevent Kubernetes from accepting these resources."
+    )
+    criterion_reason = (
+        "Post-edit manifests appear syntactically corrupted: the after-context shows invalid YAML "
+        "which would prevent kubectl from applying these resources."
+    )
+    verdict = JudgeVerdict(
+        score=35,
+        passed=False,
+        reasoning=long_reason,
+        criteria={
+            "code_correctness": CriterionScore(score=0, reason=criterion_reason),
+        },
+        hard_failures=["Final YAML appears invalid in multiple modified files."],
+        soft_failures=["Repository artifacts are internally inconsistent."],
+    )
+    comment = format_judge_comment(verdict)
+    assert long_reason in comment
+    assert criterion_reason in comment
+    assert "Hard failures:" in comment
+    assert "Soft failures:" in comment
+    assert "code_correctness: 0" in comment
+    assert len(comment) > 240
+
+
+def test_compare_runs(tmp_path: Path, monkeypatch):
+    """compare_runs reports delta between two reports."""
+    from evals.runners.compare_runs import compare_runs
+
+    runs = tmp_path / "evals" / "runs"
+    (runs / "run_a").mkdir(parents=True)
+    (runs / "run_b").mkdir(parents=True)
+    (runs / "run_a" / "report.json").write_text(
+        '{"evaluator_means": {"planner_judge": 0.71}, "pass_rate": 0.5}',
+        encoding="utf-8",
+    )
+    (runs / "run_b" / "report.json").write_text(
+        '{"evaluator_means": {"planner_judge": 0.86}, "pass_rate": 0.8}',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    text = compare_runs("run_a", "run_b")
+    assert "planner_judge" in text
+    assert "0.71" in text
+    assert "0.86" in text
+
+
+def test_implement_target_forwards_artifact_kwargs():
+    """implement mode must accept run_id/save_artifact like integration."""
+    import inspect
+
+    from evals.harness.targets import run_implement_target
+
+    params = inspect.signature(run_implement_target).parameters
+    assert "run_id" in params
+    assert "save_artifact" in params
+
+
+def test_edit_outcomes_populate_executor_validations():
+    """Artifact capture maps edit_outcome telemetry to executor_validations."""
+    from evals.harness.artifact_capture import (
+        build_pipeline_artifact,
+        edit_outcomes_to_executor_validations,
+    )
+
+    outcomes = edit_outcomes_to_executor_validations(
+        [
+            {
+                "step_id": 2,
+                "file": "models/user.py",
+                "passed": False,
+                "noop_diff": True,
+                "structural_fail": False,
+                "validation_fail_reason": "no change applied",
+                "retry_count": 1,
+                "missing_requirements": ["use PreparedStatement"],
+            }
+        ]
+    )
+    assert len(outcomes) == 1
+    assert outcomes[0]["confidence"] == 0.0
+    assert outcomes[0]["noop_diff"] is True
+
+    case = next(c for c in load_cases(GOLDEN) if c.case_id == "G-01")
+    art = build_pipeline_artifact(
+        case,
+        run_id="run_test",
+        repo_path=".",
+        execution=type(
+            "Result",
+            (),
+            {
+                "changed_files": ["sqli/dao/student.py"],
+                "step_results": [
+                    {
+                        "step_id": 1,
+                        "action": "EDIT",
+                        "file": "sqli/dao/student.py",
+                        "ok": True,
+                        "edit_outcome": {
+                            "step_id": 1,
+                            "file": "sqli/dao/student.py",
+                            "passed": True,
+                            "noop_diff": False,
+                            "structural_fail": False,
+                            "retry_count": 0,
+                        },
+                    }
+                ],
+                "model_dump": lambda self: {},
+            },
+        )(),
+    )
+    assert len(art.executor_validations) == 1
+    assert art.executor_validations[0]["passed"] is True
+    assert art.plan_validation["edit_outcomes"][0]["step_id"] == 1
+
+
+def test_resolve_snapshot_path_resets_cached_checkout(tmp_path, monkeypatch):
+    """Cached eval repos are reset to pinned SHA before reuse."""
+    from evals.harness import repo as repo_mod
+    from evals.schema.case import RepoSnapshot
+
+    cache_root = tmp_path / "cache"
+    monkeypatch.setattr(repo_mod, "CACHE_ROOT", cache_root)
+
+    dest = cache_root / "WebGoat@f69f564fcc34"
+    dest.mkdir(parents=True)
+    (dest / ".git").mkdir()
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, cwd=None):
+        calls.append(cmd)
+
+    monkeypatch.setattr(repo_mod, "_run", fake_run)
+
+    snap = RepoSnapshot(
+        slug="WebGoat",
+        url="https://github.com/WebGoat/WebGoat",
+        commit_sha="f69f564fcc34cf44aae273e06346fc6216b30e18",
+    )
+    path = repo_mod.resolve_snapshot_path("G-13", snap)
+    assert path == str(dest)
+    assert ["git", "fetch", "--depth", "1", "origin", snap.commit_sha] in calls
+    assert ["git", "reset", "--hard", snap.commit_sha] in calls
+    assert ["git", "clean", "-fd"] in calls

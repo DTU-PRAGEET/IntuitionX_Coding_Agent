@@ -26,16 +26,29 @@ Usage:
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import Any
 
-from evals.evaluators.scoring import (
-    file_identification_f1,
-    fix_type_match,
-    patch_contains_excludes,
-    plan_line_overlap,
-    route_correctness,
-)
+# Shared run directory for multi-case LangSmith integration/e2e experiments.
+_LANGSMITH_RUN_ID: str | None = None
+
+
+def set_langsmith_run_id(run_id: str) -> None:
+    """Pin one evals/runs/ directory for all cases in a LangSmith experiment."""
+    global _LANGSMITH_RUN_ID
+    _LANGSMITH_RUN_ID = run_id
+    os.environ["EVAL_RUN_ID"] = run_id
+
+
+def get_langsmith_run_id() -> str:
+    return _LANGSMITH_RUN_ID or os.environ.get("EVAL_RUN_ID", "")
+
+from evals.evaluators.executor_judge import executor_judge_from_artifact
+from evals.evaluators.planner_judge import planner_judge_from_artifact
+from evals.evaluators.preflight_scores import executor_preflight_score, planner_preflight_score
+from evals.evaluators.scoring import file_identification_f1, route_correctness
+from evals.evaluators.legacy_scoring import fix_type_match, patch_contains_excludes, plan_line_overlap
 from evals.harness.prediction import Prediction
 from evals.harness.targets import TARGETS
 from evals.schema.case import EvalCase, ExpectedLineRange, RepoSnapshot, TicketInput
@@ -172,6 +185,38 @@ def _score_to_langsmith(res) -> dict[str, Any]:
     return {"key": res.key, "score": res.score, "comment": res.comment}
 
 
+def _artifact_from_pred(pred: Prediction):
+    if not pred.artifact_path:
+        return None
+    from evals.artifacts.pipeline_result import PipelineArtifact
+
+    return PipelineArtifact.model_validate_json(
+        open(pred.artifact_path, encoding="utf-8").read()
+    )
+
+
+def planner_judge_langsmith(run: Any, example: Any) -> dict[str, Any]:
+    """Planner LLM judge LangSmith evaluator."""
+    case = _case_from_langsmith_example(example, scope="plan")
+    pred = _pred_from_run(run, case.case_id)
+    artifact = _artifact_from_pred(pred)
+    if artifact is None:
+        return {"key": "planner_judge", "score": 0.0, "comment": "no artifact"}
+    res = planner_judge_from_artifact(case, artifact)
+    return _score_to_langsmith(res)
+
+
+def executor_judge_langsmith(run: Any, example: Any) -> dict[str, Any]:
+    """Executor LLM judge LangSmith evaluator."""
+    case = _case_from_langsmith_example(example, scope="implement")
+    pred = _pred_from_run(run, case.case_id)
+    artifact = _artifact_from_pred(pred)
+    if artifact is None:
+        return {"key": "executor_judge", "score": 0.0, "comment": "no artifact"}
+    res = executor_judge_from_artifact(case, artifact)
+    return _score_to_langsmith(res)
+
+
 def make_langsmith_target(mode: str):
     """Build a LangSmith target that always returns a Prediction-shaped dict."""
     fn = TARGETS[mode]
@@ -183,8 +228,14 @@ def make_langsmith_target(mode: str):
         pred = Prediction(case_id=case_id)
         try:
             case = _case_from_langsmith_inputs(inputs)
-            if mode in ("implement", "e2e"):
-                pred = fn(case, dry_run=(mode == "implement"))
+            if mode in ("implement", "integration", "e2e"):
+                run_id = get_langsmith_run_id()
+                pred = fn(
+                    case,
+                    dry_run=(mode == "implement"),
+                    save_artifact=mode in ("integration", "e2e", "implement"),
+                    run_id=run_id,
+                )
             else:
                 pred = fn(case)
         except Exception as e:  # noqa: BLE001
@@ -210,6 +261,7 @@ research_langsmith_target = make_langsmith_target("research")
 routing_langsmith_target = make_langsmith_target("routing")
 plan_langsmith_target = make_langsmith_target("plan")
 implement_langsmith_target = make_langsmith_target("implement")
+integration_langsmith_target = make_langsmith_target("integration")
 e2e_langsmith_target = make_langsmith_target("e2e")
 
 
@@ -248,11 +300,37 @@ def patch_contains_langsmith(run: Any, example: Any) -> dict[str, Any]:
     return _score_to_langsmith(patch_contains_excludes(case, pred))
 
 
+def planner_preflight_langsmith(run: Any, example: Any) -> dict[str, Any]:
+    """Planner preflight LangSmith evaluator."""
+    case = _case_from_langsmith_example(example, scope="plan")
+    pred = _pred_from_run(run, case.case_id)
+    return _score_to_langsmith(planner_preflight_score(case, pred))
+
+
+def executor_preflight_langsmith(run: Any, example: Any) -> dict[str, Any]:
+    """Executor preflight LangSmith evaluator."""
+    case = _case_from_langsmith_example(example, scope="implement")
+    pred = _pred_from_run(run, case.case_id)
+    return _score_to_langsmith(executor_preflight_score(case, pred))
+
+
 RESEARCH_EVALUATORS = [file_f1_langsmith]
 ROUTING_EVALUATORS = [route_correct_langsmith]
-PLAN_EVALUATORS = [fix_type_match_langsmith, plan_line_overlap_langsmith]
-IMPLEMENT_EVALUATORS = [patch_contains_langsmith]
-E2E_EVALUATORS = [
+PLAN_EVALUATORS = [planner_judge_langsmith]
+IMPLEMENT_EVALUATORS = [executor_judge_langsmith]
+INTEGRATION_EVALUATORS = [
+    route_correct_langsmith,
+    file_f1_langsmith,
+    planner_preflight_langsmith,
+    planner_judge_langsmith,
+    executor_preflight_langsmith,
+    executor_judge_langsmith,
+]
+E2E_EVALUATORS = INTEGRATION_EVALUATORS
+
+LEGACY_PLAN_EVALUATORS = [fix_type_match_langsmith, plan_line_overlap_langsmith]
+LEGACY_IMPLEMENT_EVALUATORS = [patch_contains_langsmith]
+LEGACY_E2E_EVALUATORS = [
     route_correct_langsmith,
     file_f1_langsmith,
     fix_type_match_langsmith,
@@ -265,6 +343,7 @@ MODE_TARGETS = {
     "research": research_langsmith_target,
     "plan": plan_langsmith_target,
     "implement": implement_langsmith_target,
+    "integration": make_langsmith_target("integration"),
     "e2e": e2e_langsmith_target,
 }
 
@@ -273,5 +352,12 @@ MODE_EVALUATORS = {
     "research": RESEARCH_EVALUATORS,
     "plan": PLAN_EVALUATORS,
     "implement": IMPLEMENT_EVALUATORS,
+    "integration": INTEGRATION_EVALUATORS,
     "e2e": E2E_EVALUATORS,
+}
+
+LEGACY_MODE_EVALUATORS = {
+    "plan": LEGACY_PLAN_EVALUATORS,
+    "implement": LEGACY_IMPLEMENT_EVALUATORS,
+    "e2e": LEGACY_E2E_EVALUATORS,
 }

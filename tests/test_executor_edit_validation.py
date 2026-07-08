@@ -7,8 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.agents.executor.agent import _execute_edit, run_executor
-from src.agents.executor.tools.builder import build_executor_tools
+from src.agents.executor.agent import run_executor
 from src.core.schemas import ExecutionPlan, ExecutionStep
 from src.integrations.cursor.gateway import LocalPatchCursorGateway
 from src.integrations.cursor.schemas import CursorEditResult
@@ -49,7 +48,7 @@ def _semantic_edit(step_id: int, file: str, instruction: str, marker: str, **kw)
         reason="security fix",
         validate=f"grep for {marker}",
         target_type=kw.get("target_type", "block"),
-        target_name=kw.get("target_name", ""),
+        target_name=kw.get("target_name", "target"),
         approximate_line=kw.get("approximate_line", 1),
         end_line=kw.get("end_line", 10),
         instruction=instruction,
@@ -58,7 +57,8 @@ def _semantic_edit(step_id: int, file: str, instruction: str, marker: str, **kw)
 
 
 def test_executor_rejects_failed_cursor_edit(tmp_path):
-    """Failed edit when Cursor fails and LLM validation also fails."""
+    """Failed edit when validation fails after both batch passes."""
+
     class FailGateway(LocalPatchCursorGateway):
         def edit(self, *args, **kwargs):
             return CursorEditResult(status="failed", text="failed", exit_code=1)
@@ -71,22 +71,18 @@ def test_executor_rejects_failed_cursor_edit(tmp_path):
         execution_steps=[_semantic_edit(1, "f.py", "Apply fix", "MISSING")],
         risk_level="low",
     )
-    registry, _ = build_executor_tools(str(tmp_path))
-    try:
-        ok, out, _devs = _execute_edit(
-            registry,
-            plan.execution_steps[0].model_dump(),
+    with pytest.raises(RuntimeError, match="still failing"):
+        run_executor(
             plan,
-            create_files=False,
+            str(tmp_path),
             llm=_llm_fail(),
             gateway=FailGateway(tmp_path),
         )
-    finally:
-        registry.dispose()
-    assert ok is False
 
 
 def test_executor_snapshot_mismatch_raises(tmp_path):
+    from unittest.mock import patch
+
     (tmp_path / "f.py").write_text("x\n", encoding="utf-8")
     plan = ExecutionPlan(
         ticket_id="T-1",
@@ -105,8 +101,18 @@ def test_executor_snapshot_mismatch_raises(tmp_path):
         ],
         risk_level="low",
     )
-    with pytest.raises(RuntimeError, match="snapshot mismatch"):
-        run_executor(plan, str(tmp_path), gateway=LocalPatchCursorGateway(tmp_path))
+    snap = {
+        "repo_path": str(tmp_path),
+        "cwd": "",
+        "head": "cafebabe" * 5,
+        "branch": "main",
+        "status_short": "",
+        "diff_stat": "",
+        "is_git": True,
+    }
+    with patch("src.agents.executor.agent.git_repo_snapshot", return_value=snap):
+        with pytest.raises(RuntimeError, match="snapshot mismatch"):
+            run_executor(plan, str(tmp_path), gateway=LocalPatchCursorGateway(tmp_path))
 
 
 def test_executor_accepts_semantic_edit_with_llm_validation(tmp_path):
@@ -185,7 +191,7 @@ def test_executor_accepts_when_intent_already_present(tmp_path):
 
 
 def test_executor_retries_cursor_once_on_validation_failure(tmp_path):
-    """First validation fails, second passes — exactly two Cursor calls."""
+    """First validation fails, second passes — exactly two Cursor batch calls."""
     target = tmp_path / "f.py"
     target.write_text("vulnerable = True\n", encoding="utf-8")
     plan = ExecutionPlan(
@@ -221,23 +227,17 @@ def test_executor_retries_cursor_once_on_validation_failure(tmp_path):
         })),
     ]
 
-    registry, _ = build_executor_tools(str(tmp_path))
-    try:
-        ok, _out, devs = _execute_edit(
-            registry,
-            plan.execution_steps[0].model_dump(),
-            plan,
-            create_files=False,
-            llm=llm,
-            gateway=CountingGateway(tmp_path),
-        )
-    finally:
-        registry.dispose()
+    result = run_executor(
+        plan,
+        str(tmp_path),
+        llm=llm,
+        gateway=CountingGateway(tmp_path),
+    )
 
-    assert ok is True
+    assert result.steps_completed == 1
     assert call_count["n"] == 2
     assert llm.invoke.call_count == 2
-    assert any("retry" in d for d in devs)
+    assert any("repair" in d for d in result.plan_deviations)
 
 
 def test_executor_fails_without_third_cursor_call(tmp_path):
@@ -259,20 +259,50 @@ def test_executor_fails_without_third_cursor_call(tmp_path):
             return super().edit(*args, **kwargs)
 
     llm = _llm_fail()
-    registry, _ = build_executor_tools(str(tmp_path))
-    try:
-        ok, out, _ = _execute_edit(
-            registry,
-            plan.execution_steps[0].model_dump(),
+    with pytest.raises(RuntimeError, match="still failing") as exc_info:
+        run_executor(
             plan,
-            create_files=False,
+            str(tmp_path),
             llm=llm,
             gateway=CountingGateway(tmp_path),
         )
-    finally:
-        registry.dispose()
 
-    assert ok is False
     assert call_count["n"] == 2
     assert llm.invoke.call_count == 2
-    assert "incomplete" in out.lower()
+    assert "step 1" in str(exc_info.value)
+
+
+def test_executor_continues_after_validation_failure_in_eval_mode(tmp_path):
+    """Eval mode returns structured result instead of raising on validation failure."""
+    (tmp_path / "f.py").write_text("bad\n", encoding="utf-8")
+    plan = ExecutionPlan(
+        ticket_id="T-1",
+        root_hypothesis="fix",
+        files_to_change=["f.py"],
+        execution_steps=[
+            _semantic_edit(1, "f.py", "Fix it", "FIXED"),
+            ExecutionStep(
+                step_id=2,
+                action="VERIFY",
+                file="f.py",
+                target="verify",
+                reason="check",
+                validate="grep for FIXED",
+            ),
+        ],
+        risk_level="low",
+    )
+
+    result = run_executor(
+        plan,
+        str(tmp_path),
+        llm=_llm_fail(),
+        gateway=LocalPatchCursorGateway(tmp_path),
+        continue_on_edit_validation_failure=True,
+    )
+
+    assert result.validation_failed_steps == [1]
+    assert len(result.step_results) == 2
+    assert result.step_results[0]["ok"] is False
+    assert result.step_results[0]["edit_outcome"]["passed"] is False
+    assert result.step_results[1]["action"] == "VERIFY"

@@ -1,30 +1,30 @@
-"""FastAPI app — CI/CD error ingestion, approval resume, health checks."""
+"""FastAPI app — start pipeline by ticket id, poll status, resume HITL gates."""
 
 from __future__ import annotations
 
-import uuid
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from langgraph.types import Command
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, status
 
-from src.core.graph import build_graph
+from src.api.schemas import (
+    EnqueueTicketResponse,
+    RunTicketRequest,
+    TicketConflictResponse,
+    TicketStatusResponse,
+)
+from src.api.ticket_jobs import TicketJobConflict, ticket_job_store
 from src.core.schemas import ApprovalDecision
-from src.core.state import initial_state
-from src.memory.cache import save_failed_attempt
-
-app = FastAPI(title="Sprinklr Jira Solver API")
 
 
-class CICDErrorPayload(BaseModel):
-    """CI/CD failure webhook body — ticket_id, error_log, optional plan_used snapshot.
-    Handled by `POST /webhook/cicd-error` to seed self-healing AgentState retry."""
-    ticket_id: str
-    error_log: str
-    session_id: str | None = None
-    plan_used: dict | None = None
-    stage_failed: str = "Build"
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Start the background job worker on startup."""
+    await ticket_job_store.start_worker()
+    yield
+    await ticket_job_store.stop_worker()
+
+
+app = FastAPI(title="Sprinklr Jira Solver API", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -33,59 +33,91 @@ def health():
     return {"status": "ok"}
 
 
+@app.post("/run", response_model=EnqueueTicketResponse)
+async def run_ticket(request: RunTicketRequest):
+    """Enqueue a full pipeline run for a Jira ticket id."""
+    ticket_id = request.ticket_id.strip().upper()
+    if not ticket_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="ticket_id is required",
+        )
+
+    try:
+        job = ticket_job_store.enqueue(
+            ticket_id,
+            user_prompt=request.user_prompt,
+            repo_path=request.repo_path,
+        )
+    except TicketJobConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=TicketConflictResponse(
+                detail=f"Active job already exists for {exc.job.ticket_id}",
+                job_id=exc.existing_job_id,
+                ticket_id=exc.job.ticket_id,
+                status=exc.job.status,
+                thread_id=exc.job.thread_id,
+            ).model_dump(),
+        ) from exc
+
+    return EnqueueTicketResponse(
+        job_id=job.job_id,
+        ticket_id=job.ticket_id,
+        status=job.status,
+        thread_id=job.thread_id,
+        message="Ticket queued for processing",
+    )
+
+
+@app.get("/tickets/{ticket_or_job_id}", response_model=TicketStatusResponse)
+async def get_ticket_status(ticket_or_job_id: str):
+    """Return job status by ticket id (e.g. PLAT-1234) or job_id uuid."""
+    job = ticket_job_store.resolve(ticket_or_job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No job found for this ticket or job id",
+        )
+    return job.to_response()
+
+
 @app.post("/approve/{thread_id}")
 async def approve_workflow(thread_id: str, decision: ApprovalDecision):
     """Resume a paused workflow (HITL gate or diff confirm) via API."""
-    graph = build_graph()
-    config = {"configurable": {"thread_id": thread_id}}
+    job = ticket_job_store.get_job_by_thread(thread_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No paused job found for this thread_id",
+        )
+
     resume = {"status": decision.status, "feedback": decision.feedback}
     try:
-        result = graph.invoke(Command(resume=resume), config=config)
-        return {
-            "status": "resumed",
-            "current_phase": result.get("current_phase"),
-            "routing_route": result.get("routing_route"),
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+        from src.pipeline.graph_runner import resume_graph_until_pause
 
+        outcome = await resume_graph_until_pause(thread_id, resume)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc), "thread_id": thread_id}
 
-@app.post("/webhook/cicd-error")
-async def cicd_error_webhook(payload: CICDErrorPayload):
-    """Manual CI/CD error upload — triggers self-healing cycle."""
-    now = datetime.now(timezone.utc).isoformat()
+    updated = await ticket_job_store.apply_resume_outcome(thread_id, outcome)
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job disappeared while resuming",
+        )
 
-    failed_attempt = {
-        "attempt_id": str(uuid.uuid4()),
-        "ticket_id": payload.ticket_id,
-        "phase_failed": "CICD",
-        "error_type": payload.stage_failed.lower(),
-        "error_summary": payload.error_log[:2000],
-        "plan_hash": None,
-        "plan_used": payload.plan_used,
-        "timestamp": now,
-    }
-    save_failed_attempt(failed_attempt)
-
-    state = initial_state(jira_ticket_id=payload.ticket_id)
-    state["current_error_log"] = payload.error_log
-    state["retry_count"] = state.get("retry_count", 0) + 1
-    state["self_healing_cycle_index"] = state.get("self_healing_cycle_index", 0) + 1
-
-    if state["retry_count"] > state["max_retries"]:
-        return {"status": "MAX_RETRIES_EXCEEDED", "action": "manual_intervention_required"}
-
-    graph = build_graph()
-    thread_id = payload.session_id or str(uuid.uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
-
-    try:
-        graph.invoke(state, config=config)
-    except Exception as e:
-        return {"status": "PAUSED_OR_ERROR", "message": str(e), "thread_id": thread_id}
-
-    return {
-        "status": "SELF_HEALING_INITIATED",
-        "ticket_id": payload.ticket_id,
+    response = {
+        "status": updated.status.value,
         "thread_id": thread_id,
+        "ticket_id": updated.ticket_id,
+        "job_id": updated.job_id,
+        "current_phase": updated.current_phase,
+        "routing_route": updated.routing_route,
+        "paused_gate": updated.paused_gate,
     }
+    if updated.error:
+        response["error"] = updated.error
+    if updated.mr_url:
+        response["mr_url"] = updated.mr_url
+    return response

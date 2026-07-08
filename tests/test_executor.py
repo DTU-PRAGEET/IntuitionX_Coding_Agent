@@ -54,7 +54,7 @@ def _semantic_edit(
     intent_marker: str,
     *,
     target_type: str = "block",
-    target_name: str = "",
+    target_name: str = "target",
     approximate_line: int = 1,
     end_line: int = 5,
     validate: str | None = None,
@@ -210,6 +210,57 @@ def test_verify_uses_prior_edit_intent_marker(tmp_path):
     finally:
         registry.dispose()
     assert ok
+
+
+def test_verify_intent_marker_succeeds_beyond_read_snippet_limit(tmp_path):
+    """VERIFY must trust full-file verify_intent_marker, not a truncated read."""
+    from src.agents.executor.agent import _execute_verify
+    from src.agents.executor.tools.builder import build_executor_tools
+
+    target = tmp_path / "large_spec.ts"
+    # Marker on line 221 — past the 200-line default used by _read_file_snippet.
+    lines = ["// filler\n"] * 219 + [
+        "        // searchValue is assigned directly as plain string\n",
+        "        expect(component.searchValue).toBe('<script>')\n",
+    ]
+    target.write_text("".join(lines), encoding="utf-8")
+
+    plan = ExecutionPlan(
+        ticket_id="G-14",
+        root_hypothesis="XSS test update",
+        files_to_change=["large_spec.ts"],
+        execution_steps=[
+            ExecutionStep(
+                step_id=1,
+                action="EDIT",
+                file="large_spec.ts",
+                target="Update test",
+                reason="Secure assignment",
+                validate="patched",
+                instruction="Update test expectations for secure searchValue assignment.",
+                intent_marker="searchValue is assigned directly",
+                target_type="block",
+                target_name="searchValue",
+            ),
+            ExecutionStep(
+                step_id=2,
+                action="VERIFY",
+                file="large_spec.ts",
+                target="Confirm test update",
+                reason="Ensure marker present",
+                validate="Tests validate secure searchValue assignment",
+            ),
+        ],
+        risk_level="low",
+    )
+    registry, _ = build_executor_tools(str(tmp_path))
+    try:
+        verify_step = plan.execution_steps[1].model_dump(by_alias=True)
+        ok, out = _execute_verify(registry, verify_step, plan)
+    finally:
+        registry.dispose()
+    assert ok, out
+    assert "intent marker verified" in out
 
 
 def test_verify_requires_all_validate_patterns(tmp_path):
@@ -519,9 +570,9 @@ def test_verify_passes_when_pem_only_in_comments_after_intent_marker(tmp_path):
                 target="replace key",
                 reason="fix",
                 validate="patched",
+                instruction="Redact SSH private key. Acceptance: (1) intent marker present, (2) no live PEM.",
                 intent_marker="INTENT_MARKER:SPACE-129070_REMOVE_SSH_PRIVATE_KEY",
-                old_string="-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n-----END OPENSSH PRIVATE KEY-----\n",
-                new_string="# INTENT_MARKER:SPACE-129070_REMOVE_SSH_PRIVATE_KEY\n",
+                target_type="file",
                 change="redact",
             ),
             ExecutionStep(
@@ -562,9 +613,10 @@ def test_executor_syncs_edit_file_into_allowlist(tmp_path):
                 target="patch",
                 reason="disallowed",
                 validate="patched",
-                old_string="x = 1\n",
-                new_string="x = 2\n",
+                instruction="Change x to 2. Acceptance: (1) x = 2 present.",
                 intent_marker="x = 2",
+                target_type="assignment",
+                target_name="x",
             ),
         ],
     )

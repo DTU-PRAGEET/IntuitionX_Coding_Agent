@@ -43,11 +43,11 @@ _SEMANTIC_EXECUTION_PLAN_SCHEMA = """
       "target": "Parameterize JWT secret",
       "reason": "Remove committed secret",
       "validate": "grep for os.environ",
+      "instruction": "Replace the hardcoded JWT secret with an environment variable. Do not change public API signatures. Acceptance: (1) secret read from environment, (2) os.environ or equivalent present, (3) no hardcoded secret string remains.",
+      "intent_marker": "os.environ",
       "target_type": "function",
       "target_name": "validate_user",
       "approximate_line": 120,
-      "instruction": "Replace the hardcoded JWT secret with an environment variable.",
-      "intent_marker": "os.environ",
       "change": "Use env var for JWT secret"
     },
     {
@@ -106,14 +106,18 @@ def build_semantic_plan_prompt(
         include_references=False,
         extra_instructions=(
             "Explore the repository at the given repo_path. Read affected files on disk. "
-            "Produce an ExecutionPlan JSON with semantic EDIT steps — do NOT use old_string "
-            "or new_string patches.\n\n"
-            "Every EDIT step MUST include: file, target, reason, validate, target_type, "
-            "target_name (except file/block targets), instruction, intent_marker.\n"
-            "target_type must be one of: function, method, class, variable, assignment, "
-            "import, block, file.\n"
-            "Use approximate_line as a hint from your exploration. For block targets, "
-            "include end_line.\n"
+            "Produce an ExecutionPlan JSON with instruction-based EDIT steps — do NOT use "
+            "old_string or new_string patches.\n\n"
+            "Every EDIT step MUST include: file, target, reason, validate, instruction, "
+            "intent_marker, target_type, and target_name.\n"
+            "The instruction MUST be self-contained with: what to change, what NOT to touch, "
+            "and an inline acceptance checklist: "
+            "'Acceptance: (1) ..., (2) ..., (3) ...'.\n"
+            "Every EDIT MUST include target_type and target_name identifying the edit site.\n"
+            "If your READ shows the target symbol appears multiple times, set caution_flag "
+            "explaining the ambiguity and which occurrence relates to the security issue. "
+            "caution_flag is guidance for the executor — not an error condition.\n"
+            "Use approximate_line as an optional hint from your exploration.\n"
             "Every EDIT must be preceded by READ and followed by VERIFY on the same file.\n"
             "Use actions READ|EDIT|VERIFY|RUN_TESTS only.\n\n"
             f"Return ONLY valid JSON matching this schema (no markdown fences):\n"
@@ -151,12 +155,15 @@ def mock_semantic_plan(report: ResearchReport, repo_path: str) -> ExecutionPlan:
             target="Apply security fix",
             reason=hypothesis[:200],
             validate="grep for intent marker",
-            target_type="block",
-            target_name="",
             approximate_line=1,
-            end_line=10,
-            instruction=f"Apply fix for: {hypothesis[:300]}",
+            instruction=(
+                f"Apply fix for: {hypothesis[:300]}. "
+                "Do not restructure surrounding control flow. "
+                "Acceptance: (1) security fix applied, (2) intent marker present, (3) file still parses."
+            ),
             intent_marker="FIXED",
+            target_type="block",
+            target_name="security_fix",
             change="Security remediation",
         ),
         ExecutionStep(

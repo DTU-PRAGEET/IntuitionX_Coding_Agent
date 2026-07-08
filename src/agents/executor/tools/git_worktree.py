@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -84,6 +85,26 @@ def make_branch_name(ticket_id: str, prefix: str = "fix", description: str = "")
     return f"{base}-{run_tag}"
 
 
+def _is_git_checkout(path: str) -> bool:
+    """True when path is a checkout with a resolvable HEAD."""
+    return bool(git_repo_snapshot(path).get("is_git"))
+
+
+def _remove_worktree_dir(worktree_path: Path, source_repo_path: str) -> None:
+    """Unregister a worktree from git and delete its directory."""
+    if not worktree_path.exists():
+        return
+    _log.warning("worktree_remove", worktree_path=str(worktree_path))
+    _run_git(
+        ["worktree", "remove", "--force", str(worktree_path)],
+        source_repo_path,
+        check=False,
+    )
+    _run_git(["worktree", "prune"], source_repo_path, check=False)
+    if worktree_path.exists():
+        shutil.rmtree(worktree_path, ignore_errors=True)
+
+
 def _worktree_is_dirty(worktree_path: str) -> bool:
     """Worktree Is Dirty for this module."""
     status = _run_git(["status", "--porcelain"], worktree_path, check=False)
@@ -119,10 +140,14 @@ def _sync_worktree_to_snapshot(
 ) -> str:
     """Ensure worktree matches planner snapshot; return status token."""
     snap = git_repo_snapshot(worktree_path)
+    if not snap["is_git"]:
+        return "invalid"
+
     dirty = _worktree_is_dirty(worktree_path)
     head_mismatch = bool(planner_head and snap["head"] and snap["head"] != planner_head)
+    head_missing = bool(planner_head and not snap["head"])
 
-    if not dirty and not head_mismatch:
+    if not dirty and not head_mismatch and not head_missing:
         return "reused"
 
     target = _start_ref(
@@ -175,28 +200,37 @@ def create_worktree(
     worktree_path = worktree_base / ticket_id.lower().replace("-", "_")
 
     if worktree_path.exists():
-        status = _sync_worktree_to_snapshot(
-            str(worktree_path),
-            planner_head=planner_snapshot_head,
-            source_repo_path=repo_path,
-            base_branch=base,
-        )
-        _checkout_new_branch(str(worktree_path), branch_name)
-        log_repo_snapshot(
-            _log,
-            "worktree_ready",
-            str(worktree_path),
-            status=status,
-            branch_name=branch_name,
-        )
-        return {
-            "worktree_path": str(worktree_path),
-            "branch_name": branch_name,
-            "base_branch": base,
-            "status": status,
-            "source_repo_path": str(Path(repo_path).resolve()),
-            "planner_snapshot_head": planner_snapshot_head,
-        }
+        if not _is_git_checkout(str(worktree_path)):
+            _remove_worktree_dir(worktree_path, repo_path)
+        else:
+            status = _sync_worktree_to_snapshot(
+                str(worktree_path),
+                planner_head=planner_snapshot_head,
+                source_repo_path=repo_path,
+                base_branch=base,
+            )
+            if status == "invalid":
+                _remove_worktree_dir(worktree_path, repo_path)
+            else:
+                _checkout_new_branch(str(worktree_path), branch_name)
+                if not _is_git_checkout(str(worktree_path)):
+                    _remove_worktree_dir(worktree_path, repo_path)
+                else:
+                    log_repo_snapshot(
+                        _log,
+                        "worktree_ready",
+                        str(worktree_path),
+                        status=status,
+                        branch_name=branch_name,
+                    )
+                    return {
+                        "worktree_path": str(worktree_path),
+                        "branch_name": branch_name,
+                        "base_branch": base,
+                        "status": status,
+                        "source_repo_path": str(Path(repo_path).resolve()),
+                        "planner_snapshot_head": planner_snapshot_head,
+                    }
 
     start_ref = _start_ref(
         repo_path,
@@ -210,6 +244,15 @@ def create_worktree(
     )
     if not worktree_path.exists():
         _run_git(["worktree", "add", "-b", branch_name, str(worktree_path)], repo_path)
+
+    if not _is_git_checkout(str(worktree_path)):
+        detail = ""
+        if planner_snapshot_head:
+            detail = f" (planner HEAD {planner_snapshot_head[:12]})"
+        raise RuntimeError(
+            f"Failed to create git worktree at {worktree_path}{detail}. "
+            "Remove the directory or fix the source repository and retry."
+        )
 
     log_repo_snapshot(_log, "worktree_created", str(worktree_path), branch_name=branch_name)
     return {
