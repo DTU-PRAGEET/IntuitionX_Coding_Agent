@@ -34,7 +34,8 @@ RESEARCH_EXCLUDED_DEEPAGENT_TOOLS = frozenset(
     }
 )
 
-_LOAD_SKILL_ACK = "Skill loaded — guidance is now in your system instructions. Do not call load_skill again."
+_LOAD_SKILL_ACK = "Skill loaded — guidance is now in your system instructions."
+_LOAD_SKILL_ALREADY = "Skill already loaded — use the guidance in your system instructions."
 _LOAD_SKILL_ERROR_PREFIX = "load_skill error:"
 
 
@@ -71,8 +72,6 @@ def _visible_research_tools(messages: list, run_context: ResearchRunContext | No
     visible = set(RESEARCH_CORE_TOOLS)
     if _cursor_search_completed(messages):
         visible |= RESEARCH_EXTENDED_TOOLS
-    if run_context and run_context.has_loaded_skills:
-        visible.discard("load_skill")
     return frozenset(visible)
 
 
@@ -137,6 +136,14 @@ class ProgressiveSkillMiddleware(AgentMiddleware):
         if request.tool_call.get("name") != "load_skill":
             return handler(request)
 
+        skill_key = str(request.tool_call.get("args", {}).get("skill", "skill")).strip()
+        if skill_key in self._run_context.loaded_skills:
+            return ToolMessage(
+                content=_LOAD_SKILL_ALREADY,
+                tool_call_id=request.tool_call.get("id") or "",
+                name="load_skill",
+            )
+
         result = handler(request)
         if not isinstance(result, ToolMessage):
             return result
@@ -162,6 +169,14 @@ class ProgressiveSkillMiddleware(AgentMiddleware):
         """Awrap Tool Call for ProgressiveSkillMiddleware."""
         if request.tool_call.get("name") != "load_skill":
             return await handler(request)
+
+        skill_key = str(request.tool_call.get("args", {}).get("skill", "skill")).strip()
+        if skill_key in self._run_context.loaded_skills:
+            return ToolMessage(
+                content=_LOAD_SKILL_ALREADY,
+                tool_call_id=request.tool_call.get("id") or "",
+                name="load_skill",
+            )
 
         result = await handler(request)
         if not isinstance(result, ToolMessage):

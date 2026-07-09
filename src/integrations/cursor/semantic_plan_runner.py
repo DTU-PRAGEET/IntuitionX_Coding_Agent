@@ -30,6 +30,7 @@ _SEMANTIC_EXECUTION_PLAN_SCHEMA = """
   "execution_steps": [
     {
       "step_id": 1,
+     
       "action": "READ",
       "file": "src/auth.py",
       "target": "Read validate_user before edit",

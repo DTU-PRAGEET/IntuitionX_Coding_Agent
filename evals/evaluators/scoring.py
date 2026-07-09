@@ -17,7 +17,18 @@ def route_correctness(case: "EvalCase", pred: "Prediction") -> EvalScore:
         return EvalScore("route_correct", 0.0, "not in scope", applicable=False)
     if pred.route is None:
         return EvalScore("route_correct", 0.0, f"no route (error: {pred.error})")
-    ok = pred.route == case.expected_route
+
+    def _norm(route: str | None) -> str | None:
+        if route is None:
+            return None
+        r = route.strip().upper()
+        if r == "SKIP_RESEARCH":
+            return "MICRO"
+        return r
+
+    expected = _norm(case.expected_route)
+    actual = _norm(pred.route)
+    ok = expected == actual
     return EvalScore(
         "route_correct",
         1.0 if ok else 0.0,

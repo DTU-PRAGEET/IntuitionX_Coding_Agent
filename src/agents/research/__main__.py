@@ -66,13 +66,12 @@ def main(argv: list[str] | None = None) -> int:
     memory = InMemoryResearchMemory()
 
     if args.dry_run:
-        from src.agents.research.deep_runner import build_research_prompt, resolve_research_skill
+        from src.agents.research.deep_runner import build_research_prompt
         from src.agents.research.tools.file_discovery import extract_anchors
         from src.agents.research.tools.builder import build_research_tool_registry
         from src.integrations.cursor.gateway import get_cursor_gateway
 
         anchors = extract_anchors(ticket, args.prompt)
-        loaded_skill, skill_reason = resolve_research_skill(ticket)
         prompt = build_research_prompt(
             ticket, repo_path, profile, anchors, args.prompt, memory
         )
@@ -91,8 +90,7 @@ def main(argv: list[str] | None = None) -> int:
                     "prompt_chars": len(prompt),
                     "skills_mode": "deepagents_progressive",
                     "skills_root": str(default_skills_root()),
-                    "loaded_skill": loaded_skill.name if loaded_skill else None,
-                    "skill_reason": skill_reason,
+                    "skill_catalog": True,
                 },
                 indent=2,
             )

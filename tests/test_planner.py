@@ -16,6 +16,7 @@ from src.agents.planner.agent import (
     _validate_plan_executable,
     load_research_report,
     run_planner,
+    synthesize_micro_research_output,
 )
 from src.agents.planner.tools.builder import build_planner_tools
 from src.core.tool_permissions import get_allowed_tools
@@ -390,3 +391,23 @@ def test_planner_dry_run_cli():
     payload = json.loads(result.stdout)
     assert payload["dry_run"] is True
     assert payload["ticket_id"] == "PLAT-1234"
+
+
+def test_synthesize_micro_research_output_extracts_paths(tmp_path):
+    """MICRO route synthesis must pass repo_path to file-path extraction."""
+    repo = tmp_path / "repo"
+    (repo / "sqli").mkdir(parents=True)
+    (repo / "sqli" / "app.py").write_text("# app\n", encoding="utf-8")
+    state = {
+        "jira_ticket_id": "SPACE-1",
+        "repo_path": str(repo),
+        "jira_ticket": {
+            "issue_id": "SPACE-1",
+            "title": "Debug flag",
+            "problem_statement": "Turn off debug in sqli/app.py",
+            "module": "sqli",
+        },
+    }
+    out = synthesize_micro_research_output(state)
+    assert out["ticket_id"] == "SPACE-1"
+    assert any("sqli/app.py" in f["path"] for f in out["affected_files"])

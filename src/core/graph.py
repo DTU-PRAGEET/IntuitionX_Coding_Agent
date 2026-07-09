@@ -1,4 +1,4 @@
-"""LangGraph graph wiring — 4-route model with HITL gates."""
+"""LangGraph graph wiring — 3-route model (FULL / MICRO / EXIT) with HITL gates."""
 
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ from src.agents.orchestrator.agent import orchestrator_node
 from src.agents.planner.agent import planner_node
 from src.agents.research.agent import research_node
 from src.core.checkpointing import get_checkpointer
-from src.core.formatters import format_gate1_request, format_gate2_request, format_micro_confirm
+from src.core.formatters import format_gate1_request, format_gate2_request
+from src.core.orchestrator_context import normalize_routing_route
 from src.core.state import AgentState, HumanApprovalGate
 from src.tools.base import emit_event
 
@@ -74,32 +75,13 @@ def planning_hag_node(state: AgentState) -> AgentState:
     return {**state, "human_gates": gates}
 
 
-def micro_confirm_node(state: AgentState) -> AgentState:
-    """Quick confirm for MICRO route."""
-    message = format_micro_confirm(state)
-    emit_event("gate_pause", {"gate": "MICRO_CONFIRM", "message": message[:500]})
-    decision = interrupt(
-        {
-            "gate": "MICRO_CONFIRM",
-            "message": message,
-            "plan_output": state.get("plan_output"),
-        }
-    )
-    gate = _record_gate(state, "MICRO_CONFIRM", decision)
-    gates = list(state.get("human_gates", []))
-    gates.append(gate)
-    return {**state, "human_gates": gates}
-
-
 def route_after_orchestrator(state: AgentState) -> str:
     """Route After Orchestrator for this module."""
-    route = state.get("routing_route", "FULL")
+    route = normalize_routing_route(state.get("routing_route", "FULL"))
     if route == "EXIT":
         return "exit"
     if route == "FULL":
         return "research"
-    if route == "SKIP_RESEARCH":
-        return "planner"
     if route == "MICRO":
         return "planner"
     return "research"
@@ -133,25 +115,8 @@ def route_after_planning_hag(state: AgentState) -> str:
     return "reject"
 
 
-def route_after_micro_confirm(state: AgentState) -> str:
-    """Route After Micro Confirm for this module."""
-    gates = state.get("human_gates", [])
-    if not gates:
-        return "reject"
-    last = gates[-1]
-    status = last.get("status", "REJECTED")
-    if status == "APPROVED":
-        return "executor"
-    if status == "REVISE":
-        return "planner"
-    return "reject"
-
-
 def route_after_planner(state: AgentState) -> str:
     """Route After Planner for this module."""
-    route = state.get("routing_route", "FULL")
-    if route == "MICRO":
-        return "micro_confirm"
     return "planning_hag"
 
 
@@ -164,7 +129,6 @@ def build_graph(checkpointer=None):
     graph.add_node("research_hag", research_hag_node)
     graph.add_node("planner", planner_node)
     graph.add_node("planning_hag", planning_hag_node)
-    graph.add_node("micro_confirm", micro_confirm_node)
     graph.add_node("executor", executor_node)
 
     graph.set_entry_point("orchestrator")
@@ -195,23 +159,12 @@ def build_graph(checkpointer=None):
         route_after_planner,
         {
             "planning_hag": "planning_hag",
-            "micro_confirm": "micro_confirm",
         },
     )
 
     graph.add_conditional_edges(
         "planning_hag",
         route_after_planning_hag,
-        {
-            "executor": "executor",
-            "planner": "planner",
-            "reject": END,
-        },
-    )
-
-    graph.add_conditional_edges(
-        "micro_confirm",
-        route_after_micro_confirm,
         {
             "executor": "executor",
             "planner": "planner",

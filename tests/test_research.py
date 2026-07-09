@@ -93,8 +93,7 @@ def test_research_dry_run_cli(tmp_path, capsys):
     payload = json.loads(out)
     assert payload["dry_run"] is True
     assert "cursor_search" in payload["tool_names"]
-    assert payload["loaded_skill"] == "security_research"
-    assert payload["skill_reason"] == "label_match"
+    assert payload["skill_catalog"] is True
 
 
 def test_backfill_affected_files_from_hypothesis_evidence(tmp_path):

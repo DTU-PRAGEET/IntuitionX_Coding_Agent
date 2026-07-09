@@ -175,7 +175,7 @@ class AgentState(TypedDict):
     repo_profile: Optional[RepoProfile]
 
     # Orchestrator decisions
-    routing_route: Optional[Literal["FULL", "SKIP_RESEARCH", "MICRO", "EXIT"]]
+    routing_route: Optional[Literal["FULL", "MICRO", "EXIT", "SKIP_RESEARCH"]]
     current_phase: Literal[
         "INIT",
         "ORCHESTRATOR",

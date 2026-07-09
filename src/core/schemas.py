@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ── Tool layer ───────────────────────────────────────────────────────────────
@@ -387,10 +387,10 @@ class ExecutionPlan(BaseModel):
 
 
 class RoutingDecision(BaseModel):
-    """Orchestrator route: FULL / SKIP_RESEARCH / MICRO / EXIT plus risk tier.
+    """Orchestrator route: FULL / MICRO / EXIT plus risk tier.
     Parsed in `agents/orchestrator/agent.py`; sanitized in `core/orchestrator_context.py`.
-    Drives branching in `pipeline/runner.py` and eval routing targets."""
-    routing_route: Literal["FULL", "SKIP_RESEARCH", "MICRO", "EXIT"]
+    Legacy SKIP_RESEARCH from the LLM is coerced to MICRO."""
+    routing_route: Literal["FULL", "MICRO", "EXIT"]
     risk_level: Literal["LOW", "MEDIUM", "HIGH"]
     reasoning: str
     vulnerability_category: Optional[str] = Field(
@@ -401,6 +401,18 @@ class RoutingDecision(BaseModel):
         default=None,
         description="Canonical security skill stem for research (e.g. cryptographic-failures)",
     )
+
+    @field_validator("routing_route", mode="before")
+    @classmethod
+    def _coerce_routing_route(cls, value: Any) -> str:
+        if value is None:
+            return "FULL"
+        route = str(value).strip().upper()
+        if route == "SKIP_RESEARCH":
+            return "MICRO"
+        if route in ("FULL", "MICRO", "EXIT"):
+            return route
+        return "FULL"
 
 
 class FailedAttemptRecord(BaseModel):

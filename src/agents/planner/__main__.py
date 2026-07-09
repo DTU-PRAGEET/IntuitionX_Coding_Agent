@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--routing-route",
         default="FULL",
-        choices=["FULL", "SKIP_RESEARCH", "MICRO"],
+        choices=["FULL", "MICRO"],
         help="Routing context for plan scope",
     )
     parser.add_argument(

@@ -45,12 +45,12 @@ def test_progressive_tool_disclosure_starts_core_only():
     assert _visible_research_tools([], None) == RESEARCH_CORE_TOOLS
 
 
-def test_progressive_tool_disclosure_hides_load_skill_after_load():
-    """Test Progressive Tool Disclosure Hides Load Skill After Load for this module."""
+def test_progressive_tool_disclosure_keeps_load_skill_available():
+    """load_skill stays available so Research can load multiple skills during investigation."""
     ctx = ResearchRunContext()
     ctx.loaded_skills["research"] = "workflow body"
     visible = _visible_research_tools([], ctx)
-    assert "load_skill" not in visible
+    assert "load_skill" in visible
     assert "cursor_search" in visible
 
 
@@ -84,7 +84,8 @@ def test_build_research_user_message_has_load_skill_catalog(tmp_path):
     assert "## Skills System" in message
     assert "load_skill" in message
     assert "`research`" in message
-    assert "/security/injection.md" in message
+    assert "`injection`" in message
+    assert "trigger_conditions" in message
     assert "CWE-89" not in message
 
 
@@ -103,6 +104,42 @@ def test_load_skill_tool_resolves_security_rce_alias():
     body = tool.invoke({"skill": "security/rce"})
     assert len(body) > 100
     assert "load_skill error" not in body.lower()
+
+
+def test_build_research_user_message_shows_orchestrator_hints_as_non_binding(tmp_path):
+    """Orchestrator suggestions appear as hints, not preloaded skills."""
+    ticket = make_security_ticket("SEC-HINT-1")
+    ticket.setdefault("ticket_history_summary", {})["orchestrator_analysis"] = {
+        "recommended_security_skill": "injection",
+        "vulnerability_category": "injection",
+    }
+    message = build_research_user_message(
+        ticket,
+        str(tmp_path),
+        None,
+        [],
+        "",
+        InMemoryResearchMemory(),
+    )
+    assert "## Orchestrator hints (suggestions only — NOT restrictions)" in message
+    assert "suggested_security_skill" in message
+    assert "NOT a restriction" in message or "NOT restrictions" in message
+    assert "(recommended)" not in message
+    assert "Positive Indicators" not in message
+
+
+def test_progressive_skill_middleware_skips_reload():
+    """Already-loaded skills return a short ack without re-fetching."""
+    ctx = ResearchRunContext()
+    ctx.loaded_skills["injection"] = "existing body"
+    mw = ProgressiveSkillMiddleware(ctx)
+    request = MagicMock()
+    request.tool_call = {"name": "load_skill", "args": {"skill": "injection"}, "id": "t2"}
+    handler = MagicMock()
+
+    result = mw.wrap_tool_call(request, handler)
+    handler.assert_not_called()
+    assert "already loaded" in str(result.content).lower()
 
 
 def test_progressive_skill_middleware_compacts_tool_message_and_injects_system():

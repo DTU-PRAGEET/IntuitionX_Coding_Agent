@@ -19,14 +19,50 @@ from src.core.plan_validation import (
     validate_instruction_edits,
 )
 from src.core.file_paths import extract_repo_file_paths_from_texts, repair_repo_from_cursor_temp_clone, remap_cursor_path
+from src.core.orchestrator_context import normalize_routing_route
 from src.core.repo_snapshot import git_repo_snapshot, log_repo_snapshot
 from src.core.schemas import ExecutionPlan, ResearchReport
-from src.core.state import AgentState, PlanOutput
+from src.core.state import AgentState, PlanOutput, ResearchOutput
 from src.core.token_usage import reset_tracing_agent, set_tracing_agent
 from src.integrations.cursor.gateway import CursorGateway, get_cursor_gateway
 from src.integrations.cursor.semantic_plan_runner import mock_semantic_plan, run_semantic_plan
 
 _log = get_logger("planner")
+
+
+def synthesize_micro_research_output(state: AgentState) -> ResearchOutput:
+    """Minimal ResearchOutput when MICRO route skips the research agent."""
+    ticket = state.get("jira_ticket") or {}
+    ticket_id = state.get("jira_ticket_id") or ticket.get("issue_id") or "UNKNOWN"
+    problem = (ticket.get("problem_statement") or ticket.get("title") or "")[:500]
+    title = ticket.get("title") or "Scoped ticket"
+    repo_path = state.get("repo_path") or "."
+    paths = extract_repo_file_paths_from_texts(
+        [ticket.get("title") or "", ticket.get("problem_statement") or ""],
+        repo_path,
+    )
+    affected_files = [
+        {"path": path, "reason": "Named in ticket (MICRO route)", "evidence_strength": "moderate"}
+        for path in paths[:2]
+    ]
+    return ResearchOutput(
+        ticket_id=ticket_id,
+        research_summary=problem,
+        hypotheses=[
+            {
+                "rank": 1,
+                "hypothesis": title,
+                "evidence_strength": "moderate",
+                "evidence": ["MICRO route — no deep research run"],
+            }
+        ],
+        affected_files=affected_files,
+        affected_modules=[ticket.get("module", "unknown")],
+        module_blast_radius=[],
+        architectural_risk="low",
+        issue_type_assessment="unknown",
+        flags=["Research skipped per routing"],
+    )
 
 _INVALID_WHERE = frozenset({".", ""})
 
@@ -273,6 +309,10 @@ def planner_node(state: AgentState) -> AgentState:
     """Planner Node for this module."""
     now = datetime.now(timezone.utc).isoformat()
     research_raw = state.get("research_output")
+    route = normalize_routing_route(state.get("routing_route"))
+    if not research_raw and route == "MICRO":
+        research_raw = synthesize_micro_research_output(state)
+        _log.info("research_synthesized", route=route, ticket_id=state.get("jira_ticket_id"))
     if not research_raw:
         return {
             **state,
@@ -300,7 +340,7 @@ def planner_node(state: AgentState) -> AgentState:
         plan = run_planner(
             report,
             repo_path,
-            routing_route=state.get("routing_route") or "FULL",
+            routing_route=normalize_routing_route(state.get("routing_route") or "FULL"),
             previous_attempts=state.get("previous_attempts"),
             gate_feedback=gate_feedback,
             ticket=state.get("jira_ticket"),

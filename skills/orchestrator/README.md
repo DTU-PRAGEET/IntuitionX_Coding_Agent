@@ -1,7 +1,9 @@
-# Orchestrator Skills Module
+# Orchestrator skill
 
-Routing skill for pipeline entry — decides FULL / SKIP_RESEARCH / MICRO / EXIT.
+Routing skill for pipeline entry — decides **FULL / MICRO / EXIT**.
 
-## Files
+- **FULL** — Research → Gate 1 → Planner → Gate 2 → Executor
+- **MICRO** — Planner → Gate 2 → Executor (skips Research; former `SKIP_RESEARCH` cases merge here)
+- **EXIT** — no downstream agents
 
-- **orchestrator.md** — Routing rules and output contract
+Explicit route requests in `user_prompt` take highest priority (except Step 2 EXIT hard stops).

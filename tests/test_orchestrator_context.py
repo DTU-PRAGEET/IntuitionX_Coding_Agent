@@ -5,8 +5,13 @@ from __future__ import annotations
 import json
 
 from src.core.orchestrator_context import (
+    apply_locatability_micro_nudge,
     apply_orchestrator_ticket_analysis,
+    apply_user_route_override,
     build_orchestrator_routing_context,
+    extract_named_file_paths,
+    normalize_routing_route,
+    parse_explicit_user_route,
     sanitize_routing_decision,
 )
 from src.core.schemas import RoutingDecision
@@ -110,3 +115,85 @@ def test_apply_orchestrator_ticket_analysis_respects_jira_field():
     )
     apply_orchestrator_ticket_analysis(ticket, decision)
     assert ticket["vulnerability_category"] == "Injection"
+
+
+def test_normalize_routing_route_maps_skip_research_to_micro():
+    assert normalize_routing_route("SKIP_RESEARCH") == "MICRO"
+    assert normalize_routing_route("MICRO") == "MICRO"
+
+
+def test_parse_explicit_user_route():
+    assert parse_explicit_user_route("please take MICRO route") == "MICRO"
+    assert parse_explicit_user_route("route: FULL") == "FULL"
+    assert parse_explicit_user_route("use SKIP_RESEARCH route") == "MICRO"
+    assert parse_explicit_user_route("fix the sqli") is None
+
+
+def test_apply_user_route_override():
+    base = RoutingDecision(
+        routing_route="FULL",
+        risk_level="MEDIUM",
+        reasoning="symptom only",
+    )
+    overridden = apply_user_route_override(base, "take MICRO route")
+    assert overridden.routing_route == "MICRO"
+    assert "User prompt explicitly requested MICRO" in overridden.reasoning
+
+
+def test_routing_decision_coerces_skip_research():
+    decision = RoutingDecision(
+        routing_route="SKIP_RESEARCH",
+        risk_level="LOW",
+        reasoning="legacy",
+    )
+    assert decision.routing_route == "MICRO"
+
+
+def test_extract_named_file_paths():
+    text = (
+        "SQLi in `sqli/dao/student.py` and XSS in app/templates/reviews.html. "
+        "Also see config/dev.yaml."
+    )
+    paths = extract_named_file_paths(text)
+    assert paths == [
+        "sqli/dao/student.py",
+        "app/templates/reviews.html",
+        "config/dev.yaml",
+    ]
+
+
+def test_apply_locatability_micro_nudge_upgrades_full_to_micro():
+    ticket = make_security_ticket("SPACE-129069")
+    ticket["problem_statement"] = (
+        "Fix SQL injection in sqli/dao/student.py where names are string-formatted into INSERT."
+    )
+    decision = RoutingDecision(
+        routing_route="FULL",
+        risk_level="HIGH",
+        reasoning="security ticket",
+    )
+    nudged = apply_locatability_micro_nudge(
+        decision,
+        ticket,
+        repo_path="/tmp/demo-repo",
+        previous_attempts=[],
+    )
+    assert nudged.routing_route == "MICRO"
+    assert "Locatability nudge" in nudged.reasoning
+
+
+def test_apply_locatability_micro_nudge_skips_without_named_files():
+    ticket = make_security_ticket("SEC-NOFILE-1")
+    ticket["problem_statement"] = "Users report SQL injection when adding students."
+    decision = RoutingDecision(
+        routing_route="FULL",
+        risk_level="HIGH",
+        reasoning="symptom only",
+    )
+    nudged = apply_locatability_micro_nudge(
+        decision,
+        ticket,
+        repo_path="/tmp/demo-repo",
+        previous_attempts=[],
+    )
+    assert nudged.routing_route == "FULL"

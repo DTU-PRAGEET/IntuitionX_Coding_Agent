@@ -191,13 +191,44 @@ def _fill_plan_fields(
     pred.plan_line_ranges = _plan_line_ranges(plan, report=report, repo_path=repo_path)
 
 
+def _is_micro_expected_route(case: "EvalCase") -> bool:
+    """True when the golden answer key expects MICRO (incl. legacy SKIP_RESEARCH)."""
+    route = (case.expected_route or "").strip().upper()
+    return route in ("MICRO", "SKIP_RESEARCH")
+
+
+def _routing_repo_context(case: "EvalCase") -> tuple[str | None, dict | None]:
+    """Resolve local checkout for MICRO routing evals (mirrors orchestrator_node)."""
+    if not _is_micro_expected_route(case):
+        return None, None
+    try:
+        repo_path = resolve_repo_path(case)
+    except Exception:  # noqa: BLE001
+        return None, None
+    if not repo_path:
+        return None, None
+    try:
+        from src.agents.research.tools.repo_profile import profile_repository
+
+        profile = profile_repository(repo_path)
+    except Exception:  # noqa: BLE001
+        profile = None
+    return repo_path, profile
+
+
 def _resolve_route(case: "EvalCase", pred: Prediction, *, llm=None) -> bool:
     """Resolve routing into pred.route. Returns False when pipeline should stop (EXIT/error)."""
     ticket = build_jira_ticket(case)
+    repo_path, repo_profile = _routing_repo_context(case)
     try:
         from src.pipeline.runner import resolve_routing
 
-        decision = resolve_routing(ticket, llm=llm)
+        decision = resolve_routing(
+            ticket,
+            llm=llm,
+            repo_path=repo_path,
+            repo_profile=repo_profile,
+        )
         pred.route = decision.routing_route
         return decision.routing_route != "EXIT"
     except Exception as e:  # noqa: BLE001
@@ -252,10 +283,16 @@ def run_routing_target(case: "EvalCase", *, llm=None) -> Prediction:
     """Orchestrator routing only — cheap, no repo tools."""
     pred = Prediction(case_id=case.case_id)
     ticket = build_jira_ticket(case)
+    repo_path, repo_profile = _routing_repo_context(case)
     try:
         from src.pipeline.runner import resolve_routing
 
-        decision = resolve_routing(ticket, llm=llm)
+        decision = resolve_routing(
+            ticket,
+            llm=llm,
+            repo_path=repo_path,
+            repo_profile=repo_profile,
+        )
         pred.route = decision.routing_route
     except Exception as e:  # noqa: BLE001
         pred.error = str(e)

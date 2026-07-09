@@ -22,13 +22,13 @@ from src.core.logging import configure_logging, get_logger
 from src.core.runner_utils import llm_content, parse_llm_json
 from src.core.skill_scripts.budget import init_budget
 from src.core.token_usage import record_messages_usage
-from src.core.schemas import ResearchReport, Skill
+from src.core.schemas import ResearchReport
 from src.core.skill_manager import (
+    LoadedSkill,
     default_skills_root,
     get_skill_registry,
     load_skill_manifest,
     module_skills_dir,
-    select_research_skill,
 )
 from src.core.state import JiraTicket, RepoProfile
 from src.integrations.cursor.gateway import CursorGateway, get_cursor_gateway
@@ -39,6 +39,17 @@ SKILLS_ROOT = default_skills_root()
 SKILL_DIR = module_skills_dir("research", SKILLS_ROOT)
 
 _SKILL_POINTER_DESC_MAX = 200
+
+_SKILL_SELECTION_GUIDANCE = (
+    "Skill selection: orchestrator suggested_security_skill is only a suggestion from initial "
+    "ticket analysis — it is NOT a restriction. You must independently decide which skills to "
+    "load based on ticket requirements, repository evidence, and files/configurations discovered "
+    "during research. You may ignore the suggested skill if irrelevant, load it if useful, or "
+    "load additional skills when multiple security concerns exist. Do not treat skill selection as "
+    "classification — treat skills as expert tools to consult when needed. Always load every skill "
+    "required to produce a complete fix (e.g. committed secrets may need both "
+    "cryptographic-failures and security-misconfiguration)."
+)
 
 
 def _register_research_harness_profile(tool_budget: int, llm: BaseChatModel) -> None:
@@ -79,8 +90,8 @@ def _harness_workflow_suffix(tool_budget: int) -> str:
         "never more than 2 cursor_search calls total. Skip cursor_search and read directly "
         "when anchors already name exact file paths. Do not exceed 8 read/ls/bash calls — "
         "emit the ResearchReport once you have enough evidence. "
-        "Call load_skill once on research plus the most relevant security skill from "
-        "the Skills System section before forming hypotheses. "
+        "Browse the full Skills System catalog — orchestrator hints do NOT restrict your choices. "
+        "load_skill when repo evidence or ticket context justifies each skill (zero, one, or many). "
         f"Max {tool_budget} tool iterations."
     )
 
@@ -89,11 +100,13 @@ def _research_system_prompt(tool_budget: int) -> str:
     """Research System Prompt for this module."""
     return (
         "Investigate the Jira ticket using progressive skills. "
-        "First call load_skill for `research` and the most relevant security skill "
-        "listed in the user message, then run one cursor_search to locate relevant files, "
-        "then use read/ls/bash to inspect the 2-3 files it surfaces; call cursor_search "
-        "again only if the codebase is large and still unclear "
-        "(max 2 cursor_search calls total, max 8 read/ls/bash calls total). "
+        f"{_SKILL_SELECTION_GUIDANCE} "
+        "Read the Skills System catalog (name, description, triggers only) — compare every "
+        "catalog entry against evidence, not only the orchestrator hint. "
+        "Call load_skill(skill_name) for each skill your investigation requires. "
+        "Begin with cursor_search (or direct read when paths are named), then inspect surfaced "
+        "files with read/ls/bash; call cursor_search again only if the codebase is large and "
+        "still unclear (max 2 cursor_search calls, max 8 read/ls/bash calls). "
         f"Hard limit: {tool_budget} tool calls. "
         "Return a complete ResearchReport JSON when completion criteria are met."
     )
@@ -159,12 +172,6 @@ def build_research_agent(
     except ImportError:
         return _build_react_fallback(llm, tools, tool_budget), "react_fallback"
 
-
-def resolve_research_skill(ticket: JiraTicket) -> tuple[Skill | None, str]:
-    """Resolve research skill."""
-    return select_research_skill(ticket, SKILL_DIR)
-
-
 _SECURITY_ENRICHMENT_KEYS = (
     "severity",
     "vulnerability_type",
@@ -203,8 +210,51 @@ def _compact_security_enrichment(enrichment: dict | None) -> dict[str, object]:
     return compact
 
 
-def _format_domain_skill_pointer(ticket: JiraTicket | None) -> str:
-    """Compact skill catalog — bodies load on demand via load_skill tool."""
+def _format_trigger_summary(skill: LoadedSkill) -> str:
+    """Compact trigger summary for the skill catalog."""
+    triggers = skill.trigger_conditions or {}
+    if not triggers:
+        return "none"
+    parts: list[str] = []
+    for key in ("labels", "issue_types", "languages", "fix_types"):
+        val = triggers.get(key)
+        if not val:
+            continue
+        if isinstance(val, list):
+            joined = ", ".join(str(v) for v in val[:10])
+            if len(val) > 10:
+                joined += ", ..."
+            parts.append(f"{key}=[{joined}]")
+        else:
+            parts.append(f"{key}={val}")
+    return "; ".join(parts) if parts else "none"
+
+
+def _format_orchestrator_hints(ticket: JiraTicket | None) -> str:
+    """Non-binding orchestrator hints — Research decides which skills to load."""
+    if not ticket:
+        return ""
+    orch = (ticket.get("ticket_history_summary") or {}).get("orchestrator_analysis") or {}
+    hints: dict[str, str] = {}
+    suggested = orch.get("recommended_security_skill")
+    if suggested:
+        hints["suggested_security_skill"] = str(suggested)
+    category = (ticket.get("vulnerability_category") or "").strip()
+    if category:
+        hints["vulnerability_category"] = category
+    if not hints:
+        return ""
+    return (
+        "\n## Orchestrator hints (suggestions only — NOT restrictions)\n"
+        "The values below come from initial ticket triage. They do NOT limit which skills you "
+        "may load. Browse the full Skills System catalog and independently select every skill "
+        "justified by ticket requirements and repo evidence.\n"
+        f"{json.dumps(hints, indent=2)}\n"
+    )
+
+
+def _format_domain_skill_catalog(ticket: JiraTicket | None) -> str:
+    """Lightweight skill catalog — full bodies load on demand via load_skill."""
     registry = get_skill_registry()
     security_skills = sorted(
         (
@@ -214,40 +264,27 @@ def _format_domain_skill_pointer(ticket: JiraTicket | None) -> str:
         ),
         key=lambda skill: skill.name,
     )
-    if not security_skills:
-        return ""
-
-    recommended = {
-        skill.name
-        for skill in registry.select("research", ticket=ticket)
-        if skill.module == "security"
-    }
-    if ticket:
-        orch = (ticket.get("ticket_history_summary") or {}).get("orchestrator_analysis") or {}
-        orchestrator_skill = orch.get("recommended_security_skill")
-        if orchestrator_skill:
-            recommended.add(str(orchestrator_skill))
 
     lines = [
         "\n## Skills System",
-        "Load skills progressively with load_skill — call ONCE on `research` plus ONE "
-        "security skill from this list before forming hypotheses; do not re-load.",
-        "Use exact skill names below only — never invent paths from vulnerability_category.",
-        "- `research` — core research workflow",
+        "Catalog only — skill bodies are NOT included here.",
+        _SKILL_SELECTION_GUIDANCE,
+        "Scan the full catalog below. Match trigger_conditions and descriptions to ticket context "
+        "and repo evidence — do not load only the orchestrator suggested skill.",
+        "Call load_skill(skill_name) for each expert guide your investigation needs.",
+        "Use exact skill names below — never invent paths from vulnerability_category.",
+        "",
+        "| skill_name | description | trigger_conditions |",
+        "|------------|-------------|--------------------|",
+        "| `research` | Core research workflow and completion criteria | always available |",
     ]
 
-    skills_root = SKILLS_ROOT.resolve()
     for skill in security_skills:
-        try:
-            rel = Path(skill.source_path).resolve().relative_to(skills_root)
-            path = f"/{rel.as_posix()}"
-        except ValueError:
-            path = skill.source_path
         desc = " ".join((skill.description or "").split())
         if len(desc) > _SKILL_POINTER_DESC_MAX:
             desc = desc[: _SKILL_POINTER_DESC_MAX - 3].rstrip() + "..."
-        prefix = "(recommended) " if skill.name in recommended else ""
-        lines.append(f"- {prefix}`{skill.name}` or `{path}` — {desc}")
+        triggers = _format_trigger_summary(skill)
+        lines.append(f"| `{skill.name}` | {desc} | {triggers} |")
 
     return "\n".join(lines) + "\n"
 
@@ -285,9 +322,13 @@ def build_research_user_message(
     if memory_snippet:
         parts.append(f"\n## RUN MEMORY\n{memory_snippet}")
 
-    domain_skills = _format_domain_skill_pointer(ticket)
-    if domain_skills:
-        parts.append(domain_skills)
+    hints = _format_orchestrator_hints(ticket)
+    if hints:
+        parts.append(hints)
+
+    skill_catalog = _format_domain_skill_catalog(ticket)
+    if skill_catalog:
+        parts.append(skill_catalog)
 
     return "".join(parts)
 

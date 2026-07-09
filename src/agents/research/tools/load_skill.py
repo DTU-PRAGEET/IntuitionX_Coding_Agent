@@ -128,6 +128,10 @@ def make_load_skill_tool() -> StructuredTool:
     return StructuredTool.from_function(
         func=load_skill,
         name="load_skill",
-        description="Load domain skill guidance. Args: skill (name or path). Call once before hypotheses.",
+        description=(
+            "Load full skill guidance by name when ticket requirements or repo evidence warrant it. "
+            "Orchestrator suggestions do NOT restrict which skills you may load — browse the catalog "
+            "and load every skill needed (zero, one, or many). Args: skill (catalog name)."
+        ),
         args_schema=LoadSkillInput,
     )

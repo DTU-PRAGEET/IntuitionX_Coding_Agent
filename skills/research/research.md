@@ -151,13 +151,49 @@ Read from user message JSON: `ticket_id`, `title`, `module`, `problem_statement`
 | ≥1 file read with evidence | → Step 4 |
 | Primitive cap (8) reached | → Step 4 immediately with current evidence |
 
-### Step 3 — Load references (conditional)
+### Step 3 — Load skills (progressive, evidence-driven)
 
-| Condition | Next action |
-|-----------|-------------|
-| Security/CVE/SQLi labels or issue_type=Security | `load_skill` the recommended security skill from the **Skills System** list in the user message (never invent paths from `vulnerability_category`) |
-| All other tickets | `general_patterns.md` |
-| Reference already in context | Apply rules; do not reload |
+Use the **Skills System** catalog in the user message (name, description, trigger_conditions only).
+
+#### Skill selection guidance (mandatory)
+
+The orchestrator's `recommended_security_skill` / `suggested_security_skill` is only a suggestion from initial ticket analysis. **It is NOT a restriction.**
+
+You must **independently** decide which skills to load based on:
+- ticket requirements
+- repository evidence
+- files and configurations discovered during research
+
+You may:
+- **ignore** the suggested skill if repo evidence shows it is irrelevant
+- **load** the suggested skill when it matches what you find
+- **load additional skills** when multiple distinct security concerns exist
+
+Do **not** treat skill selection as classification. Treat skills as **expert tools** to consult when needed.
+
+**Always load every skill required to produce a complete investigation** — not just one skill per ticket.
+
+Example: a ticket about committed secrets may require both:
+- `cryptographic-failures` — detect leaked credentials/keys
+- `security-misconfiguration` — fix insecure runtime configuration
+
+| When | Next action |
+|------|-------------|
+| Starting investigation | Optionally `load_skill("research")` for workflow rules — not mandatory for trivial tickets |
+| Repo read shows SQL/string-concat query pattern | `load_skill("injection")` (or matching skill from catalog) |
+| Repo read shows hardcoded secret / weak crypto | `load_skill("cryptographic-failures")` (or matching skill) |
+| Repo read shows insecure defaults / missing hardening | `load_skill("security-misconfiguration")` (or matching skill) |
+| Multiple distinct vulnerability classes in evidence | `load_skill` for **each** relevant skill — one call per skill name |
+| Orchestrator hint present | May help as a starting hypothesis — **must confirm or reject with repo evidence** |
+| Suggested skill does not match evidence | **Do not load it** — pick the correct catalog skill(s) instead |
+| Skill body already in context | Do not reload the same skill |
+
+**Rules:**
+- Scan the **full** catalog — compare descriptions and trigger_conditions to evidence; never stop at the orchestrator hint alone.
+- Do NOT preload security skills before reading code unless ticket anchors make the class obvious.
+- Pick skills from the catalog by matching trigger_conditions to **repo evidence**, not labels alone.
+- Use exact catalog `skill_name` values — never invent paths from `vulnerability_category`.
+- Zero skills is valid only when general investigation suffices without expert guidance.
 
 **Next action:** Step 4.
 

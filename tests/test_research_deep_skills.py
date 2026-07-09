@@ -42,8 +42,8 @@ def test_build_research_user_message_excludes_skill_body(tmp_path):
     assert "Workflow (Follow In Order)" not in message
 
 
-def test_build_research_user_message_inlines_skill_pointer_not_body(tmp_path):
-    """Security skill surfaces as a compact load_skill pointer, never the full body."""
+def test_build_research_user_message_inlines_skill_catalog_not_body(tmp_path):
+    """Security skills surface as a compact catalog, never full bodies."""
     ticket = make_security_ticket("SEC-PTR-1")
     memory = InMemoryResearchMemory()
     message = build_research_user_message(
@@ -56,8 +56,10 @@ def test_build_research_user_message_inlines_skill_pointer_not_body(tmp_path):
     )
     assert "## Skills System" in message
     assert "load_skill" in message
-    assert "/security/injection.md" in message
-    assert "(recommended)" in message
+    assert "`injection`" in message
+    assert "trigger_conditions" in message
+    assert "(recommended)" not in message
+    assert "NOT a restriction" in message
     assert "CWE-89" not in message
     assert "Negative Indicators" not in message
     assert "Positive Indicators" not in message
@@ -77,8 +79,8 @@ def test_build_research_user_message_lists_full_security_catalog_without_matches
         InMemoryResearchMemory(),
     )
     assert "## Skills System" in message
-    assert "/security/cryptographic-failures.md" in message
-    assert "/security/injection.md" in message
+    assert "`cryptographic-failures`" in message
+    assert "`injection`" in message
     assert "never invent paths from vulnerability_category" in message
 
 

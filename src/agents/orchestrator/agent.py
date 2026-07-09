@@ -18,8 +18,11 @@ from src.core.state import AgentState, JiraTicket
 from src.core.tracing import PROMPT_VERSIONS, apply_trace_metadata, sync_trace_context_from_state
 from src.core.skill_manager import PromptBuilder, module_skills_dir
 from src.core.orchestrator_context import (
+    apply_locatability_micro_nudge,
     apply_orchestrator_ticket_analysis,
+    apply_user_route_override,
     build_orchestrator_routing_context,
+    normalize_routing_route,
     sanitize_routing_decision,
 )
 from src.core.plan_validation import validate_execution_plan
@@ -85,7 +88,15 @@ def run_orchestrator_routing(
         # print("***********************************************************************")
         # print(response)
         decision = parse_llm_json(llm_content(response), RoutingDecision)
-        return sanitize_routing_decision(decision)
+        decision = sanitize_routing_decision(decision)
+        decision = apply_locatability_micro_nudge(
+            decision,
+            ticket,
+            repo_path=repo_path,
+            previous_attempts=previous_attempts,
+        )
+        decision = apply_user_route_override(decision, user_prompt)
+        return decision
     except Exception as e:
         _log.error("routing_failed", error=str(e))
         raise RuntimeError(f"Orchestrator routing failed for ticket={ticket['issue_id']!r}: {e}") from e
@@ -145,7 +156,7 @@ def orchestrator_node(state: AgentState) -> AgentState:
         "repo_path": repo_path,
         "git_target_branch": git_target_branch,
         "repo_profile": profile,
-        "routing_route": decision.routing_route,
+        "routing_route": normalize_routing_route(decision.routing_route),
         "risk_level": decision.risk_level,
         "current_phase": "ORCHESTRATOR",
         "previous_attempts": previous,

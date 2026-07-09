@@ -14,11 +14,18 @@ from evals.evaluators import (
 )
 from evals.gates import all_gates_passed, gates_from_scorecard
 from evals.harness.prediction import Prediction, load_predictions
-from evals.harness.targets import _fill_plan_fields, _infer_fix_type, _plan_line_ranges
+from evals.harness.targets import (
+    _fill_plan_fields,
+    _infer_fix_type,
+    _is_micro_expected_route,
+    _plan_line_ranges,
+    _routing_repo_context,
+)
 from evals.harness.ticket_builder import build_jira_ticket
 from evals.report import build_scorecard, write_html, write_json
 from evals.runners.run_eval import filter_cases_for_mode, score_case
 from evals.schema.case import load_cases, validate_dir
+from src.core.orchestrator_context import build_orchestrator_routing_context
 from src.core.schemas import ExecutionPlan, ExecutionStep
 
 GOLDEN = "evals/golden/unit_test"
@@ -36,6 +43,29 @@ def test_golden_cases_validate():
     """Test Golden Cases Validate for this module."""
     count, _warns = validate_dir(GOLDEN)
     assert count >= 2  # G-00 dummy + G-01
+
+
+def test_routing_repo_context_only_for_micro_cases():
+    """MICRO golden cases must supply repository.repo_path to the orchestrator."""
+    cases = load_cases(GOLDEN)
+    micro = [c for c in cases if _is_micro_expected_route(c)]
+    assert micro, "expected at least one MICRO case in golden set"
+    full = next(c for c in cases if c.expected_route == "FULL" and c.all_repos())
+
+    full_repo, full_profile = _routing_repo_context(full)
+    assert full_repo is None
+    assert full_profile is None
+
+    for case in micro:
+        repo_path, profile = _routing_repo_context(case)
+        assert repo_path, f"{case.case_id}: MICRO routing eval requires a resolved repo_path"
+        assert Path(repo_path).is_dir(), f"{case.case_id}: repo_path must exist on disk"
+        ctx = build_orchestrator_routing_context(
+            build_jira_ticket(case),
+            repo_path=repo_path,
+            repo_profile=profile,
+        )
+        assert ctx["repository"]["repo_path"] == repo_path
 
 
 def test_ticket_builder_produces_required_jira_fields():

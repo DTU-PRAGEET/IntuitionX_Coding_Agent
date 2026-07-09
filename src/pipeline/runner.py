@@ -101,6 +101,8 @@ def resolve_routing(
     ticket: JiraTicket,
     *,
     llm: BaseChatModel | None = None,
+    repo_path: str | None = None,
+    repo_profile: dict | None = None,
 ) -> RoutingDecision:
     """Deterministic or LLM routing."""
     if is_ticket_done(ticket):
@@ -112,7 +114,15 @@ def resolve_routing(
 
     from src.agents.orchestrator.agent import run_orchestrator_routing
 
-    return run_orchestrator_routing(ticket, llm=llm)
+    profile = repo_profile
+    if profile is None and repo_path:
+        profile = profile_repository(repo_path)
+    return run_orchestrator_routing(
+        ticket,
+        llm=llm,
+        repo_path=repo_path,
+        repo_profile=profile,
+    )
 
 
 def run_pipeline(
@@ -176,7 +186,12 @@ def _run_pipeline_body(
         raise PipelineError("orchestrator", f"Failed to load ticket {ticket_id!r}: {e}") from e
 
     profile = profile_repository(repo_path)
-    decision = resolve_routing(ticket, llm=llm_orchestrator)
+    decision = resolve_routing(
+        ticket,
+        llm=llm_orchestrator,
+        repo_path=repo_path,
+        repo_profile=profile,
+    )
     apply_orchestrator_ticket_analysis(ticket, decision)
     _orch_log.info(
         "routing",
@@ -247,7 +262,7 @@ def _run_pipeline_body(
             raise PipelineError("research", str(e)) from e
         _log_handoff("research", "planner", "ResearchOutput", on_progress)
 
-    elif decision.routing_route in ("SKIP_RESEARCH", "MICRO"):
+    elif decision.routing_route in ("MICRO",):
         research_output = ResearchOutput(
             ticket_id=ticket_id,
             research_summary=ticket.get("problem_statement", "")[:500],
@@ -256,7 +271,7 @@ def _run_pipeline_body(
                     "rank": 1,
                     "hypothesis": ticket.get("title", "Scoped ticket"),
                     "evidence_strength": "moderate",
-                    "evidence": ["SKIP_RESEARCH route — no deep research run"],
+                    "evidence": ["MICRO route — no deep research run"],
                 }
             ],
             affected_files=[],
