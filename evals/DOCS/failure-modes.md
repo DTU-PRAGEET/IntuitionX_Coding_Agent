@@ -370,5 +370,3 @@ evals/runs/<run_id>/
 - **Baseline JSON:** `evals/baselines/current.json` — promoted from Pass 2 post-validation results.
 
 ---
-
-*Generated: 2026-07-07 · Milestone 2.4 — End-to-end integration evals (first pass)*

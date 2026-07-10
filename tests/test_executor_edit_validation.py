@@ -56,12 +56,22 @@ def _semantic_edit(step_id: int, file: str, instruction: str, marker: str, **kw)
     )
 
 
-def test_executor_rejects_failed_cursor_edit(tmp_path):
-    """Failed edit when validation fails after both batch passes."""
+def test_executor_rejects_failed_cursor_edit(tmp_path, monkeypatch):
+    """Failed edit after only batch pass 1 still raises when repair is disabled."""
+    from dataclasses import replace
+
+    from src.agents.executor import agent as executor_agent
+    from src.core.config import settings
 
     class FailGateway(LocalPatchCursorGateway):
         def edit(self, *args, **kwargs):
             return CursorEditResult(status="failed", text="failed", exit_code=1)
+
+    monkeypatch.setattr(
+        executor_agent,
+        "settings",
+        replace(settings, cursor_max_edit_attempts=1),
+    )
 
     (tmp_path / "f.py").write_text("unchanged\n", encoding="utf-8")
     plan = ExecutionPlan(
@@ -78,6 +88,33 @@ def test_executor_rejects_failed_cursor_edit(tmp_path):
             llm=_llm_fail(),
             gateway=FailGateway(tmp_path),
         )
+
+
+def test_executor_soft_fails_after_batch_two_validation(tmp_path):
+    """After batch pass 2 validation failure, executor returns partial result instead of raising."""
+
+    class FailGateway(LocalPatchCursorGateway):
+        def edit(self, *args, **kwargs):
+            return CursorEditResult(status="failed", text="failed", exit_code=1)
+
+    (tmp_path / "f.py").write_text("unchanged\n", encoding="utf-8")
+    plan = ExecutionPlan(
+        ticket_id="T-1",
+        root_hypothesis="bad",
+        files_to_change=["f.py"],
+        execution_steps=[_semantic_edit(1, "f.py", "Apply fix", "MISSING")],
+        risk_level="low",
+    )
+
+    result = run_executor(
+        plan,
+        str(tmp_path),
+        llm=_llm_fail(),
+        gateway=FailGateway(tmp_path),
+    )
+
+    assert result.validation_failed_steps == [1]
+    assert "still failing" in result.validation_warning
 
 
 def test_executor_snapshot_mismatch_raises(tmp_path):
@@ -259,17 +296,17 @@ def test_executor_fails_without_third_cursor_call(tmp_path):
             return super().edit(*args, **kwargs)
 
     llm = _llm_fail()
-    with pytest.raises(RuntimeError, match="still failing") as exc_info:
-        run_executor(
-            plan,
-            str(tmp_path),
-            llm=llm,
-            gateway=CountingGateway(tmp_path),
-        )
+    result = run_executor(
+        plan,
+        str(tmp_path),
+        llm=llm,
+        gateway=CountingGateway(tmp_path),
+    )
 
     assert call_count["n"] == 2
     assert llm.invoke.call_count == 2
-    assert "step 1" in str(exc_info.value)
+    assert result.validation_failed_steps == [1]
+    assert "step 1" in result.validation_warning
 
 
 def test_executor_continues_after_validation_failure_in_eval_mode(tmp_path):

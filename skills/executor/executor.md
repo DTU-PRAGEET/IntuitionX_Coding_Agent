@@ -289,7 +289,7 @@ Runner returns **`ExecutionResult`** when ALL steps succeed:
 
 | Failure | Next action |
 |---------|-------------|
-| Semantic validation FAIL after max batch passes | STOP; report all failing steps with `reason` and `missing_requirements` |
+| Semantic validation FAIL after max batch passes | STOP if repair batch was not run; otherwise soft-fail, record warnings, and continue to PR |
 | Cursor gateway dry_run | No file mutation; validation may pass with `dry_run` flag |
 | Snapshot mismatch | STOP before Cursor call |
 | VERIFY intent_marker missing | STOP; report mismatch |

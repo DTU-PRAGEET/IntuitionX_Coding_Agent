@@ -134,7 +134,7 @@ def test_repair_batch_only_includes_failed_steps(tmp_path):
 
 
 def test_aggregate_failure_lists_all_steps(tmp_path):
-    """When multiple steps fail after pass 2, error mentions every failing step."""
+    """When multiple steps fail after pass 2, result records every failing step."""
     (tmp_path / "a.py").write_text("x\n", encoding="utf-8")
     (tmp_path / "b.py").write_text("y\n", encoding="utf-8")
     plan = ExecutionPlan(
@@ -157,15 +157,14 @@ def test_aggregate_failure_lists_all_steps(tmp_path):
     llm = MagicMock()
     llm.invoke.return_value = MagicMock(content=fail_payload)
 
-    with pytest.raises(RuntimeError) as exc_info:
-        run_executor(
-            plan,
-            str(tmp_path),
-            llm=llm,
-            gateway=LocalPatchCursorGateway(tmp_path),
-        )
+    result = run_executor(
+        plan,
+        str(tmp_path),
+        llm=llm,
+        gateway=LocalPatchCursorGateway(tmp_path),
+    )
 
-    msg = str(exc_info.value)
-    assert "step 1" in msg
-    assert "step 2" in msg
-    assert "2 step(s) still failing" in msg
+    assert result.validation_failed_steps == [1, 2]
+    assert "step 1" in result.validation_warning
+    assert "step 2" in result.validation_warning
+    assert "2 step(s) still failing" in result.validation_warning

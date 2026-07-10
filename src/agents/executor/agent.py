@@ -70,6 +70,7 @@ class ExecutionResult(BaseModel):
     step_results: list[dict[str, Any]]
     plan_deviations: list[str] = []
     validation_failed_steps: list[int] = Field(default_factory=list)
+    validation_warning: str = ""
 
 
 def _load_skills(ticket: dict[str, Any] | None = None) -> str:
@@ -275,6 +276,21 @@ def _format_aggregate_edit_failure(failures: list[FailedEditStep]) -> str:
         if failure.missing_requirements:
             lines.append(f"    missing: {failure.missing_requirements}")
     return "\n".join(lines)
+
+
+def _should_continue_after_validation_failure(
+    *,
+    continue_on_validation_failure: bool,
+    repair_attempted: bool,
+) -> bool:
+    """Continue execution (and allow PR creation) after validation failures.
+
+    Batch pass 1 failures alone still raise — pass 2 repair must run first.
+    After pass 2, soft validation keeps partial Cursor edits and opens a PR.
+    """
+    if continue_on_validation_failure:
+        return True
+    return settings.semantic_soft_validation_enabled and repair_attempted
 
 
 def _outcome_from_result(
@@ -872,7 +888,9 @@ def _run_edit_batch_phase(
         edit_outcomes[outcome.step_id] = outcome
 
     still_failed = failed
+    repair_attempted = False
     if failed and max_passes >= 2:
+        repair_attempted = True
         retry_notes = {f.step_id: f.retry_note for f in failed}
         failed_step_ids = {f.step_id for f in failed}
         for failure in failed:
@@ -908,7 +926,10 @@ def _run_edit_batch_phase(
             edit_outcomes[outcome.step_id] = outcome
 
     if still_failed:
-        if continue_on_validation_failure:
+        if _should_continue_after_validation_failure(
+            continue_on_validation_failure=continue_on_validation_failure,
+            repair_attempted=repair_attempted,
+        ):
             for failure in still_failed:
                 edit_outcomes[failure.step_id] = _outcome_from_result(
                     failure.step,
@@ -918,6 +939,10 @@ def _run_edit_batch_phase(
             plan_deviations.append(
                 f"edit validation: {len(still_failed)} step(s) failed after batch passes"
             )
+            if repair_attempted:
+                plan_deviations.append(
+                    "edit validation: soft-fail after batch pass 2 — PR will include partial edits"
+                )
             return edit_outcomes, plan_deviations, still_failed
         raise RuntimeError(_format_aggregate_edit_failure(still_failed))
 
@@ -1054,6 +1079,10 @@ def run_executor(
         )
         plan_deviations.extend(edit_deviations)
         validation_failed_steps = [f.step_id for f in validation_failures]
+        soft_fail_mode = bool(validation_failures)
+        validation_warning = (
+            _format_aggregate_edit_failure(validation_failures) if validation_failures else ""
+        )
 
         for raw_step in plan.execution_steps:
             step = _step_to_dict(raw_step)
@@ -1080,8 +1109,9 @@ def run_executor(
                 step_entry["edit_outcome"] = edit_outcome
             step_results.append(step_entry)
             if not ok:
-                if continue_on_edit_validation_failure and step.get("action") == "EDIT":
-                    changed_files.add(_step_path(step))
+                if soft_fail_mode:
+                    if step.get("action") == "EDIT":
+                        changed_files.add(_step_path(step))
                     continue
                 raise RuntimeError(
                     f"Executor step {step.get('step_id')} action={step.get('action')!r} "
@@ -1089,6 +1119,10 @@ def run_executor(
                 )
             if step.get("action") == "EDIT":
                 changed_files.add(_step_path(step))
+
+        if soft_fail_mode:
+            for failure in validation_failures:
+                changed_files.add(failure.file)
 
         changed_files.update(plan.files_to_change)
         result = ExecutionResult(
@@ -1098,6 +1132,7 @@ def run_executor(
             step_results=step_results,
             plan_deviations=list(dict.fromkeys(plan_deviations)),
             validation_failed_steps=validation_failed_steps,
+            validation_warning=validation_warning,
         )
         _log.info("complete", ticket_id=plan.ticket_id, steps=result.steps_completed)
         return result
@@ -1205,17 +1240,28 @@ def executor_node(state: AgentState) -> AgentState:
             "updated_at": now,
         }
 
+    execution_output: ExecutionOutput = {
+        "mr_url": mr_url,
+        "changed_files": result.changed_files,
+        "git_diff_summary": diff_summary[:5000],
+        "worktree_path": worktree_path,
+        "branch_name": branch_name,
+        "compilation_status": "SKIPPED",
+    }
+    if result.validation_failed_steps:
+        execution_output["validation_failed_steps"] = result.validation_failed_steps
+        execution_output["validation_warning"] = result.validation_warning
+
     return {
         **state,
-        "execution_output": ExecutionOutput(
-            mr_url=mr_url,
-            changed_files=result.changed_files,
-            git_diff_summary=diff_summary[:5000],
-            worktree_path=worktree_path,
-            branch_name=branch_name,
-            compilation_status="SKIPPED",
-        ),
+        "execution_output": execution_output,
         "current_phase": "REVIEW",
+        "exit_message": (
+            f"Executor completed with validation warnings on step(s) "
+            f"{result.validation_failed_steps}. PR created for review."
+            if result.validation_failed_steps
+            else None
+        ),
         "prompt_version": "executor-v1.0",
         "updated_at": now,
     }

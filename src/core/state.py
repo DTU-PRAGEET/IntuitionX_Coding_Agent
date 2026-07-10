@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Literal, Optional
 
 from langgraph.graph.message import add_messages
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 
 class JiraComment(TypedDict):
@@ -125,6 +125,8 @@ class ExecutionOutput(TypedDict):
     worktree_path: str
     branch_name: str
     compilation_status: Literal["PASS", "FAIL", "SKIPPED"]
+    validation_failed_steps: NotRequired[list[int]]
+    validation_warning: NotRequired[str]
 
 
 class HumanApprovalGate(TypedDict):

@@ -141,7 +141,7 @@ def test_run_executor_semantic_edit(tmp_path):
 
 
 def test_run_executor_edit_failure(tmp_path):
-    """Failed Cursor edit raises when intent marker never appears."""
+    """Failed Cursor edit records validation failure after batch pass 2."""
     from src.integrations.cursor.schemas import CursorEditResult
 
     class FailGateway(LocalPatchCursorGateway):
@@ -164,8 +164,9 @@ def test_run_executor_edit_failure(tmp_path):
         ],
         risk_level="low",
     )
-    with pytest.raises(RuntimeError, match="step 1"):
-        run_executor(plan, str(tmp_path), gateway=FailGateway(tmp_path))
+    result = run_executor(plan, str(tmp_path), gateway=FailGateway(tmp_path))
+    assert result.validation_failed_steps == [1]
+    assert result.step_results[0]["ok"] is False
 
 
 def test_verify_uses_prior_edit_intent_marker(tmp_path):

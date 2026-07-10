@@ -1,11 +1,7 @@
 ---
 name: research
 description: >
-  Use this skill after Orchestrator emits a FULL route. Starts every investigation
-  with ONE cursor_search to map the codebase, then uses read/ls/bash to inspect the
-  few files it surfaces; calls cursor_search a second time only when the codebase is
-  large and still unresolved (2 calls max). Emits a ResearchReport with hypotheses
-  and grounded affected files. Load references/ conditionally by ticket type.
+  Use this skill after Orchestrator emits a FULL route. Starts every investigation with ONE cursor_search to map the codebase, then uses read/ls/bash to inspect the few files it surfaces; calls cursor_search a second time only when the codebase is large and still unresolved (2 calls max). Emits a ResearchReport with hypotheses and grounded affected files. Load references/ conditionally by ticket type.
 tool_budget: 12
 recursion_limit: 40
 module: research
@@ -18,7 +14,7 @@ agents: [research]
 
 ## Role & Scope
 
-Investigates the repository. Produces hypotheses and grounded affected files.
+Investigates the repository. Produces hypotheses and grounded affected files.                         
 Does NOT propose implementation changes or patches.
 
 ---
