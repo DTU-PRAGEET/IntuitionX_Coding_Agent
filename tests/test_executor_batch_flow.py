@@ -12,6 +12,19 @@ from src.core.schemas import ExecutionPlan, ExecutionStep
 from src.integrations.cursor.gateway import LocalPatchCursorGateway
 
 
+def _mock_llm_pass():
+    llm = MagicMock()
+    llm.invoke.return_value = MagicMock(
+        content=json.dumps({
+            "pass": True,
+            "confidence": 0.99,
+            "reason": "ok",
+            "missing_requirements": [],
+        })
+    )
+    return llm
+
+
 def _semantic_edit(step_id: int, file: str, instruction: str, marker: str) -> ExecutionStep:
     return ExecutionStep(
         step_id=step_id,
@@ -168,3 +181,71 @@ def test_aggregate_failure_lists_all_steps(tmp_path):
     assert "step 1" in result.validation_warning
     assert "step 2" in result.validation_warning
     assert "2 step(s) still failing" in result.validation_warning
+
+
+def test_read_delegated_after_batch_deletes_file(tmp_path):
+    """READ steps must not fail when batch edit removes the file before the step loop."""
+    key_path = tmp_path / ".ssh" / "wrongsecrets.keys"
+    key_path.parent.mkdir(parents=True)
+    key_path.write_text(
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n-----END OPENSSH PRIVATE KEY-----\n",
+        encoding="utf-8",
+    )
+
+    class DeleteKeyGateway(LocalPatchCursorGateway):
+        def edit(self, *args, **kwargs):
+            result = super().edit(*args, **kwargs)
+            if key_path.is_file():
+                key_path.unlink()
+            return result
+
+    plan = ExecutionPlan(
+        ticket_id="SPACE-129070",
+        root_hypothesis="remove ssh key",
+        files_to_change=[".ssh/wrongsecrets.keys"],
+        execution_steps=[
+            ExecutionStep(
+                step_id=1,
+                action="READ",
+                file=".ssh/wrongsecrets.keys",
+                target="read key",
+                reason="cursor context",
+                validate="ok",
+            ),
+            ExecutionStep(
+                step_id=2,
+                action="EDIT",
+                file=".ssh/wrongsecrets.keys",
+                target="remove key",
+                reason="remove committed private key",
+                validate="grep PLACEHOLDER",
+                instruction="Remove private key; add placeholder example file.",
+                intent_marker="PLACEHOLDER",
+                target_type="file",
+                change="delete key material",
+            ),
+            ExecutionStep(
+                step_id=3,
+                action="VERIFY",
+                file=".ssh/wrongsecrets.keys",
+                target="verify removal",
+                reason="ensure key removed",
+                validate="grep -v BEGIN OPENSSH PRIVATE KEY",
+            ),
+        ],
+        risk_level="high",
+    )
+
+    result = run_executor(
+        plan,
+        str(tmp_path),
+        llm=_mock_llm_pass(),
+        gateway=DeleteKeyGateway(tmp_path),
+    )
+
+    assert result.steps_completed == 3
+    read_result = next(r for r in result.step_results if r["action"] == "READ")
+    assert "delegated" in read_result["output"]
+    verify_result = next(r for r in result.step_results if r["action"] == "VERIFY")
+    assert verify_result["ok"] is True
+    assert not key_path.is_file()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any, Type, TypeVar
 
 from pydantic import BaseModel
@@ -31,6 +30,31 @@ def _flatten_content_blocks(raw: object) -> str:
                     parts.append(str(text))
         return "\n".join(parts)
     return str(raw)
+
+
+def _json_scan_state(raw: str) -> tuple[bool, bool, list[str]]:
+    """Return (in_string, escape_next, open_brackets) for a JSON fragment."""
+    in_string = False
+    escape = False
+    stack: list[str] = []
+    for ch in raw:
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in "}]" and stack and stack[-1] == ch:
+            stack.pop()
+    return in_string, escape, stack
 
 
 def _sanitize_json_string_literals(raw: str) -> str:
@@ -72,20 +96,77 @@ def _sanitize_json_string_literals(raw: str) -> str:
     return "".join(out)
 
 
+def _balance_json_brackets(raw: str) -> str:
+    """Close unclosed strings/arrays/objects in truncated JSON."""
+    in_string, _, stack = _json_scan_state(raw)
+    out = raw
+    if in_string:
+        out += '"'
+    while stack:
+        out += stack.pop()
+    return out
+
+
+def _extract_json_object(content: str) -> str:
+    """Extract the first top-level JSON object, including truncated responses."""
+    start = content.find("{")
+    if start < 0:
+        raise ValueError(f"Could not parse JSON from LLM response: {content[:200]}")
+    depth = 0
+    in_string = False
+    escape = False
+    for idx in range(start, len(content)):
+        ch = content[idx]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return content[start : idx + 1]
+    return content[start:]
+
+
+def _parse_json_candidates(raw_json: str, model: Type[T]) -> T:
+    """Try direct, sanitized, and bracket-balanced parses."""
+    candidates = [raw_json]
+    sanitized = _sanitize_json_string_literals(raw_json)
+    if sanitized != raw_json:
+        candidates.append(sanitized)
+    balanced = _balance_json_brackets(raw_json)
+    if balanced not in candidates:
+        candidates.append(balanced)
+    balanced_sanitized = _balance_json_brackets(sanitized)
+    if balanced_sanitized not in candidates:
+        candidates.append(balanced_sanitized)
+
+    last_error: ValueError | None = None
+    for candidate in candidates:
+        try:
+            return model.model_validate_json(candidate)
+        except ValueError as exc:
+            last_error = exc
+    assert last_error is not None
+    raise last_error
+
+
 def parse_llm_json(content: str, model: Type[T]) -> T:
     """Extract and validate JSON from LLM response."""
     if not isinstance(content, str):
         raise ValueError(
             f"Could not parse JSON from LLM response: expected str, got {type(content).__name__}"
         )
-    json_match = re.search(r"\{.*\}", content, re.DOTALL)
-    if not json_match:
-        raise ValueError(f"Could not parse JSON from LLM response: {content[:200]}")
-    raw_json = json_match.group()
-    try:
-        return model.model_validate_json(raw_json)
-    except ValueError:
-        return model.model_validate_json(_sanitize_json_string_literals(raw_json))
+    raw_json = _extract_json_object(content)
+    return _parse_json_candidates(raw_json, model)
 
 
 def llm_content(response) -> str:

@@ -95,7 +95,19 @@ def test_load_skill_tool_resolves_research_and_security():
     research_body = tool.invoke({"skill": "research"})
     injection_body = tool.invoke({"skill": "injection"})
     assert "Research Agent" in research_body or "research" in research_body.lower()
+    assert "REFERENCE: general_patterns" in research_body
+    assert "Tool Selection Decision Tree" in research_body
     assert len(injection_body) > 100
+
+
+def test_load_skill_tool_resolves_research_references_on_demand():
+    """Research references load on demand without loading the full research skill."""
+    tool = make_load_skill_tool()
+    body = tool.invoke({"skill": "general_patterns"})
+    assert "load_skill error" not in body.lower()
+    assert "Tool Selection Decision Tree" in body
+    security_body = tool.invoke({"skill": "security_patterns"})
+    assert "security_enrichment" in security_body
 
 
 def test_load_skill_tool_resolves_security_rce_alias():

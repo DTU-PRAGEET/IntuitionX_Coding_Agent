@@ -21,12 +21,18 @@ _SECURITY_LABELS = frozenset({"security", "cve", "vulnerability"})
 _REQUIRED_KEYS = ("script_name", "script_description", "script_content")
 _KEY_LINE = re.compile(r"^(script_name|script_description|script_content):\s*(.*)$")
 
-# Research reference selection: (predicate, reference stem, reason)
+# Reference selection: (predicate, reference stem, reason) per agent module
 _RESEARCH_REFERENCE_RULES: list[tuple[Callable[[JiraTicket], bool], str, str]] = [
     (lambda _t: True, "general_patterns", "default_baseline"),
     (lambda t: _labels_match_security(t), "security_patterns", "label_match"),
     (lambda t: _issue_type_is_security(t), "security_patterns", "issue_type_security"),
     (lambda t: _has_cve_ids(t), "security_patterns", "cve_present"),
+]
+_PLANNER_REFERENCE_RULES: list[tuple[Callable[[JiraTicket], bool], str, str]] = [
+    (lambda _t: True, "plan_schema", "default_schema"),
+]
+_EXECUTOR_REFERENCE_RULES: list[tuple[Callable[[JiraTicket], bool], str, str]] = [
+    (lambda _t: True, "validation_policy", "default_validation"),
 ]
 
 
@@ -133,21 +139,24 @@ def load_reference(skills_dir: Path, ref_name: str) -> str:
     return ref_path.read_text(encoding="utf-8")
 
 
-def select_references(ticket: JiraTicket, skills_dir: Path, agent: str) -> list[Path]:
-    """Return reference paths to load for this ticket/agent."""
-    if agent != "research":
-        return []
+def _select_module_references(
+    ticket: JiraTicket,
+    skills_dir: Path,
+    agent: str,
+    rules: list[tuple[Callable[[JiraTicket], bool], str, str]],
+) -> list[Path]:
+    """Apply reference rules against a module's references/ directory."""
     refs_dirs = [
         skills_dir / "references",
         skills_dir / "research" / "references",
     ]
     refs_dir = next((d for d in refs_dirs if d.is_dir()), None)
     if refs_dir is None:
-        return _legacy_research_skill_as_reference(ticket, skills_dir)
+        return []
 
     selected: list[Path] = []
     seen: set[str] = set()
-    for predicate, stem, reason in _RESEARCH_REFERENCE_RULES:
+    for predicate, stem, reason in rules:
         if predicate(ticket):
             ref = refs_dir / f"{stem}.md"
             if ref.is_file() and stem not in seen:
@@ -155,6 +164,57 @@ def select_references(ticket: JiraTicket, skills_dir: Path, agent: str) -> list[
                 selected.append(ref)
                 seen.add(stem)
     return selected
+
+
+def select_references(
+    ticket: JiraTicket | None,
+    skills_dir: Path,
+    agent: str,
+) -> list[Path]:
+    """Return reference paths to load for this ticket/agent."""
+    effective: JiraTicket = ticket or {}  # type: ignore[assignment]
+    if agent == "research":
+        refs = _select_module_references(
+            effective, skills_dir, agent, _RESEARCH_REFERENCE_RULES
+        )
+        if refs:
+            return refs
+        return _legacy_research_skill_as_reference(effective, skills_dir)
+    if agent == "planner":
+        return _select_module_references(
+            effective, skills_dir, agent, _PLANNER_REFERENCE_RULES
+        )
+    if agent == "executor":
+        return _select_module_references(
+            effective, skills_dir, agent, _EXECUTOR_REFERENCE_RULES
+        )
+    return []
+
+
+def format_reference_sections(skills_dir: Path, ref_paths: list[Path]) -> str:
+    """Append REFERENCE blocks for resolved reference paths."""
+    parts: list[str] = []
+    for ref_path in ref_paths:
+        stem = ref_path.stem
+        try:
+            content = load_reference(skills_dir, stem)
+        except ValueError:
+            content = ref_path.read_text(encoding="utf-8")
+        parts.append(f"\n\n## REFERENCE: {stem}\n\n{content}")
+    return "".join(parts)
+
+
+def append_references_for_agent(
+    body: str,
+    skills_dir: Path,
+    agent: str,
+    ticket: JiraTicket | None = None,
+) -> str:
+    """Load and append reference markdown for an agent module."""
+    refs = select_references(ticket, skills_dir, agent)
+    if not refs:
+        return body
+    return body + format_reference_sections(skills_dir, refs)
 
 
 def _legacy_research_skill_as_reference(ticket: JiraTicket, skills_dir: Path) -> list[Path]:
@@ -630,14 +690,8 @@ class PromptBuilder:
         manifest = load_skill_manifest(skills_dir)
         parts: list[str] = [load_skill_body(skills_dir)]
 
-        if include_references and ticket is not None:
-            for ref_path in select_references(ticket, skills_dir, agent):
-                stem = ref_path.stem
-                try:
-                    content = load_reference(skills_dir, stem)
-                except ValueError:
-                    content = ref_path.read_text(encoding="utf-8")
-                parts.append(f"\n\n## REFERENCE: {stem}\n\n{content}")
+        if include_references:
+            parts.append(format_reference_sections(skills_dir, select_references(ticket, skills_dir, agent)))
 
         if extra_instructions:
             parts.append(f"\n\n{extra_instructions}")

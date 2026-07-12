@@ -2,7 +2,7 @@
 name: research
 description: >
   Use this skill after Orchestrator emits a FULL route. Starts every investigation with ONE cursor_search to map the codebase, then uses read/ls/bash to inspect the few files it surfaces; calls cursor_search a second time only when the codebase is large and still unresolved (2 calls max). Emits a ResearchReport with hypotheses and grounded affected files. Load references/ conditionally by ticket type.
-tool_budget: 12
+tool_budget: 13
 recursion_limit: 40
 module: research
 agents: [research]
@@ -68,42 +68,18 @@ opening move.
 
 Track cursor calls mentally; on the 3rd attempt → STOP and use read/ls/bash, then emit.
 
+**Investigation passes** (map to Steps 2a/2b below — do not add separate phases):
+- **WHERE** — Step 2b `cursor_search` / `bash grep -rn` to locate files
+- **HOW** — `read` / trace data flow in surfaced files
+- **EXAMPLES** — grep for analogous in-repo patterns; reuse WHERE/HOW evidence first
+
+**EXAMPLES pass:** When a hypothesis involves sanitization, validation, authentication, or cryptography, check whether an existing repo helper already covers that concern — use evidence already gathered during WHERE/HOW, or one additional `bash grep -rn` call if not yet checked (counts against existing primitive budget, not a new allowance). If a canonical helper exists, cite it by `path:line` in `research_summary` as a fact about the repo. Documentarian only — no phrasing like "should use" or "the fix is."
+
 ---
 
-## Tool Selection Decision Tree (Follow In Order)
+## Tool Selection
 
-```
-START
-  │
-  ├─ repo_path missing? ──YES──► emit ResearchReport, flags: ["missing_repo_path"]
-  │
-  NO
-  │
-  ├─ anchors[] or ticket names exact file path(s)?
-  │     YES ──► read(path) for each ──► synthesize (Step 4)
-  │
-  NO
-  │
-  ├─ FIRST MOVE: cursor_search(query, path=".")  [1 of 2]
-  │     └─► read() the 4-5 paths it returns ──► gather evidence
-  │
-  ├─ location still unclear AND codebase large AND cursor_calls < 2?
-  │     YES ──► cursor_search(narrowed query)  [2 of 2] ──► read hits
-  │     NO  ──► bash(grep -rn 'pattern' path) / ls(path) ──► read matches
-  │
-  └─ synthesize (Step 4) and STOP
-```
-
-| Situation | Tool | Never use |
-|-----------|------|-----------|
-| Locate code when paths unknown (opening move) | `cursor_search(query, path=".")` (call 1 of 2) | read on a guessed path |
-| Read a file cursor_search surfaced | `read(path, start_line, end_line)` | cursor_search |
-| Read one already-known file (anchor) | `read(path, start_line, end_line)` | cursor_search |
-| List directory | `ls(path)` | cursor_search |
-| Search pattern in a located subtree | `bash("grep -rn 'pattern' path")` | cursor_search |
-| Find files by name | `bash("find path -name '*.py'")` | cursor_search |
-| Large repo, location still unclear | `cursor_search` (call 2 of 2) | a 3rd cursor_search |
-| External CVE/advisory | `web_search` | cursor_search |
+Tool selection detail — load via `load_skill('research')` (bundles `general_patterns`) or `load_skill('general_patterns')`.
 
 ---
 
@@ -279,3 +255,4 @@ First character `{`, last character `}`.
 - NEVER leave a hypothesized file path out of `affected_files[]` — list every file that needs a fix
 - NEVER use `read_file` for repository files (use `read` tool)
 - NEVER generate patches or execution plans
+- NEVER report a reusable-utility finding as a hypothesis or fix suggestion — it belongs in `research_summary` / `affected_files[].reason` as an observed fact only

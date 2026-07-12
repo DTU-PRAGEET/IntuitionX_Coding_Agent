@@ -277,6 +277,8 @@ def _format_domain_skill_catalog(ticket: JiraTicket | None) -> str:
         "| skill_name | description | trigger_conditions |",
         "|------------|-------------|--------------------|",
         "| `research` | Core research workflow and completion criteria | always available |",
+        "| `general_patterns` | Tool selection and evidence baseline (bundled with research) | load_skill |",
+        "| `security_patterns` | Security investigation order and grep patterns | load_skill on security tickets |",
     ]
 
     for skill in security_skills:

@@ -10,6 +10,7 @@ import pytest
 from src.agents.executor.validation import (
     ValidationResult,
     capture_pre_edit,
+    load_validation_policy,
     read_modified_snippet,
     read_snippet_at_span,
     validate_edit,
@@ -245,3 +246,9 @@ def test_read_modified_snippet_after_edit(tmp_path):
     target.write_text("new\nmiddle\nend\n", encoding="utf-8")
     modified = read_modified_snippet(str(tmp_path), step, pre)
     assert "new" in modified
+
+
+def test_load_validation_policy_includes_validation_policy_reference():
+    policy = load_validation_policy()
+    assert "REFERENCE: validation_policy" in policy
+    assert "Progressive validation flow" in policy

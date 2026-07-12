@@ -436,7 +436,7 @@ python -m evals.runners.run_langsmith \
   --mode integration \
   --dataset IntuitionX-Golden-20-v1 \
   --cases-dir evals/golden/unit_test \
-  --case-ids G-02,G-04,G-07,G-09,G-11,G-12,G-13,G-15,G-16,G-18 \
+  --case-ids G-01,G-02,G-03,G-04,G-05,G-06,G-07,G-08,G-09,G-10,G-11,G-12,G-13,G-14,G-15,G-16,G-17,G-18 \
   --experiment-prefix mixed-10-unit
 
 

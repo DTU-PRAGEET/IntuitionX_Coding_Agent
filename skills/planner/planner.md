@@ -12,6 +12,7 @@ module: planner
 agents: [planner]
 ---
 
+<!-- CHANGELOG (2026-07-11): Reuse-before-reinvent rule; Self-Check/Instruction/VERIFY detail relocated to plan_schema.md. -->
 <!-- CHANGELOG (2026-06-29): Enforced 1:1 hypothesis-to-step-block mapping; banned no-op EDITs; self-check before emit. -->
 
 # Planner Agent
@@ -47,30 +48,7 @@ Each block is the READ (optional EDIT) VERIFY sequence for one hypothesis.
 
 ## Self-Check Before Finalizing (Mandatory)
 
-Before emitting the plan, verify:
-
-```
-FOR each hypothesis H in research_output.hypotheses:
-  ASSERT at least one execution_step.reason contains "hypothesis" + H.rank
-         OR references H.hypothesis text verbatim
-  ASSERT the step block addresses H (fix, verify-only, or documents cross-file mitigation)
-
-FOR each EDIT step:
-  ASSERT instruction describes a real security fix (not no-op)
-  ASSERT instruction is specific enough for a human engineer to locate and apply the fix
-  ASSERT instruction names what NOT to touch (e.g. "do not restructure surrounding braces/control flow")
-  ASSERT instruction includes an inline acceptance checklist: "Acceptance: (1) ..., (2) ..., (3) ..."
-  ASSERT intent_marker is expected in file after Executor applies the fix
-  ASSERT target_type and target_name identify the edit site (required on every EDIT)
-  ASSERT caution_flag is set when READ shows the target symbol appears more than once
-  ASSERT approximate_line is provided when helpful (optional, never required to be exact)
-
-FOR each hypothesis requiring no file change:
-  ASSERT plan uses READ→VERIFY only (NO EDIT step)
-  ASSERT reason explains why fix is applied elsewhere
-```
-
-If any assertion fails → rebuild plan before Step 5.
+Run self-check before emit — details in `plan_schema` reference (auto-loaded with planner skill).
 
 ---
 
@@ -113,6 +91,8 @@ For **each hypothesis** (issue):
    - **Direct fix needed** → include EDIT with `instruction`, `intent_marker`, `target_type`, `target_name`, optional `approximate_line`, optional `caution_flag`
    - **Fixed by change elsewhere** (e.g., global autoescape) → READ→VERIFY only on this file
    - **No code change required** → READ→VERIFY only; NEVER emit no-op EDIT
+
+**Reuse before reinvent (non-negotiable):** if research names an existing repo utility that covers the concern being fixed, the EDIT `instruction` must call or import that utility, not reimplement equivalent logic inline — **unless** that utility is itself the file/function the ticket is asking you to fix, in which case edit it in place and do not fork a parallel version. If research found no reusable utility, proceed normally with no penalty.
 
 Set `files_to_change` = unique paths that receive EDIT steps (not verify-only files unless listed for tracking).
 
@@ -158,12 +138,13 @@ Optional: **RUN_TESTS** when `write_tests=true`.
 
 ### Step 4 — Validate plan
 
-Run the **Self-Check Before Finalizing** (above).
+Run self-check before emit — details in `plan_schema` reference (auto-loaded with planner skill).
 
 Additional checks:
-- Every EDIT instruction is self-contained with inline acceptance checklist
+- Every EDIT instruction is self-contained with inline acceptance checklist and Before/After blocks — format in `plan_schema.md`
 - Every hypothesis rank has a corresponding step block
-- Every EDIT and VERIFY `intent_marker` is a literal code substring expected after the fix (see VERIFY intent_marker Contract)
+- VERIFY/RUN_TESTS split — see `plan_schema.md`
+- Every EDIT and VERIFY `intent_marker` is a literal code substring expected after the fix — examples in `plan_schema.md`
 
 **Next action:** Step 5.
 
@@ -208,55 +189,11 @@ First character `{`, last character `}`. No SEARCH steps.
 
 ## Instruction Contract (EDIT steps)
 
-Every EDIT `instruction` MUST be self-contained and include:
-1. **What to change** — concrete, locatable in the file (name the function/block/line region in plain language)
-2. **What NOT to touch** — e.g. "do not restructure surrounding braces/control flow"
-3. **Acceptance checklist** — 3–5 numbered items Cursor self-verifies, inline in the instruction:
-   "Acceptance: (1) ..., (2) ..., (3) ..."
+Every EDIT `instruction` must be self-contained with acceptance checklist, Before/After blocks, `target_type`, and `target_name` — format and examples in `plan_schema.md`.
 
-The acceptance checklist lives IN the instruction field. Python and Executor do NOT add a parallel checklist.
+Every EDIT step **requires** `target_type` and `target_name`. Set `caution_flag` when READ shows the target symbol appears more than once — format in `plan_schema.md`.
 
-## Semantic Targeting (EDIT steps)
-
-Every EDIT step **requires** `target_type` and `target_name` to identify the edit site:
-- `target_type`: one of `function`, `method`, `class`, `variable`, `assignment`, `import`, `block`, `file`
-- `target_name`: symbol or identifier (e.g. `execute`, `this.searchValue`, `validate_user`)
-- For `target_type: file`, `target_name` may be the filename
-
-Use `parent_name` and `occurrence_index` when the symbol is nested or repeated.
-
-## caution_flag (EDIT steps — ambiguity guidance)
-
-When your READ exploration shows the target symbol appears **more than once** in the file, set `caution_flag` with a human-readable disambiguation note. This is guidance for the executor — **not an error condition**.
-
-**Emit when:**
-- Symbol appears multiple times (e.g. `this.searchValue`, `execute`, `password`)
-- Multiple methods with similar names
-- Security issue may exist in one or all occurrences
-
-**Format example:**
-```
-CAUTION: 'this.searchValue' appears 4 times in search-result.component.ts (lines 42, 67, 89, 112). The security issue is the direct assignment bypassing sanitizer in ngOnInit (~line 42). Other occurrences may be test mocks or unrelated reads — do not fail if unchanged.
-```
-
-**Do NOT emit** when the symbol is unique — use `approximate_line` instead.
-
-## VERIFY intent_marker Contract
-
-`intent_marker` for VERIFY steps MUST be a literal code token or exact substring that will appear verbatim in the file after the fix — the same discipline as EDIT's `intent_marker`.
-
-**GOOD (literal, code-shaped):**
-- `expect(component.searchValue).toBe`
-- `os.environ`
-- `bcrypt.checkpw`
-
-**BAD (prose describing intent — will only match if Cursor happens to write that exact sentence as a comment, which is not guaranteed and not the point):**
-- `searchValue is assigned directly`
-- `the function now validates input properly`
-
-If the property you want to verify is semantic/behavioral rather than a literal string (e.g. "the value is no longer bypassed through the sanitizer"), that is a judgment call, not a grep — route it through the EDIT step's LLM semantic validation instead of inventing a VERIFY prose marker that cannot mechanically match.
-
-Python does literal fact-checks on VERIFY; LLM does judgment on EDIT. Do not force behavioral verification into a literal substring.
+VERIFY `intent_marker` must be a literal code substring — GOOD/BAD examples in `plan_schema.md`.
 
 ---
 

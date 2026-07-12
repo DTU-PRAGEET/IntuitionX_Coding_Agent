@@ -145,6 +145,13 @@ def test_build_semantic_plan_prompt_includes_research():
     assert "acceptance checklist" in prompt.lower()
 
 
+def test_build_semantic_plan_prompt_includes_plan_schema_reference():
+    report = load_research_report(FIXTURE_REPORT)
+    prompt = build_semantic_plan_prompt(report, str(REPO_ROOT))
+    assert "REFERENCE: plan_schema" in prompt
+    assert "Self-Check Before Finalizing" in prompt
+
+
 def test_run_planner_uses_mock_without_cursor(tmp_path):
     """Without CURSOR_API_KEY, run_planner returns mock semantic plan."""
     report = load_research_report(FIXTURE_REPORT)

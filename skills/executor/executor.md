@@ -43,16 +43,24 @@ Local tools (`read`, `bash`) are used for READ steps, pre-edit snippet capture, 
 
 ## Single-Call Workflow
 
-### Phase 1 — Pre-flight (local tools only)
+Plan `READ → EDIT → VERIFY` triads describe **Cursor batch context** — what Cursor should
+read, change, and self-check while applying the whole plan. Python executor validation is
+separate: preflight (deterministic) + LLM semantic validation (primary) + post-batch VERIFY
+(pattern / absence checks only).
+
+### Phase 1 — Preflight (Python only)
 
 1. Confirm `planner_snapshot_head` matches current repo HEAD — STOP on mismatch
-2. Execute all **READ** steps sequentially via `read` tool
-3. Capture pre-edit snippet from `approximate_line` or prior READ line range (no symbol resolution)
+2. **Preflight EDIT targets** — every EDIT step file must exist unless `create_files=true` or step creates a new file; STOP with clear error (phantom paths fail here, not on READ replay)
+3. Capture pre-edit snippet from `approximate_line` for each EDIT step (empty capture OK when file will be created)
 4. Skip EDIT steps where LLM validation confirms fix intent is already satisfied (record in `plan_deviations`)
+
+**READ steps in the plan are NOT replayed by Python.** They are delegated to Cursor batch context.
+Pre-edit capture + planner `instruction` Before/After blocks supply validation context instead.
 
 ### Phase 2 — Cursor edit (two batch passes max)
 
-1. **Batch pass #1:** send ALL EDIT steps in one `CursorGateway.edit()` call
+1. **Batch pass #1:** send ALL EDIT steps in one `CursorGateway.edit()` call (includes planner READ context in instructions)
 2. Validate every edited step with **progressive context** (noop + structural + LLM semantic):
    - Level 1: git-diff changed lines expanded to semantic parent (method/class/function)
    - Level 2: full-file fallback when Level 1 fails (before Cursor repair)
@@ -69,11 +77,16 @@ Local tools (`read`, `bash`) are used for READ steps, pre-edit snippet capture, 
 | Semantic validation fails after pass 2 | STOP; aggregate error listing every failing step |
 | Cursor batch incomplete | Log deviation; still validate and attempt pass 2 if failures remain |
 
-### Phase 3 — Verify (local tools only)
+### Phase 3 — Post-batch VERIFY (Python only)
 
-1. Execute all **VERIFY** steps via `read` + `verify_intent_marker` + pattern checks (unchanged)
-2. Run **RUN_TESTS** steps if present
-3. Emit **ExecutionResult**
+1. Record READ steps as delegated (no file read, no failure on missing/deleted paths)
+2. Execute **VERIFY** steps after batch edits:
+   - **Removal expected** (prior EDIT or VERIFY reason mentions delete/gitignore/redact) → PASS when file absent
+   - **`intent_marker`** → literal substring check in surviving file
+   - **grep patterns** from `validate` → required/forbidden substring checks
+   - **No marker/patterns** → defer to EDIT LLM validation (do not fail on file_exists alone)
+3. Run **RUN_TESTS** steps if present
+4. Emit **ExecutionResult**
 
 ---
 

@@ -27,7 +27,7 @@ def test_build_orchestrator_prompt_once():
 def test_build_system_only_no_context():
     """Test Build System Only No Context for this module."""
     body, manifest = PromptBuilder.build_system_only(RESEARCH_SKILLS)
-    assert manifest.tool_budget == 12
+    assert manifest.tool_budget == 13
     assert "## CONTEXT" not in body
 
 

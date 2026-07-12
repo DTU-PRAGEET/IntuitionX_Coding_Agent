@@ -1,3 +1,4 @@
+<!-- CHANGELOG (2026-07-11): Self-check ASSERT, Before/After format, verification taxonomy, VERIFY intent_marker examples relocated from planner.md. -->
 <!-- CHANGELOG (2026-07-06): Required semantic targeting — target_type + target_name; caution_flag for ambiguity. -->
 
 ---
@@ -114,6 +115,34 @@
 }
 ```
 
+## Self-Check Before Finalizing (Mandatory)
+
+Before emitting the plan, verify:
+
+```
+FOR each hypothesis H in research_output.hypotheses:
+  ASSERT at least one execution_step.reason contains "hypothesis" + H.rank
+         OR references H.hypothesis text verbatim
+  ASSERT the step block addresses H (fix, verify-only, or documents cross-file mitigation)
+
+FOR each EDIT step:
+  ASSERT instruction describes a real security fix (not no-op)
+  ASSERT instruction is specific enough for a human engineer to locate and apply the fix
+  ASSERT instruction names what NOT to touch (e.g. "do not restructure surrounding braces/control flow")
+  ASSERT instruction includes an inline acceptance checklist: "Acceptance: (1) ..., (2) ..., (3) ..."
+  ASSERT every EDIT instruction includes Before/After blocks (see format below)
+  ASSERT intent_marker is expected in file after Executor applies the fix
+  ASSERT target_type and target_name identify the edit site (required on every EDIT)
+  ASSERT caution_flag is set when READ shows the target symbol appears more than once
+  ASSERT approximate_line is provided when helpful (optional, never required to be exact)
+
+FOR each hypothesis requiring no file change:
+  ASSERT plan uses READ→VERIFY only (NO EDIT step)
+  ASSERT reason explains why fix is applied elsewhere
+```
+
+If any assertion fails → rebuild plan before emit.
+
 ## Triad Validation Checklist
 
 Before emitting, confirm for each modified file:
@@ -124,3 +153,69 @@ Before emitting, confirm for each modified file:
 - [ ] EDIT has `target_type` and `target_name`
 - [ ] EDIT has `caution_flag` when target symbol appears multiple times
 - [ ] All `file` paths ∈ `files_to_change` (unless `create_files=true`)
+
+## Instruction Contract (EDIT steps)
+
+Every EDIT `instruction` MUST be self-contained and include:
+1. **What to change** — concrete, locatable in the file (name the function/block/line region in plain language)
+2. **What NOT to touch** — e.g. "do not restructure surrounding braces/control flow"
+3. **Acceptance checklist** — 3–5 numbered items Cursor self-verifies, inline in the instruction:
+   "Acceptance: (1) ..., (2) ..., (3) ..."
+4. **Before/After blocks** — see format below
+
+The acceptance checklist lives IN the instruction field. Python and Executor do NOT add a parallel checklist.
+
+## Before/After Format (EDIT instructions)
+
+Every EDIT `instruction` must include Before/After blocks shaped like repo code — not pseudocode:
+
+```
+Before (current — from READ):
+  [actual lines from file]
+
+After (target — what executor should produce):
+  [concrete code showing the fix, matching repo style]
+```
+
+## Semantic Targeting (EDIT steps)
+
+Every EDIT step **requires** `target_type` and `target_name`:
+- `target_type`: one of `function`, `method`, `class`, `variable`, `assignment`, `import`, `block`, `file`
+- `target_name`: symbol or identifier (e.g. `execute`, `this.searchValue`, `validate_user`)
+- For `target_type: file`, `target_name` may be the filename
+
+Use `parent_name` and `occurrence_index` when the symbol is nested or repeated.
+
+## caution_flag Format Example
+
+When READ shows the target symbol appears **more than once**, set `caution_flag`:
+
+```
+CAUTION: 'this.searchValue' appears 4 times in search-result.component.ts (lines 42, 67, 89, 112). The security issue is the direct assignment bypassing sanitizer in ngOnInit (~line 42). Other occurrences may be test mocks or unrelated reads — do not fail if unchanged.
+```
+
+Do NOT emit `caution_flag` when the symbol is unique — use `approximate_line` instead.
+
+## VERIFY intent_marker Contract
+
+`intent_marker` for VERIFY steps MUST be a literal code token or exact substring expected verbatim after the fix.
+
+**GOOD (literal, code-shaped):**
+- `expect(component.searchValue).toBe`
+- `os.environ`
+- `bcrypt.checkpw`
+
+**BAD (prose describing intent):**
+- `searchValue is assigned directly`
+- `the function now validates input properly`
+
+If verification is behavioral rather than literal, route through EDIT semantic validation — do not invent a VERIFY prose marker.
+
+Python does literal fact-checks on VERIFY; LLM does judgment on EDIT.
+
+## Verification Taxonomy (VERIFY / RUN_TESTS)
+
+| Step type | Automated (agent-runnable) | Manual (Gate 2 / human) |
+|-----------|---------------------------|---------------------------|
+| VERIFY | `intent_marker` literal match in file | Behavioral checks → document in `reason`, not VERIFY marker |
+| RUN_TESTS | Named test command from repo conventions | — |

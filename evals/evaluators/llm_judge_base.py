@@ -228,7 +228,21 @@ def invoke_judge(system: str, user: str, *, llm=None) -> JudgeVerdict:
     messages = [SystemMessage(content=system), HumanMessage(content=user)]
     response = invoke_tracked(llm, messages, agent="eval_judge")
     text = llm_content(response)
-    return parse_llm_json(text, JudgeVerdict)
+    try:
+        return parse_llm_json(text, JudgeVerdict)
+    except ValueError:
+        repair_system = (
+            f"{system}\n\n"
+            "Your previous response was invalid JSON. Return ONLY one valid JSON object "
+            "matching the schema. Escape double quotes inside strings. Do not truncate."
+        )
+        repair_messages = [
+            SystemMessage(content=repair_system),
+            HumanMessage(content=user),
+            HumanMessage(content=f"Invalid JSON response:\n{text[:4000]}"),
+        ]
+        retry = invoke_tracked(llm, repair_messages, agent="eval_judge")
+        return parse_llm_json(llm_content(retry), JudgeVerdict)
 
 
 def format_file_contexts(contexts: list[Any]) -> str:

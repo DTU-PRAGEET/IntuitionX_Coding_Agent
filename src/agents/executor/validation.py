@@ -16,7 +16,12 @@ from src.core.edit_step import is_instruction_edit
 from src.core.logging import get_logger
 from src.core.runner_utils import invoke_tracked, llm_content, parse_llm_json
 from src.core.schemas import ExecutionPlan
-from src.core.skill_manager import PromptBuilder, format_domain_skills_for_prompt, module_skills_dir
+from src.core.skill_manager import (
+    PromptBuilder,
+    append_references_for_agent,
+    format_domain_skills_for_prompt,
+    module_skills_dir,
+)
 
 from src.agents.executor.validation_context import (
     ContextLevel,
@@ -109,8 +114,9 @@ class FailedEditStep:
 
 
 def load_validation_policy(ticket: dict[str, Any] | None = None) -> str:
-    """Load executor skill body as validation policy."""
+    """Load executor skill body plus validation_policy reference for semantic validation."""
     body, _ = PromptBuilder.build_system_only(SKILLS_DIR)
+    body = append_references_for_agent(body, SKILLS_DIR, "executor", ticket)
     domain = format_domain_skills_for_prompt("executor", ticket)
     if domain:
         return f"{body}\n\n{domain}"

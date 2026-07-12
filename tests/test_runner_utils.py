@@ -88,3 +88,35 @@ Line two with control chars in reasoning."
     assert verdict.score == 35
     assert "Line one" in verdict.reasoning
     assert "Line two" in verdict.reasoning
+
+
+def test_parse_llm_json_repairs_truncated_judge_verdict():
+    """Judge models may truncate nested criteria objects before closing braces."""
+    from evals.evaluators.llm_judge_base import JudgeVerdict
+
+    raw = """{
+  "score": 92,
+  "passed": true,
+  "criteria": {
+    "root_cause_analysis": {"score": 95, "reason": "Identifies committed secret."},
+    "technical_correctness": {"score": 90, "reason": "The plan meets ticket's requirements."}
+  },
+  "hard_failures": [],
+  "soft_failures": [],
+  "reasoning": "Solid plan overall."
+"""
+    verdict = parse_llm_json(raw, JudgeVerdict)
+    assert verdict.score == 92
+    assert verdict.passed is True
+    assert verdict.criteria["technical_correctness"].score == 90
+
+
+def test_parse_llm_json_extracts_first_balanced_object():
+    """Prefer the first balanced JSON object instead of greedy brace matching."""
+    from evals.evaluators.llm_judge_base import JudgeVerdict
+
+    raw = """Here is the verdict:
+{"score": 80, "passed": true, "criteria": {}, "hard_failures": [], "soft_failures": [], "reasoning": "ok"}
+Extra prose with braces like {not json}."""
+    verdict = parse_llm_json(raw, JudgeVerdict)
+    assert verdict.score == 80

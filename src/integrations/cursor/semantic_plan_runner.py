@@ -104,7 +104,8 @@ def build_semantic_plan_prompt(
         "planner",
         SKILLS_DIR,
         context,
-        include_references=False,
+        ticket=ticket,
+        include_references=True,
         extra_instructions=(
             "Explore the repository at the given repo_path. Read affected files on disk. "
             "Produce an ExecutionPlan JSON with instruction-based EDIT steps — do NOT use "

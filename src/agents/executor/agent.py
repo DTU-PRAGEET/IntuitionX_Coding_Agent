@@ -378,19 +378,73 @@ def _file_contains_live_pattern(content: str, pattern: str) -> bool:
     return False
 
 
-def _execute_read(registry: ToolRegistry, step: dict[str, Any]) -> tuple[bool, str]:
-    """Execute Read for this module."""
+_READ_DELEGATED_MSG = "delegated to cursor batch context (pre-edit capture used for validation)"
+
+
+def _execute_read_delegated(step: dict[str, Any]) -> tuple[bool, str]:
+    """READ steps are Cursor batch context — Python does not replay them."""
     path = _step_path(step)
-    start = step.get("read_start_line") or 1
-    end = step.get("read_end_line")
-    try:
-        resolved = _resolve_repo_file(registry, path)
-    except ValueError as e:
-        return False, str(e)
-    if not resolved.is_file():
-        return False, f"file not found: {path}"
-    result = registry.execute("read", path=path, start_line=start, end_line=end)
-    return _tool_ok(result)
+    _log.info("read_delegated", step=step.get("step_id"), file=path)
+    return True, _READ_DELEGATED_MSG
+
+
+_REMOVAL_HINTS = (
+    "delete",
+    "remove",
+    "redact",
+    "gitignore",
+    "exclude",
+    "purge",
+    "strip",
+    "placeholder",
+    "no longer contain",
+    "do not commit",
+)
+
+
+def _edit_step_blob(step: dict[str, Any]) -> str:
+    return " ".join(
+        [
+            step.get("instruction") or "",
+            step.get("change") or "",
+            step.get("reason") or "",
+            step.get("target") or "",
+        ]
+    ).lower()
+
+
+def _removal_expected(plan: ExecutionPlan, path: str) -> bool:
+    """True when any EDIT on *path* intends to delete or redact file content."""
+    for raw in plan.execution_steps:
+        step = _step_to_dict(raw)
+        if step.get("action") != "EDIT" or _step_path(step) != path:
+            continue
+        if any(hint in _edit_step_blob(step) for hint in _REMOVAL_HINTS):
+            return True
+    return False
+
+
+def _preflight_edit_targets(plan: ExecutionPlan, repo_path: str) -> None:
+    """Fail fast when EDIT targets are missing on disk (phantom paths)."""
+    root = Path(repo_path)
+    missing: list[str] = []
+    for raw in plan.execution_steps:
+        step = _step_to_dict(raw)
+        if step.get("action") != "EDIT":
+            continue
+        path = _step_path(step)
+        if not path:
+            continue
+        creates = bool(plan.create_files and step.get("target_type") == "file")
+        if creates:
+            continue
+        if not (root / path).is_file():
+            missing.append(path)
+    if missing:
+        raise RuntimeError(
+            "Preflight failed: EDIT target(s) not found on disk: "
+            + ", ".join(missing)
+        )
 
 
 def _execute_run_tests(registry: ToolRegistry, step: dict[str, Any]) -> tuple[bool, str]:
@@ -637,10 +691,22 @@ def _execute_verify(
 ) -> tuple[bool, str]:
     """Execute Verify for this module."""
     path = _step_path(step)
+    try:
+        resolved = _resolve_repo_file(registry, path)
+        file_exists = resolved.is_file()
+    except ValueError as e:
+        return False, str(e)
+
+    if not file_exists and _removal_expected(plan, path):
+        _log.info("verification", mode="removal_expected", path=path)
+        return True, "file removed as expected"
+
     intent_marker = (step.get("intent_marker") or "").strip() or _prior_edit_intent_marker(
         plan, path, step.get("step_id", 0)
     )
     if intent_marker:
+        if not file_exists:
+            return False, f"file not found: {path}"
         ok, out, code = verify_intent_marker(registry.cwd, path, intent_marker)
         if not ok:
             return False, out
@@ -650,12 +716,14 @@ def _execute_verify(
     patterns, forbidden = _resolve_verify_patterns(step, plan)
 
     if not patterns and not forbidden:
-        _log.info("verification", mode="file_exists", path=path)
-        try:
-            resolved = _resolve_repo_file(registry, path)
-        except ValueError as e:
-            return False, str(e)
-        return resolved.is_file(), "" if resolved.is_file() else f"file not found: {path}"
+        _log.info("verification", mode="deferred_to_edit_validation", path=path)
+        return True, "deferred to EDIT LLM validation"
+
+    if not file_exists:
+        if forbidden and not patterns:
+            _log.info("verification", mode="forbidden_absent_file", path=path)
+            return True, "forbidden patterns absent (file removed)"
+        return False, f"file not found: {path}"
 
     ok_read, content = _read_file_snippet(registry, path)
     if not ok_read:
@@ -971,7 +1039,7 @@ def _execute_step(
 
     try:
         if action == "READ":
-            ok, out = _execute_read(registry, step)
+            ok, out = _execute_read_delegated(step)
         elif action == "VERIFY":
             ok, out = _execute_verify(registry, step, plan)
         elif action == "EDIT":
@@ -1068,6 +1136,7 @@ def run_executor(
     plan_deviations: list[str] = []
 
     try:
+        _preflight_edit_targets(plan, repo_path)
         edit_outcomes, edit_deviations, validation_failures = _run_edit_batch_phase(
             registry,
             plan,

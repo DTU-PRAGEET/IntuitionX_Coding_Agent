@@ -22,7 +22,7 @@ def test_skill_directory_layout_for_deepagents():
     assert (SKILL_DIR / "references" / "security_patterns.md").is_file()
     manifest = load_skill_manifest_safe()
     assert manifest.name == "research"
-    assert manifest.tool_budget == 12
+    assert manifest.tool_budget == 13
 
 
 def test_build_research_user_message_excludes_skill_body(tmp_path):

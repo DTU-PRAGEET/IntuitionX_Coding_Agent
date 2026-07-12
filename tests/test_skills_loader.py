@@ -25,7 +25,7 @@ def test_load_skill_manifest_research():
     manifest = load_skill_manifest(SKILL_DIR)
     assert manifest.name == "research"
     assert manifest.description
-    assert manifest.tool_budget == 12
+    assert manifest.tool_budget == 13
     assert manifest.recursion_limit >= 28
 
 
@@ -61,6 +61,25 @@ def test_select_references_security():
     ticket = make_security_ticket("SEC-TEST-1")
     refs = select_references(ticket, SKILL_DIR, "research")
     assert any(r.name == "security_patterns.md" for r in refs)
+    assert any(r.name == "general_patterns.md" for r in refs)
+
+
+def test_select_references_planner():
+    """Planner always loads plan_schema reference."""
+    from src.core.skill_manager import module_skills_dir
+
+    planner_dir = module_skills_dir("planner")
+    refs = select_references(None, planner_dir, "planner")
+    assert any(r.name == "plan_schema.md" for r in refs)
+
+
+def test_select_references_executor():
+    """Executor always loads validation_policy reference."""
+    from src.core.skill_manager import module_skills_dir
+
+    executor_dir = module_skills_dir("executor")
+    refs = select_references(None, executor_dir, "executor")
+    assert any(r.name == "validation_policy.md" for r in refs)
 
 
 def test_bug_ticket_no_skill_match():
