@@ -1,6 +1,6 @@
 # Failure Mode Taxonomy — Integration Eval Baseline (Milestone 2.4)
 
-> **Status:** First-pass baseline established  
+> **Status:** Current baseline — Pass 3 (`run_030`, 100% pass rate, 2026-07-11)  
 > **Golden suite:** `G-01` … `G-18` (18 cases across 5 vulnerable repos)  
 > **Eval mode:** Full pipeline integration (`routing → research → planner → executor`)  
 > **Pass criterion:** Executor judge `passed: true` and no `stage_failed` in pipeline artifact
@@ -17,16 +17,18 @@
 
 ## 1. Executive Summary
 
-This document records the **end-to-end integration eval baseline** for the Sprinklr Jira Solver agent pipeline. Two benchmark passes were executed on the same 18 golden cases:
+This document records the **end-to-end integration eval baseline** for the Sprinklr Jira Solver agent pipeline. Three benchmark passes were executed on the same 18 golden cases:
 
 | Pass | Runs | Date | Experiment | Overall Pass Rate |
 |------|------|------|------------|-------------------|
 | **Pass 1 — Pre-validation** | `run_007` + `run_010` | 2026-07-04 | `mixed-10-unit` | **3 / 18 (16.7%)** |
 | **Pass 2 — Post-validation** | `mixed_15_afterSemanticANDValidationChanges` + `mixed_3_afterSemanticANDVlidationChanges` | 2026-07-06 | `mixed-15-unit-ChangingValidationLayerAndSemanticInstructions` | **13 / 18 (72.2%)** |
+| **Pass 3 — Skills improvements** | `run_030` | 2026-07-11 | `Skills-adjustment-Test3` | **18 / 18 (100%)** |
 
-**Net improvement:** +55.5 percentage points after semantic-targeting and validation-layer changes in the planner and executor agents.
+**Net improvement (Pass 1 → Pass 2):** +55.5 pp after semantic-targeting and validation-layer changes.  
+**Net improvement (Pass 2 → Pass 3):** +27.8 pp after planner/executor/research skill improvements — all 5 remaining failures recovered.
 
-Pass 1 was split across two runs (`run_007`: G-01,03,05,06,08,10,14,17; `run_010`: G-02,04,07,09,11–13,15,16,18). Pass 2 was similarly split (`mixed_15`: G-01–15; `mixed_3`: G-15–18).
+Pass 1 was split across two runs (`run_007`: G-01,03,05,06,08,10,14,17; `run_010`: G-02,04,07,09,11–13,15,16,18). Pass 2 was similarly split (`mixed_15`: G-01–15; `mixed_3`: G-15–18). Pass 3 ran all 18 cases in a single run (`run_030`).
 
 All intermediate outputs (research reports, plans, plan validation, execution steps, git diffs, ±50-line code context) are frozen in `evals/runs/<run_id>/artifacts/`. LLM judge verdicts are in `evals/runs/<run_id>/judge_results/{planner,executor}/`.
 
@@ -230,36 +232,105 @@ Every failure is classified into exactly one of five modes defined in Milestone 
 
 ---
 
-## 5. Cross-Pass Comparison Matrix
+## 5. Pass 3 — Skills Improvements Baseline (`run_030`)
 
-| Case | Pass 1 | Pass 2 | Mode (P1) | Mode (P2) | Notes |
-|------|--------|--------|-----------|-----------|-------|
-| G-01 | ✅ | ✅ | — | — | Stable pass; Pass 2 cleaner (no scope creep) |
-| G-02 | ❌ | ✅ | `BROKEN_SYNTAX` | — | Fixed by complete bcrypt implementation |
-| G-03 | ❌ | ✅ | `NO_OUTPUT` | — | Semantic targeting now resolves `setup_jinja` |
-| G-04 | ❌ | ❌ | `NO_OUTPUT` | `BROKEN_SYNTAX` | Progress: plan executes, VERIFY fails on wrong file |
-| G-05 | ❌ | ✅ | `WRONG_FIX_TYPE` | — | Selective POST-only auth gating |
-| G-06 | ✅ | ✅ | — | — | Stable pass |
-| G-07 | ❌ | ✅ | `PARTIAL_FIX` | — | ORM fix now accepted |
-| G-08 | ❌ | ✅ | `NO_OUTPUT` | — | `SECRET_KEY` assignment now resolvable |
-| G-09 | ❌ | ✅ | `WRONG_FIX_TYPE` | — | Generic error message now sufficient |
-| G-10 | ❌ | ✅ | `WRONG_FIX_TYPE` | — | PreparedStatement fix accepted |
-| G-11 | ❌ | ✅ | `NO_OUTPUT` | — | JWT endpoint now correctly targeted |
-| G-12 | ❌ | ❌ | `BROKEN_SYNTAX` | `PARTIAL_FIX` | Progress: edit completes but authorization logic flawed |
-| G-13 | ❌ | ✅ | `WRONG_FIX_TYPE` | — | Path traversal fix now passes judge |
-| G-14 | ❌ | ❌ | `NO_OUTPUT` | `PARTIAL_FIX` | Progress: reaches executor; template sink remains |
-| G-15 | ❌ | ✅ | `NO_OUTPUT` | — | Server-side `isAdmin` middleware |
-| G-16 | ❌ | ❌ | `BROKEN_SYNTAX` | `PARTIAL_FIX` | Progress: algorithm pinning added but verify() broken |
-| G-17 | ❌ | ✅ | `WRONG_FIX_TYPE` | — | Secret properly externalized |
-| G-18 | ✅ | ❌ | — | `PARTIAL_FIX` | **Regression:** Pass 1 simple SealedSecret passed; Pass 2 YAML corrupted |
+> Changes applied between Pass 2 and Pass 3: planner, executor, and research skill updates (multi-file fix planning, sync API awareness, minimal IDOR guards, config/YAML edit guidance, validation policy refinements).
 
-**Flaky / regressed:** G-18 (pass → fail due to YAML corruption in Pass 2).
+### 5.1 Scorecard
+
+#### Overall
+
+| Metric | Value |
+|--------|-------|
+| Cases run | 18 / 18 |
+| End-to-end pass | **18** |
+| End-to-end fail | **0** |
+| **Pass rate** | **100%** |
+| Δ vs Pass 2 | **+27.8 pp** |
+| Planner judge mean | **94.9** |
+| Executor judge mean | **96.8** |
+
+#### By Vulnerability Class
+
+| Vuln Class | Pass 2 | Pass 3 | Δ |
+|------------|--------|--------|---|
+| Injection | 100% | **100%** | — |
+| Crypto | 100% | **100%** | — |
+| Secrets | 100% | **100%** | — |
+| Auth | 75% | **100%** | +25 pp |
+| BAC | 67% | **100%** | +33 pp |
+| IDOR | 50% | **100%** | +50 pp |
+| XSS | 50% | **100%** | +50 pp |
+| Misconfig | 0% | **100%** | +100 pp |
+
+#### By Language
+
+| Language | Pass 2 | Pass 3 | Δ |
+|----------|--------|--------|---|
+| Python | 89% | **100%** | +11 pp |
+| Java | 80% | **100%** | +20 pp |
+| TypeScript | 33% | **100%** | +67 pp |
+| YAML | 0% | **100%** | +100 pp |
+
+#### Failure Mode Distribution
+
+| Mode | Pass 2 | Pass 3 | Δ |
+|------|--------|--------|---|
+| `PASS` | 13 | **18** | +5 |
+| `PARTIAL_FIX` | 4 | **0** | −4 ✅ |
+| `BROKEN_SYNTAX` | 1 | **0** | −1 ✅ |
+| `NO_OUTPUT` | 0 | 0 | — |
+| `WRONG_FIX_TYPE` | 0 | 0 | — |
+
+### 5.2 Recovered Cases (Pass 2 failures → Pass 3 passes)
+
+| Case | Repo | Vuln | Lang | Pass 2 Mode | Pass 3 Scores | Root Cause Fix Summary |
+|------|------|------|------|-------------|---------------|------------------------|
+| **G-04** | DVPWA | Misconfig | python | `BROKEN_SYNTAX` | P96 / E100 | Config schema + `sqli/app.py` + `run.py` aligned; debug defaults False, log_level config-driven |
+| **G-12** | WebGoat | IDOR | java | `PARTIAL_FIX` | P97 / E98 | Minimal `userId.equals(authUserId)` guard; removed hardcoded victim ID; no control-flow restructure |
+| **G-14** | Juice Shop | XSS | typescript | `PARTIAL_FIX` | P98 / E98 | Component: removed `bypassSecurityTrustHtml`; template: `[innerHTML]` → `{{ searchValue }}` |
+| **G-16** | Juice Shop | Auth | typescript | `PARTIAL_FIX` | P100 / E100 | Sync `jwt.verify(token, publicKey, { algorithms: ['RS256'] })`; boolean contract preserved |
+| **G-18** | WrongSecrets | Misconfig | yaml | `PARTIAL_FIX` | P92 / E70 | Plain Secret manifests deleted; scripts updated to SealedSecret workflow (soft failures on missing manifest files) |
+
+### 5.3 Pass 3 — Key Findings
+
+1. **All Pass 2 failure modes eliminated** — zero `PARTIAL_FIX` or `BROKEN_SYNTAX` failures remain.
+2. **TypeScript recovered fully** — G-14 (multi-file component+template) and G-16 (sync JWT verify) both pass.
+3. **YAML/Misconfig recovered** — G-04 and G-18 now pass; G-18 passes with executor score 70 and documented soft failures (missing `sealed-funnystuff.json` in diff).
+4. **Judge means improved** — planner 77.4 → 94.9 (+17.5); executor 75.9 → 96.8 (+20.9).
 
 ---
 
-## 6. Failure Mode Deep Dives
+## 6. Cross-Pass Comparison Matrix
 
-### 6.1 `NO_OUTPUT` — Pipeline Abort Before Executor (Pass 1: 6 cases)
+| Case | Pass 1 | Pass 2 | Pass 3 | Mode (P1) | Mode (P2) | Notes |
+|------|--------|--------|--------|-----------|-----------|-------|
+| G-01 | ✅ | ✅ | ✅ | — | — | Stable pass |
+| G-02 | ❌ | ✅ | ✅ | `BROKEN_SYNTAX` | — | bcrypt complete |
+| G-03 | ❌ | ✅ | ✅ | `NO_OUTPUT` | — | Semantic targeting resolves `setup_jinja` |
+| G-04 | ❌ | ❌ | ✅ | `NO_OUTPUT` | `BROKEN_SYNTAX` | **Recovered P3:** config-driven debug/log_level |
+| G-05 | ❌ | ✅ | ✅ | `WRONG_FIX_TYPE` | — | Selective POST-only auth |
+| G-06 | ✅ | ✅ | ✅ | — | — | Stable pass |
+| G-07 | ❌ | ✅ | ✅ | `PARTIAL_FIX` | — | ORM fix accepted |
+| G-08 | ❌ | ✅ | ✅ | `NO_OUTPUT` | — | `SECRET_KEY` env-sourced |
+| G-09 | ❌ | ✅ | ✅ | `WRONG_FIX_TYPE` | — | Generic login error |
+| G-10 | ❌ | ✅ | ✅ | `WRONG_FIX_TYPE` | — | PreparedStatement |
+| G-11 | ❌ | ✅ | ✅ | `NO_OUTPUT` | — | JWT endpoint targeted |
+| G-12 | ❌ | ❌ | ✅ | `BROKEN_SYNTAX` | `PARTIAL_FIX` | **Recovered P3:** minimal IDOR guard |
+| G-13 | ❌ | ✅ | ✅ | `WRONG_FIX_TYPE` | — | Path canonicalization |
+| G-14 | ❌ | ❌ | ✅ | `NO_OUTPUT` | `PARTIAL_FIX` | **Recovered P3:** component + template XSS co-fix |
+| G-15 | ❌ | ✅ | ✅ | `NO_OUTPUT` | — | Server-side `isAdmin` middleware |
+| G-16 | ❌ | ❌ | ✅ | `BROKEN_SYNTAX` | `PARTIAL_FIX` | **Recovered P3:** sync `jwt.verify` RS256 pinning |
+| G-17 | ❌ | ✅ | ✅ | `WRONG_FIX_TYPE` | — | Secret externalized |
+| G-18 | ✅ | ❌ | ✅ | — | `PARTIAL_FIX` | **Recovered P3:** plain Secret removed (E70, soft failures) |
+
+**Pass 3 result:** 18/18 pass. G-18 passes with executor score 70 — SealedSecret manifests not visible in diff.
+
+---
+
+## 7. Failure Mode Deep Dives
+
+### 7.1 `NO_OUTPUT` — Pipeline Abort Before Executor (Pass 1: 6 cases)
 
 The dominant Pass 1 failure mode. All instances trace to **planner semantic EDIT step validation** in `src/agents/planner/validation.py`:
 
@@ -279,7 +350,7 @@ ValueError: Planner produced invalid semantic EDIT steps:
 
 **Resolution (Pass 2):** Improved semantic targeting instructions + relaxed occurrence resolution. All 6 cases now produce executor output.
 
-### 6.2 `WRONG_FIX_TYPE` — Correct File, Wrong Approach (Pass 1: 5 cases)
+### 7.2 `WRONG_FIX_TYPE` — Correct File, Wrong Approach (Pass 1: 5 cases)
 
 | Case | Expected Fix | Actual Fix | Gap |
 |------|-------------|------------|-----|
@@ -289,7 +360,7 @@ ValueError: Planner produced invalid semantic EDIT steps:
 | G-13 | Canonical path check | Partial path sanitization | Remaining traversal bypass |
 | G-17 | Remove secret from VCS | `${PASSWORD:secret}` placeholder | Secret still committed as default |
 
-### 6.3 `BROKEN_SYNTAX` — Invalid or Incomplete Code (Pass 1: 3, Pass 2: 1)
+### 7.3 `BROKEN_SYNTAX` — Invalid or Incomplete Code (Pass 1: 3, Pass 2: 1)
 
 | Case | Pass | Symptom |
 |------|------|---------|
@@ -298,7 +369,7 @@ ValueError: Planner produced invalid semantic EDIT steps:
 | G-16 | 1 | Only imports added, no algorithm pinning logic |
 | G-04 | 2 | VERIFY_FAIL — intent marker missing from `sqli/schema/config.py` |
 
-### 6.4 `PARTIAL_FIX` — Fix Applied, Vulnerability Open (Pass 1: 1, Pass 2: 4)
+### 7.4 `PARTIAL_FIX` — Fix Applied, Vulnerability Open (Pass 1: 1, Pass 2: 4)
 
 | Case | Pass | What Was Fixed | What Remains |
 |------|------|---------------|--------------|
@@ -310,24 +381,20 @@ ValueError: Planner produced invalid semantic EDIT steps:
 
 ---
 
-## 7. Remediation Priority Queue
+## 8. Remediation Priority Queue
 
-Based on failure frequency and pass-rate impact, recommended next improvements:
+> **Status (Pass 3):** All P0/P1 items from Pass 2 analysis are resolved. Pass 3 achieved **18/18 (100%)**.
 
-| Priority | Target | Cases | Expected Impact |
-|----------|--------|-------|-----------------|
-| P0 | Multi-file fix planning (component + template) | G-14 | +1 pass (XSS 50% → 100%) |
-| P0 | Async/sync API awareness in executor | G-16 | +1 pass (Auth 75% → 100%) |
-| P1 | YAML/config edit validation | G-18 | +1 pass (Misconfig 0% → 50%) |
-| P1 | IDOR authorization pattern (minimal guard, no restructure) | G-12 | +1 pass (IDOR 50% → 100%) |
-| P2 | VERIFY target file alignment with actual edits | G-04 | +1 pass (Misconfig 0% → 50%) |
-| P3 | Flaky case investigation | G-18 regression | Prevent pass → fail regressions |
+Remaining quality caveats (non-blocking — cases still pass):
 
-**Projected pass rate after P0+P1 fixes:** 17/18 = **94.4%**
+| Priority | Target | Case | Notes |
+|----------|--------|------|-------|
+| P2 | SealedSecret manifest completeness | G-18 | Executor score 70; `sealed-funnystuff.json` not visible in diff; scripts depend on it |
+| P3 | Planner score consistency | G-05 | Planner score 70 but executor 98 — plan quality variance |
 
 ---
 
-## 8. Artifact Reference
+## 9. Artifact Reference
 
 ### Run directories
 
@@ -337,6 +404,7 @@ Based on failure frequency and pass-rate impact, recommended next improvements:
 | `run_010` | G-02,04,07,09,11–13,15,16,18 | `evals/runs/run_010/` |
 | `mixed_15_afterSemanticANDValidationChanges` | G-01–15 | `evals/runs/mixed_15_afterSemanticANDValidationChanges/` |
 | `mixed_3_afterSemanticANDVlidationChanges` | G-15–18 | `evals/runs/mixed_3_afterSemanticANDVlidationChanges/` |
+| `run_030` | G-01–18 | `evals/runs/run_030/` |
 
 ### Per-case artifact layout
 
@@ -361,12 +429,12 @@ evals/runs/<run_id>/
 
 ---
 
-## 9. Methodology Notes
+## 10. Methodology Notes
 
 - **End-to-end pass** = executor judge `passed: true` AND `stage_failed` is `null` in the pipeline artifact.
 - **Planner judge** is scored independently and reported but does not gate the e2e pass (see G-03 Pass 2: planner fail, executor pass).
 - **Failure mode assignment** is based on artifact `stage_failed`, `error` field, `changed_files` vs `expected_files`, and executor/planner judge reasoning. When multiple modes apply, the earliest blocking stage wins.
 - **Judge model:** `gpt-5.2-2025-12-11` (benchmark tier), version `v1`.
-- **Baseline JSON:** `evals/baselines/current.json` — promoted from Pass 2 post-validation results.
+- **Baseline JSON:** `evals/baselines/current.json` — promoted from Pass 3 (`run_030`, 100% pass rate).
 
 ---

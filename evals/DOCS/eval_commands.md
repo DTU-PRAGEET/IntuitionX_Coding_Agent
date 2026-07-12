@@ -414,6 +414,30 @@ python -m evals.runners.run_eval --mode score \
 Use `--cases evals/golden/unit_test/dvpwa.json` for repo-level unit runs.
 Use `--cases evals/golden/integration_test` for single-repo multi-issue e2e runs.
 
+---
+
+## Integration eval baselines (G-01–G-18)
+
+Three benchmark passes on the same 18 golden security cases:
+
+| Pass | Run ID | Date | Pass rate | Planner mean | Executor mean |
+|------|--------|------|-----------|--------------|---------------|
+| Pass 1 — Pre-validation | `run_007` + `run_010` | 2026-07-04 | 16.7% (3/18) | — | — |
+| Pass 2 — Post-validation | `mixed_15` + `mixed_3` | 2026-07-06 | 72.2% (13/18) | 77.4 | 75.9 |
+| **Pass 3 — Skills improvements** | **`run_030`** | **2026-07-11** | **100% (18/18)** | **94.9** | **96.8** |
+
+**Pass 3 recovered cases** (failed in Pass 2): G-04, G-12, G-14, G-16, G-18.
+
+```bash
+# Regenerate report from saved artifacts (no Cursor cost)
+python -m evals.runners.run_judge_eval --run-id run_030
+
+# Compare against prior run (requires report.json in both run dirs)
+python -m evals.runners.compare_runs run_026 run_030
+```
+
+**Docs:** `evals/DOCS/failure-modes.md` (full taxonomy) · `evals/DOCS/checking_evals_result.md` (quick reference) · `evals/baselines/current.json` (promoted baseline)
+
 
 
 

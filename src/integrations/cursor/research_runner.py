@@ -40,16 +40,18 @@ def mock_research_report(ticket: JiraTicket) -> ResearchReport:
     )
 
 
-def report_to_research_output(report: ResearchReport) -> ResearchOutput:
-    """Report to research output."""
-    return ResearchOutput(
-        ticket_id=report.ticket_id,
-        research_summary=report.research_summary,
-        hypotheses=[h.model_dump() for h in report.hypotheses],
-        affected_files=[f.model_dump() for f in report.affected_files],
-        affected_modules=report.affected_modules,
-        module_blast_radius=report.module_blast_radius,
-        architectural_risk=report.architectural_risk,
-        issue_type_assessment=report.issue_type_assessment,
-        flags=report.flags,
-    )
+# --- M1.3 commented out: report_to_research_output (see docs/cleanup-audit.md) ---
+# def report_to_research_output(report: ResearchReport) -> ResearchOutput:
+#     """Report to research output."""
+#     return ResearchOutput(
+#         ticket_id=report.ticket_id,
+#         research_summary=report.research_summary,
+#         hypotheses=[h.model_dump() for h in report.hypotheses],
+#         affected_files=[f.model_dump() for f in report.affected_files],
+#         affected_modules=report.affected_modules,
+#         module_blast_radius=report.module_blast_radius,
+#         architectural_risk=report.architectural_risk,
+#         issue_type_assessment=report.issue_type_assessment,
+#         flags=report.flags,
+#     )
+# --- end M1.3: report_to_research_output ---

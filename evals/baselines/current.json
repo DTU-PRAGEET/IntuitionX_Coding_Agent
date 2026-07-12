@@ -1,17 +1,17 @@
 {
-  "description": "Integration eval baseline — promoted from Pass 2 post-validation (mixed_15 + mixed_3 runs, 2026-07-06)",
-  "updated_at": "2026-07-07T00:00:00+00:00",
-  "run_id": "mixed_15_afterSemanticANDValidationChanges+mixed_3_afterSemanticANDVlidationChanges",
-  "experiment": "mixed-15-unit-ChangingValidationLayerAndSemanticInstructions",
+  "description": "Integration eval baseline — promoted from Pass 3 post skills improvements (run_030, 2026-07-11)",
+  "updated_at": "2026-07-11T18:02:53+00:00",
+  "run_id": "run_030",
+  "experiment": "Skills-adjustment-Test3",
   "cases": "G-01..G-18",
   "evaluator_means": {
-    "planner_judge": 77.4,
-    "executor_judge": 75.9,
+    "planner_judge": 94.9,
+    "executor_judge": 96.8,
     "planner_preflight": null,
     "executor_preflight": null
   },
-  "pass_rate": 0.722,
-  "pass_count": 13,
+  "pass_rate": 1.0,
+  "pass_count": 18,
   "total_count": 18,
   "judge_tier": "benchmark",
   "judge_model": "gpt-5.2-2025-12-11",
@@ -20,45 +20,48 @@
       "Injection": { "pass": 3, "total": 3, "rate": 1.0 },
       "Crypto": { "pass": 1, "total": 1, "rate": 1.0 },
       "Secrets": { "pass": 1, "total": 1, "rate": 1.0 },
-      "Auth": { "pass": 3, "total": 4, "rate": 0.75 },
-      "BAC": { "pass": 2, "total": 3, "rate": 0.667 },
-      "IDOR": { "pass": 1, "total": 2, "rate": 0.5 },
-      "XSS": { "pass": 1, "total": 2, "rate": 0.5 },
-      "Misconfig": { "pass": 0, "total": 2, "rate": 0.0 }
+      "Auth": { "pass": 4, "total": 4, "rate": 1.0 },
+      "BAC": { "pass": 3, "total": 3, "rate": 1.0 },
+      "IDOR": { "pass": 2, "total": 2, "rate": 1.0 },
+      "XSS": { "pass": 2, "total": 2, "rate": 1.0 },
+      "Misconfig": { "pass": 2, "total": 2, "rate": 1.0 }
     },
     "by_language": {
-      "python": { "pass": 8, "total": 9, "rate": 0.889 },
-      "java": { "pass": 4, "total": 5, "rate": 0.8 },
-      "typescript": { "pass": 1, "total": 3, "rate": 0.333 },
-      "yaml": { "pass": 0, "total": 1, "rate": 0.0 }
+      "python": { "pass": 9, "total": 9, "rate": 1.0 },
+      "java": { "pass": 5, "total": 5, "rate": 1.0 },
+      "typescript": { "pass": 3, "total": 3, "rate": 1.0 },
+      "yaml": { "pass": 1, "total": 1, "rate": 1.0 }
     },
     "by_difficulty": {
-      "easy": { "pass": 6, "total": 7, "rate": 0.857 },
-      "medium": { "pass": 5, "total": 9, "rate": 0.556 },
+      "easy": { "pass": 7, "total": 7, "rate": 1.0 },
+      "medium": { "pass": 9, "total": 9, "rate": 1.0 },
       "hard": { "pass": 2, "total": 2, "rate": 1.0 }
     },
     "by_failure_mode": {
-      "PASS": 13,
-      "PARTIAL_FIX": 4,
-      "BROKEN_SYNTAX": 1,
+      "PASS": 18,
+      "PARTIAL_FIX": 0,
+      "BROKEN_SYNTAX": 0,
       "WRONG_FIX_TYPE": 0,
       "WRONG_FILE": 0,
       "NO_OUTPUT": 0
     }
   },
   "prior_baseline": {
-    "run_id": "run_007+run_010",
-    "experiment": "mixed-10-unit",
-    "pass_rate": 0.167,
-    "pass_count": 3,
+    "run_id": "mixed_15_afterSemanticANDValidationChanges+mixed_3_afterSemanticANDVlidationChanges",
+    "experiment": "mixed-15-unit-ChangingValidationLayerAndSemanticInstructions",
+    "pass_rate": 0.722,
+    "pass_count": 13,
     "total_count": 18,
-    "date": "2026-07-04"
+    "date": "2026-07-06"
   },
-  "failed_cases": [
-  { "case_id": "G-04", "mode": "BROKEN_SYNTAX", "vuln_class": "Misconfig", "language": "python" },
-  { "case_id": "G-12", "mode": "PARTIAL_FIX", "vuln_class": "IDOR", "language": "java" },
-  { "case_id": "G-14", "mode": "PARTIAL_FIX", "vuln_class": "XSS", "language": "typescript" },
-  { "case_id": "G-16", "mode": "PARTIAL_FIX", "vuln_class": "Auth", "language": "typescript" },
-  { "case_id": "G-18", "mode": "PARTIAL_FIX", "vuln_class": "Misconfig", "language": "yaml" }
+  "recovered_cases": [
+    { "case_id": "G-04", "pass2_mode": "BROKEN_SYNTAX", "pass3_scores": "P96/E100", "note": "Config-driven debug/log_level; VERIFY aligned with actual edits" },
+    { "case_id": "G-12", "pass2_mode": "PARTIAL_FIX", "pass3_scores": "P97/E98", "note": "Minimal IDOR guard (userId.equals(authUserId)); no control-flow restructure" },
+    { "case_id": "G-14", "pass2_mode": "PARTIAL_FIX", "pass3_scores": "P98/E98", "note": "Component + template co-change: removed bypassSecurityTrustHtml and [innerHTML] sink" },
+    { "case_id": "G-16", "pass2_mode": "PARTIAL_FIX", "pass3_scores": "P100/E100", "note": "Sync jwt.verify with algorithms:['RS256']; preserved boolean contract" },
+    { "case_id": "G-18", "pass2_mode": "PARTIAL_FIX", "pass3_scores": "P92/E70", "note": "Plain Secret removed; scripts use SealedSecret workflow (soft failures on missing manifest files)" }
+  ],
+  "quality_caveats": [
+    { "case_id": "G-18", "executor_score": 70, "soft_failures": ["sealed-funnystuff.json manifests not visible in diff", "Okteto SealedSecret step noop", "gcp-ingress sealed-secrets bootstrap added"] }
   ]
 }

@@ -19,5 +19,6 @@ evals/runs/
 
 HUMAN_LAYER_CODEBASE/
 docs/Anthropic_talk.txt
+docs/cleanup-audit.md
 
 .DS_Store

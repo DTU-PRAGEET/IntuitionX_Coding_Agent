@@ -1,8 +1,8 @@
-# Daily Diary — Planner / Executor / Orchestrator Changes (Jul 4–8, 2026)
+# Daily Diary — Planner / Executor / Orchestrator Changes (Jul 4–12, 2026)
 
-> **Period covered:** Friday Jul 4 → Tuesday Jul 8, 2026 (with Jul 9 routing fixes noted where they complete the arc)  
+> **Period covered:** Friday Jul 4 → Saturday Jul 12, 2026  
 > **Primary commits:** `2d0208f` (Jul 4) → `c60a004` (Jul 8) → `fb45b0f` (Jul 8)  
-> **Key eval runs:** Pass 1 = `run_007` + `run_010` · Pass 2 = `mixed_15_afterSemanticANDValidationChanges` + `mixed_3_afterSemanticANDVlidationChanges`
+> **Key eval runs:** Pass 1 = `run_007` + `run_010` · Pass 2 = `mixed_15` + `mixed_3` · **Pass 3 = `run_030`**
 
 ---
 
@@ -10,19 +10,21 @@
 
 Over four days we moved the pipeline from **patch-based planning/execution** to **instruction-based semantic planning + LLM semantic post-edit validation**, built a full **LLM-as-Judge eval harness**, and fixed orchestrator routing semantics.
 
-| Metric | Pass 1 (Jul 4) | Pass 2 (Jul 6) | Δ |
-|--------|----------------|----------------|---|
-| **End-to-end pass rate** | **3 / 18 (16.7%)** | **13 / 18 (72.2%)** | **+55.5 pp** |
-| `NO_OUTPUT` (planner killed run) | 6 | 0 | −6 |
-| `WRONG_FIX_TYPE` | 5 | 0 | −5 |
-| `BROKEN_SYNTAX` | 3 | 1 | −2 |
-| `PARTIAL_FIX` | 1 | 4 | +3 |
-| Planner judge mean | — | 77.4 | — |
-| Executor judge mean | — | 75.9 | — |
+| Metric | Pass 1 (Jul 4) | Pass 2 (Jul 6) | Pass 3 (Jul 11) | Δ (P2→P3) |
+|--------|----------------|----------------|-----------------|-----------|
+| **End-to-end pass rate** | **3 / 18 (16.7%)** | **13 / 18 (72.2%)** | **18 / 18 (100%)** | **+27.8 pp** |
+| `NO_OUTPUT` (planner killed run) | 6 | 0 | 0 | — |
+| `WRONG_FIX_TYPE` | 5 | 0 | 0 | — |
+| `BROKEN_SYNTAX` | 3 | 1 | 0 | −1 |
+| `PARTIAL_FIX` | 1 | 4 | 0 | −4 |
+| Planner judge mean | — | 77.4 | **94.9** | +17.5 |
+| Executor judge mean | — | 75.9 | **96.8** | +20.9 |
 
-**Biggest win:** Eliminating planner hard-fail semantic symbol resolution (`semantic_target.py` deleted in `c60a004`) — 6 cases that never reached the executor in Pass 1 now produce patches in Pass 2.
+**Biggest win (Pass 2):** Eliminating planner hard-fail semantic symbol resolution (`semantic_target.py` deleted in `c60a004`) — 6 cases that never reached the executor in Pass 1 now produce patches in Pass 2.
 
-**Remaining gap:** Pass 2 failures are quality-depth (`PARTIAL_FIX` / `BROKEN_SYNTAX`), not pipeline aborts. TypeScript (G-14, G-16) and YAML (G-18) are the weak points.
+**Biggest win (Pass 3):** Skills improvements closed all 5 remaining failures — TypeScript (G-14, G-16), YAML (G-18), IDOR (G-12), and Misconfig (G-04) all recovered.
+
+**Remaining caveat:** G-18 passes with executor score 70 — SealedSecret manifest files not visible in diff; soft failures documented.
 
 ---
 
@@ -38,10 +40,11 @@ Over four days we moved the pipeline from **patch-based planning/execution** to 
 | **Jul 8 PM** | Merged `SKIP_RESEARCH` → `MICRO`, added user-prompt route override, Gate 2 on MICRO path, `synthesize_micro_research_output`. | [MICRO merge](f444758c-29ca-4d19-ab4e-a3b7767fef42) |
 | **Jul 8 eve** | API communication endpoints (execution events, pause display, Redis). | `fb45b0f` |
 | **Jul 9** | Fixed MICRO routing eval harness (`repo_path` was null → forced FULL). Rejected `null repo_path → EXIT`. | [MICRO routing fix](80b39956-d8ee-4a32-8780-22a78ed6c278) |
+| **Jul 11** | Ran Pass 3 eval (`run_030`, all 18 cases). Skills improvements: planner/executor/research skill updates. **18/18 pass (100%)**. Promoted baseline. | `evals/baselines/current.json` · `evals/runs/run_030/` |
 
 ---
 
-## 3. Eval Results — Pass 1 vs Pass 2 (mixed-15 + mixed-3)
+## 3. Eval Results — Pass 1 vs Pass 2 vs Pass 3
 
 ### 3.1 Run configuration
 
@@ -50,41 +53,43 @@ Over four days we moved the pipeline from **patch-based planning/execution** to 
 | `mixed_15_afterSemanticANDValidationChanges` | G-01 … G-15 | `mixed-15-unit-ChangingValidationLayerAndSemanticInstructions` | `run_026` |
 | `mixed_3_afterSemanticANDVlidationChanges` | G-15 … G-18 | `mixed-18-unit-ChangingValidationLayerAndSemanticInstructions` | `run_025` |
 
-Pass 1 baseline: `run_007` (8 cases) + `run_010` (10 cases), experiment `mixed-10-unit`.
+Pass 1 baseline: `run_007` (8 cases) + `run_010` (10 cases), experiment `mixed-10-unit`.  
+Pass 3 baseline: `run_030` (18 cases), experiment `Skills-adjustment-Test3`.
 
-### 3.2 Per-case scorecard
+### 3.2 Per-case scorecard (all passes)
 
-| Case | Pass 1 | Pass 2 | Pass 1 failure mode | Pass 2 failure mode | Notes |
-|------|--------|--------|---------------------|---------------------|-------|
-| G-01 | ✅ | ✅ | — | — | Pass 2 cleaner (no scope creep) |
-| G-02 | ❌ | ✅ | `BROKEN_SYNTAX` | — | bcrypt now complete |
-| G-03 | ❌ | ✅ | `NO_OUTPUT` | — | Was blocked by `setup_jinja` resolution |
-| G-04 | ❌ | ❌ | `NO_OUTPUT` | `BROKEN_SYNTAX` | Progress: plan runs; VERIFY fails |
-| G-05 | ❌ | ✅ | `WRONG_FIX_TYPE` | — | Selective POST-only auth |
-| G-06 | ✅ | ✅ | — | — | Stable |
-| G-07 | ❌ | ✅ | `PARTIAL_FIX` | — | ORM fix accepted |
-| G-08 | ❌ | ✅ | `NO_OUTPUT` | — | `SECRET_KEY` no longer hard-blocked |
-| G-09 | ❌ | ✅ | `WRONG_FIX_TYPE` | — | Generic login error |
-| G-10 | ❌ | ✅ | `WRONG_FIX_TYPE` | — | PreparedStatement |
-| G-11 | ❌ | ✅ | `NO_OUTPUT` | — | JWT endpoint targeted |
-| G-12 | ❌ | ❌ | `BROKEN_SYNTAX` | `PARTIAL_FIX` | Edit completes; auth logic flawed |
-| G-13 | ❌ | ✅ | `WRONG_FIX_TYPE` | — | Path canonicalization |
-| G-14 | ❌ | ❌ | `NO_OUTPUT` | `PARTIAL_FIX` | Reaches executor; `[innerHTML]` remains |
-| G-15 | ❌ | ✅ | `NO_OUTPUT` | — | Server-side `isAdmin` middleware |
-| G-16 | ❌ | ❌ | `BROKEN_SYNTAX` | `PARTIAL_FIX` | async `jwt.verify` breaks sync API |
-| G-17 | ❌ | ✅ | `WRONG_FIX_TYPE` | — | Secret externalized properly |
-| G-18 | ✅ | ❌ | — | `PARTIAL_FIX` | **Regression:** YAML corrupted |
+| Case | Pass 1 | Pass 2 | Pass 3 | Pass 2 failure mode | Notes |
+|------|--------|--------|--------|---------------------|-------|
+| G-01 | ✅ | ✅ | ✅ | — | Stable |
+| G-02 | ❌ | ✅ | ✅ | — | bcrypt complete |
+| G-03 | ❌ | ✅ | ✅ | — | `setup_jinja` resolved |
+| G-04 | ❌ | ❌ | ✅ | `BROKEN_SYNTAX` | **Recovered P3** — config-driven debug/log_level |
+| G-05 | ❌ | ✅ | ✅ | — | Selective POST-only auth |
+| G-06 | ✅ | ✅ | ✅ | — | Stable |
+| G-07 | ❌ | ✅ | ✅ | — | ORM fix accepted |
+| G-08 | ❌ | ✅ | ✅ | — | `SECRET_KEY` env-sourced |
+| G-09 | ❌ | ✅ | ✅ | — | Generic login error |
+| G-10 | ❌ | ✅ | ✅ | — | PreparedStatement |
+| G-11 | ❌ | ✅ | ✅ | — | JWT endpoint targeted |
+| G-12 | ❌ | ❌ | ✅ | `PARTIAL_FIX` | **Recovered P3** — minimal IDOR guard |
+| G-13 | ❌ | ✅ | ✅ | — | Path canonicalization |
+| G-14 | ❌ | ❌ | ✅ | `PARTIAL_FIX` | **Recovered P3** — component + template XSS |
+| G-15 | ❌ | ✅ | ✅ | — | Server-side `isAdmin` middleware |
+| G-16 | ❌ | ❌ | ✅ | `PARTIAL_FIX` | **Recovered P3** — sync `jwt.verify` RS256 |
+| G-17 | ❌ | ✅ | ✅ | — | Secret externalized |
+| G-18 | ✅ | ❌ | ✅ | `PARTIAL_FIX` | **Recovered P3** — plain Secret removed (E70) |
 
-### 3.3 Breakdown by dimension (Pass 2)
+### 3.3 Breakdown by dimension
 
-| Dimension | Pass 1 | Pass 2 |
-|-----------|--------|--------|
-| **Python** | 22% (2/9) | **89%** (8/9) |
-| **Java** | 0% (0/5) | **80%** (4/5) |
-| **TypeScript** | 0% (0/3) | **33%** (1/3) |
-| **YAML** | 100% (1/1) | **0%** (0/1) |
-| **Injection** | 33% | **100%** |
-| **Hard tickets** | 0% | **100%** (2/2) |
+| Dimension | Pass 1 | Pass 2 | Pass 3 (`run_030`) |
+|-----------|--------|--------|---------------------|
+| **Overall** | 16.7% | 72.2% | **100%** |
+| **Python** | 22% (2/9) | 89% (8/9) | **100%** (9/9) |
+| **Java** | 0% (0/5) | 80% (4/5) | **100%** (5/5) |
+| **TypeScript** | 0% (0/3) | 33% (1/3) | **100%** (3/3) |
+| **YAML** | 100% (1/1) | 0% (0/1) | **100%** (1/1) |
+| **Injection** | 33% | 100% | **100%** |
+| **Hard tickets** | 0% | 100% (2/2) | **100%** (2/2) |
 
 ### 3.4 mixed-15 vs mixed-3 split (executor judge only)
 
@@ -427,7 +432,7 @@ Research (FULL) or synthesize_micro_research_output (MICRO)
 - `evaluator_architecture.md` (+979)
 - `executor_judge.py`, `planner_judge.py`, `llm_judge_base.py`
 - `artifact_capture.py` (+281)
-- `baselines/current.json` promoted to Pass 2 (72.2%)
+- `baselines/current.json` promoted to Pass 2 (72.2%) → later Pass 3 (100%, `run_030`)
 - `targets.py` harness extensions
 
 **Docs**
@@ -475,23 +480,23 @@ Research (FULL) or synthesize_micro_research_output (MICRO)
 | 12 | user_prompt ignored for routing | Step 3.5 + `apply_user_route_override` | Explicit user intent honored |
 | 13 | MICRO planner crash | `repo_path` in `synthesize_micro_research_output` | File extraction requires repo root |
 | 14 | TS/JS structural false positives | Brace check → warning; LLM decides | Template literals/JSX break counters |
-| 15 | G-18 regression (YAML corrupt) | — (not yet fixed) | Executor struggles with declarative formats |
-| 16 | G-14 partial (innerHTML remains) | — (not yet fixed) | Multi-file component+template fix needed |
-| 17 | G-16 partial (async verify) | — (not yet fixed) | Sync API mismatch in executor edit |
+| 15 | G-18 regression (YAML corrupt) | Skills improvements (Pass 3) | **Resolved:** plain Secret removed |
+| 16 | G-14 partial (innerHTML remains) | Multi-file component+template planning | **Resolved:** template sink removed |
+| 17 | G-16 partial (async verify) | Sync API preservation in executor skill | **Resolved:** sync `jwt.verify` RS256 |
+| 18 | Pass 2 plateau at 72.2% | Planner/executor/research skill updates | Pass 3: **100%** (+27.8 pp) |
 
 ---
 
-## 11. What Still Fails (Pass 2) — Actionable Next Steps
+## 11. Quality Caveats (Pass 3) — Non-blocking
 
-| Case | Mode | Root cause | Suggested fix |
-|------|------|------------|---------------|
-| G-04 | `BROKEN_SYNTAX` | VERIFY target wrong file (`config.py` vs edits in `app.py`/`run.py`) | Align VERIFY step file with actual edit target |
-| G-12 | `PARTIAL_FIX` | IDOR guard restructures control flow | Planner: "minimal guard, no restructure" |
-| G-14 | `PARTIAL_FIX` | Component fix without template `[innerHTML]` removal | Multi-file plan: `.ts` + `.html` |
-| G-16 | `PARTIAL_FIX` | `jwt.verify` async callback in sync `verify()` | Planner instruction: preserve sync boolean API |
-| G-18 | `PARTIAL_FIX` | SealedSecret YAML corrupted | YAML/config edit validation |
+> All 18 cases pass. Items below are quality improvements, not failures.
 
-**Projected pass rate after P0 fixes (per `failure-modes.md`):** 17/18 = **94.4%**
+| Case | Executor score | Caveat | Suggested follow-up |
+|------|----------------|--------|---------------------|
+| G-18 | 70 | `sealed-funnystuff.json` manifests not in diff; scripts depend on them | Ensure SealedSecret manifests are created and committed |
+| G-05 | 98 (planner 70) | Planner plan quality variance | Review planner skill for BAC auth-gating patterns |
+
+**Pass 3 result:** 18/18 = **100%** (exceeds prior projection of 94.4%).
 
 ---
 
@@ -512,14 +517,16 @@ Research (FULL) or synthesize_micro_research_output (MICRO)
 
 | Artifact | Path |
 |----------|------|
-| Pass 2 baseline | `evals/baselines/current.json` |
+| Pass 3 baseline | `evals/baselines/current.json` |
 | Failure taxonomy | `evals/DOCS/failure-modes.md` |
+| Eval results quick ref | `evals/DOCS/checking_evals_result.md` |
 | Per-case judge reasoning | `evals/DOCS/LangSmith_2ndTest_Reasoning.txt` |
 | Pipeline guide | `docs/AGENT_PIPELINE_GUIDE.md` |
 | Eval commands | `evals/DOCS/eval_commands.md` |
-| Run artifacts | `evals/runs/mixed_15_afterSemanticANDValidationChanges/` |
-| Run artifacts | `evals/runs/mixed_3_afterSemanticANDVlidationChanges/` |
+| Run artifacts (Pass 3) | `evals/runs/run_030/` |
+| Run artifacts (Pass 2) | `evals/runs/mixed_15_afterSemanticANDValidationChanges/` |
+| Run artifacts (Pass 2) | `evals/runs/mixed_3_afterSemanticANDVlidationChanges/` |
 
 ---
 
-*Generated: Jul 9, 2026 · Covers git commits `2d0208f`–`fb45b0f` and agent transcripts Jul 4–9.*
+*Generated: Jul 12, 2026 · Covers git commits `2d0208f`–`fb45b0f`, eval Pass 3 (`run_030`), and agent transcripts Jul 4–11.*
