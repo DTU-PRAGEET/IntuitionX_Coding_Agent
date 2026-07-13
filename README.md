@@ -29,19 +29,19 @@ docker compose -f docker/docker-compose.yml up
 
 ## Architecture
 
-- **Orchestrator** — Jira fetch, 4-route routing (FULL / SKIP_RESEARCH / MICRO / EXIT)
-- **Research** — ReAct + signal-driven file discovery
-- **Planner** — Execution contract with reflexion
-- **Executor** — Git worktree + generic tools + GitLab MR
-- **HITL** — Chainlit + LangGraph `interrupt`
+- **Orchestrator** — Jira fetch, routing (`FULL` / `MICRO` / `EXIT`)
+- **Research** — Deep agent loop + Cursor `cursor_search`
+- **Planner** — Cursor Ask → `ExecutionPlan` JSON
+- **Executor** — Git worktree + Cursor edits + LLM validation → GitHub PR
+- **HITL** — Chainlit UI or REST API `POST /approve/{thread_id}`
+- **Skills** — Markdown plugins in `skills/`; see [docs/skills-authoring.md](docs/skills-authoring.md)
 
-## Architecture (Phase 1 — Pi-style)
+## Architecture
 
-- **Prompt-driven routing** in `src/agents/*/skills/scripts.md`
-- **Thin Python runners** + `transform_context()` for token-minimal handoffs
-- **Hardened tools** via `ToolRegistry` (`read`, `write`, `edit`, `bash`, `find`, `grep`)
-- **LangGraph** for phase topology + HITL interrupts only
-- **Chainlit** UI with tool event log + diff confirm before MR
-- **API** `POST /approve/{thread_id}` for self-healing resume
+- **Prompt-driven routing** in `skills/<agent>/<agent>.md` (loaded by `SkillRegistry`)
+- **Thin Python runners** in `src/agents/*/agent.py`
+- **Hardened tools** via `ToolRegistry` (`read`, `write`, `edit`, `bash`, `find`, `grep`, `ls`)
+- **LangGraph** for phase topology + HITL interrupts (`src/core/graph.py`)
+- **Chainlit** UI (`src/ui/chainlit_app.py`) or **FastAPI** (`src/api/main.py`)
 
-See [AGENTS.md](AGENTS.md) and [docs/PRD_ADDENDUM_PHASE1.md](docs/PRD_ADDENDUM_PHASE1.md).
+See [docs/README.md](docs/README.md), [AGENTS.md](AGENTS.md), and [docs/AGENT_PIPELINE_GUIDE.md](docs/AGENT_PIPELINE_GUIDE.md).

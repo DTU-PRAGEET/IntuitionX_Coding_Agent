@@ -1,5 +1,7 @@
 # Sprinklr Jira Solver — Phase 1 Master Plan
 
+> **Historical planning doc.** Current runtime docs: [docs/README.md](README.md), [CODEBASE_MAP.md](CODEBASE_MAP.md), [AGENT_PIPELINE_GUIDE.md](AGENT_PIPELINE_GUIDE.md).
+
 **Status:** Planning document only — use this as the single source of truth before writing code.  
 **Last updated:** June 2026  
 **Document hierarchy:** PRD (what to build) → this `plan.md` (architecture + build order) → [plan_v2.md](Implementation_plan/plan_v2.md) (deep ADR rationale)  

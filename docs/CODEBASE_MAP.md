@@ -96,9 +96,7 @@ Study the spine in this exact order:
 
 | File | Role |
 |------|------|
-| [`src/core/skill_registry.py`](src/core/skill_registry.py) | Discovers repo-root `skills/` |
-| [`src/core/skills_loader.py`](src/core/skills_loader.py) | Loads `SKILL.md` from agent module dirs |
-| [`src/core/prompt_builder.py`](src/core/prompt_builder.py) | Assembles system prompts |
+| [`src/core/skill_manager.py`](src/core/skill_manager.py) | `SkillRegistry`, `PromptBuilder` — discovers repo-root `skills/` |
 
 ---
 
@@ -241,7 +239,7 @@ Legend: **CR** = Core Runtime · **RS** = Runtime Support · **CO** = Conditiona
 | `src/core/runner_utils.py` | **RS** | `llm_content()`, `parse_llm_json()` — LLM response helpers |
 | `src/core/formatters.py` | **RS** | Formats HITL gate messages (Gate 1, Gate 2, micro-confirm) |
 | `src/core/checkpointing.py` | **RS** | Async SQLite / in-memory checkpointer for graph persistence |
-| `src/core/skills_loader.py` | **RS** | Loads `security.md` etc.; `select_research_skill()` by ticket labels |
+| `src/core/skill_manager.py` | **RS** | `SkillRegistry`, `PromptBuilder` — repo-root `skills/` discovery |
 | `src/core/transform_context.py` | **UL** | Legacy context builder — zero imports |
 | `src/core/context_builder.py` | **CO** | M1.3 ContextBuilder — tests only |
 | `src/core/state_updater.py` | **UL** | Planned artifact merger — zero imports |
@@ -252,7 +250,7 @@ Legend: **CR** = Core Runtime · **RS** = Runtime Support · **CO** = Conditiona
 | `src/core/skill_registry.py` | **RS** | Repo-root `skills/` discovery; deep_runner + M1.3 runners |
 | `src/core/repo_snapshot.py` | **RS** | Git HEAD snapshot + edit preflight helpers |
 | `src/core/plan_validation.py` | **RS** | Plan triad + edit patch validation |
-| `src/core/prompt_builder.py` | **RS** | Progressive skill disclosure for orchestrator/planner/executor |
+| `src/core/prompt_builder.py` | **RS** | *(merged into `skill_manager.PromptBuilder`)* |
 | `src/core/tracing.py` | **RS** | LangSmith metadata: `PROMPT_VERSIONS`, trace sync |
 | `src/core/ticket_repo.py` | **RS** | Clones GitHub repo from Jira links when no local path given |
 | `src/core/github_links.py` | **RS** | Parses GitHub URLs / slugs / target branches from ticket text |
@@ -372,8 +370,10 @@ Legend: **CR** = Core Runtime · **RS** = Runtime Support · **CO** = Conditiona
 | `skills/planner/planner.md` | **RS** | Planner skill |
 | `skills/executor/executor.md` | **RS** | Executor skill |
 | `skills/orchestrator/orchestrator.md` | **RS** | Orchestrator routing skill |
-| `skills/security/java-sast-fixes.md` | **CO** | Java SAST fix patterns |
-| `skills/security/java-sca-fixes.md` | **CO** | Java SCA fix patterns |
+| `skills/security/java-sast-fixes.md` | **CO** | Java SAST fix patterns (reference skill) |
+| `skills/security/java-sca-fixes.md` | **CO** | Java SCA / CVE dependency fixes (reference skill) |
+| `skills/security/java-dependency-vulns.md` | **CO** | Java dependency CVE / BOM / globs (reference skill, M3.3) |
+| `docs/skills-authoring.md` | **DT** | Skills authoring guide for teams |
 
 ### `src/integrations/` (Jira)
 

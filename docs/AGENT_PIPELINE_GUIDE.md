@@ -4,7 +4,8 @@
 >
 > **Audience:** Anyone new to the codebase who wants to understand the full flow without reading every Python file.
 >
-> **Last updated:** 2026-07-06
+> **Last updated:** 2026-07-13  
+> **Note:** `SKIP_RESEARCH` route has been merged into `MICRO` — both skip research and go directly to planner.
 
 ---
 

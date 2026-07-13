@@ -22,5 +22,5 @@ You are an AI coding agent with a modular tool architecture. Follow these rules:
 - Do not chain complex operations in one tool call unless a composite tool is explicitly defined.
 
 ## Orchestration
-- Routing intelligence lives in `src/agents/*/skills/SKILL.md` — not in Python.
+- Routing intelligence lives in `skills/` — see [`docs/skills-authoring.md`](docs/skills-authoring.md)
 - Python runners are thin: load skills, assemble context, call LLM, validate output, write state.

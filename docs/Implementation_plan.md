@@ -1,6 +1,8 @@
 # Sprinklr Jira Solver — Production-Grade Development Plan
 ### Lead Architect Reference Document | Pi-Style Iterative Build
 
+> **Historical document.** For current architecture see [docs/README.md](README.md), [AGENT_PIPELINE_GUIDE.md](AGENT_PIPELINE_GUIDE.md), and [skills-authoring.md](skills-authoring.md).
+
 ---
 
 ## Guiding Principles Before We Start

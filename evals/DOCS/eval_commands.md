@@ -22,7 +22,7 @@ pip install -r requirements.txt
 make evals-sync
 
 # 4. Free sanity check (no LLM, no Cursor)
-make evals-validate
+make evals-validate    # golden schema validation
 make evals-gate
 ```
 
@@ -436,7 +436,7 @@ python -m evals.runners.run_judge_eval --run-id run_030
 python -m evals.runners.compare_runs run_026 run_030
 ```
 
-**Docs:** `evals/DOCS/failure-modes.md` (full taxonomy) · `evals/DOCS/checking_evals_result.md` (quick reference) · `evals/baselines/current.json` (promoted baseline)
+**Docs:** `evals/DOCS/failure-modes.md` (full taxonomy) · `evals/DOCS/checking_evals_result.md` (quick reference) · `evals/baselines/current.json` (promoted baseline) · [`docs/skills-authoring.md`](../../docs/skills-authoring.md)
 
 
 

@@ -626,7 +626,7 @@ CursorImplementSubAgent.run(context)
 |---------------|------|
 | `src/core/graph.py` | LangGraph wiring + HITL gates |
 | `src/core/state.py` | `AgentState` schema |
-| `src/core/skill_manager.py` | Prompt / skill loading |
+| `src/core/skill_manager.py` | Prompt / skill loading + `SkillRegistry` |
 | `src/core/plan_validation.py` | Planner output validation |
 | `src/core/orchestrator_context.py` | Routing context + post-processing |
 | `src/integrations/cursor/gateway.py` | Cursor SDK wrapper |

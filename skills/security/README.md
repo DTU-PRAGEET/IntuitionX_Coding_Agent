@@ -17,15 +17,27 @@ Team-specific security remediation skills aligned with OWASP Top 10 categories.
 - **security-logging-failures.md** — insufficient audit/logging, log injection (CWE-117/532/778)
 - **exceptional-conditions.md** — verbose errors, fail-open on exceptions (CWE-209/248/396/755)
 
-### Java-specific skills
+### Java reference skills (copy these when authoring)
 
-- **java-sast-fixes.md** — Static analysis fixes (SQLi, XSS, path traversal)
-- **java-sca-fixes.md** — Dependency/CVE remediation for Java projects
+| Skill | File | Milestone |
+|-------|------|-----------|
+| Java SAST | **java-sast-fixes.md** | M1.4 — SAST fix patterns |
+| Java SCA | **java-sca-fixes.md** | M1.4 — CVE dependency bumps |
+| Java dependency vulns | **java-dependency-vulns.md** | M3.3 — globs, structured test_cases, BOM/transitive |
 
 ## Usage
 
 Skills activate when ticket `vulnerability_category` or labels match `trigger_labels`. Research, Planner, and Executor agents receive matched domain skills via `SkillRegistry.select()`.
 
+Malformed skills log `skill_load_failed` and are skipped during `SkillRegistry` discovery.
+
 ## Adding a skill
 
-Place a new `.md` file in this directory with YAML frontmatter (`name`, `module: security`, `agents`, `trigger_labels`) and sections: `prompt_templates`, `implementation_guidance`, `completion_criteria`. No code changes required — auto-discovered on restart.
+See **[`docs/skills-authoring.md`](../docs/skills-authoring.md)**.
+
+Quick checklist:
+1. Add `skills/security/<name>.md` with `---` frontmatter
+2. Document example scenarios in `## test_cases`
+3. Run `pytest tests/test_skill_registry.py -v` before opening a PR
+
+No Python changes required — auto-discovered on restart or `SkillRegistry.reload()`.

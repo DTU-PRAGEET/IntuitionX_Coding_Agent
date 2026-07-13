@@ -17,6 +17,7 @@ def test_registry_discovers_reference_skills():
     names = {s.name for s in reg.all_skills()}
     assert "java-sast-fixes" in names
     assert "java-sca-fixes" in names
+    assert "java-dependency-vulns" in names
     assert "research" in names
 
 

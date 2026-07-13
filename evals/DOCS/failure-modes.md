@@ -1,5 +1,7 @@
 # Failure Mode Taxonomy — Integration Eval Baseline (Milestone 2.4)
 
+> **Current docs index:** [docs/README.md](../../docs/README.md) · **Skills:** [docs/skills-authoring.md](../../docs/skills-authoring.md)
+
 > **Status:** Current baseline — Pass 3 (`run_030`, 100% pass rate, 2026-07-11)  
 > **Golden suite:** `G-01` … `G-18` (18 cases across 5 vulnerable repos)  
 > **Eval mode:** Full pipeline integration (`routing → research → planner → executor`)  

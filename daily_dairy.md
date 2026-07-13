@@ -1,532 +1,318 @@
-# Daily Diary — Planner / Executor / Orchestrator Changes (Jul 4–12, 2026)
+# Daily Diary — Jul 10–13, 2026
 
-> **Period covered:** Friday Jul 4 → Saturday Jul 12, 2026  
-> **Primary commits:** `2d0208f` (Jul 4) → `c60a004` (Jul 8) → `fb45b0f` (Jul 8)  
-> **Key eval runs:** Pass 1 = `run_007` + `run_010` · Pass 2 = `mixed_15` + `mixed_3` · **Pass 3 = `run_030`**
-
----
-
-## 1. Executive Summary
-
-Over four days we moved the pipeline from **patch-based planning/execution** to **instruction-based semantic planning + LLM semantic post-edit validation**, built a full **LLM-as-Judge eval harness**, and fixed orchestrator routing semantics.
-
-| Metric | Pass 1 (Jul 4) | Pass 2 (Jul 6) | Pass 3 (Jul 11) | Δ (P2→P3) |
-|--------|----------------|----------------|-----------------|-----------|
-| **End-to-end pass rate** | **3 / 18 (16.7%)** | **13 / 18 (72.2%)** | **18 / 18 (100%)** | **+27.8 pp** |
-| `NO_OUTPUT` (planner killed run) | 6 | 0 | 0 | — |
-| `WRONG_FIX_TYPE` | 5 | 0 | 0 | — |
-| `BROKEN_SYNTAX` | 3 | 1 | 0 | −1 |
-| `PARTIAL_FIX` | 1 | 4 | 0 | −4 |
-| Planner judge mean | — | 77.4 | **94.9** | +17.5 |
-| Executor judge mean | — | 75.9 | **96.8** | +20.9 |
-
-**Biggest win (Pass 2):** Eliminating planner hard-fail semantic symbol resolution (`semantic_target.py` deleted in `c60a004`) — 6 cases that never reached the executor in Pass 1 now produce patches in Pass 2.
-
-**Biggest win (Pass 3):** Skills improvements closed all 5 remaining failures — TypeScript (G-14, G-16), YAML (G-18), IDOR (G-12), and Misconfig (G-04) all recovered.
-
-**Remaining caveat:** G-18 passes with executor score 70 — SealedSecret manifest files not visible in diff; soft failures documented.
+> **Period covered:** Friday Jul 10 → Monday Jul 13, 2026  
+> **Sources:** git commits `5ec0c2f` → `d0b31d9` → `0e0aa80` → `869ae91` → `b57660e`, agent chats Jul 10–13, eval run `run_030`
 
 ---
 
-## 2. Timeline of Work
+## Eval & Skills Work
 
-| Date | What happened | Chat / commit |
-|------|---------------|---------------|
-| **Jul 4** | First integration eval (`run_007` + `run_010`). Eval framework redesign planned and implemented (LLM judges, artifacts, preflight). Planner → Cursor semantic plan; Executor → instruction + validation layer. | [Eval redesign](2c8b61db-6840-459c-bc9c-3ff44a9c94ca) · `2d0208f` |
-| **Jul 6 AM** | Analyzed Pass 1 failures: planner `validate_semantic_edits` killing runs on recoverable ambiguity. Planned soft-validation pipeline v3. | [Soft validation plan](27b3e693-d795-41d6-b787-71444872f6d6) |
-| **Jul 6 PM** | Implemented soft-validation v3 (`semantic_target.py`, warnings, density valve). Implemented executor two-phase batch redesign (always 2 Cursor batch passes max). | [Executor batch redesign](678c30fe-637f-45b8-a80b-5d9740655616) |
-| **Jul 6 eve** | Ran Pass 2 evals: `mixed_15` (G-01–15) + `mixed_3` (G-15–18). Documented in `failure-modes.md`, promoted baseline. | `evals/baselines/current.json` |
-| **Jul 8 AM** | **Architectural pivot:** Removed `semantic_target.py` (841 lines), replaced with **instruction-only validation** (no symbol resolution). Added `validation_context.py`, expanded executor skill. | `c60a004` |
-| **Jul 8 PM** | Merged `SKIP_RESEARCH` → `MICRO`, added user-prompt route override, Gate 2 on MICRO path, `synthesize_micro_research_output`. | [MICRO merge](f444758c-29ca-4d19-ab4e-a3b7767fef42) |
-| **Jul 8 eve** | API communication endpoints (execution events, pause display, Redis). | `fb45b0f` |
-| **Jul 9** | Fixed MICRO routing eval harness (`repo_path` was null → forced FULL). Rejected `null repo_path → EXIT`. | [MICRO routing fix](80b39956-d8ee-4a32-8780-22a78ed6c278) |
-| **Jul 11** | Ran Pass 3 eval (`run_030`, all 18 cases). Skills improvements: planner/executor/research skill updates. **18/18 pass (100%)**. Promoted baseline. | `evals/baselines/current.json` · `evals/runs/run_030/` |
+**1. PR generation even when validation LLM errors**
+	a. Problem = When the executor validation LLM threw an error (timeout, router failure, etc.), the pipeline stopped before creating a PR — so you couldn't compare what Cursor actually edited vs what the validator rejected.
+	b. Changes = `src/agents/executor/agent.py`: PR/MR creation now runs even when validation LLM fails, with the failure recorded in state. `src/core/state.py` extended to carry validation-error context. Tests updated in `test_executor.py`, `test_executor_batch_flow.py`, `test_executor_edit_validation.py`.
+	c. Reason = You need the PR diff for debugging and comparison even when the validator can't finish — blocking PR creation hid useful signal.
 
----
+**2. Skills improvements from HumanLayer patterns (Pass 3 prep)**
+	a. Problem = Pass 2 eval plateaued at 72.2% (13/18). Remaining failures were quality issues: multi-file XSS (G-14), async JWT verify (G-16), YAML/SealedSecret (G-18), IDOR restructure (G-12), misconfig VERIFY mismatch (G-04). Skills were too verbose and blurred who does READ vs who validates.
+	b. Changes = We studied HumanLayer's skill style (short, decision-tree, one job per agent) and applied it agent-by-agent. **Orchestrator was not changed** in this pass — routing logic was already fixed in Jul 8. Work focused on Research → Planner → Executor.
 
-## 3. Eval Results — Pass 1 vs Pass 2 vs Pass 3
+		**Research agent** (`skills/research/research.md` + `references/general_patterns.md`)
+		- **Before:** Long prose, unclear when to burn a `cursor_search` call vs use `read`/`grep`.
+		- **After:** Strict tool budget table — max **2** `cursor_search`, max **8** `read`/`ls`/`bash`. Decision flow: if ticket already names files → `read` directly; else one broad `cursor_search` first, then primitives on the 4–5 surfaced files; second `cursor_search` only if repo is large and still unresolved.
+		- **New rule — "reuse before reinvent":** During EXAMPLES pass, grep for existing repo helpers (sanitizer, auth util, crypto wrapper) and cite `path:line` in `research_summary` so planner can import them instead of reimplementing.
+		- **Evidence rules moved to reference:** `general_patterns.md` now holds hypothesis max (10), confidence scale, tool-selection tree — keeps main `research.md` short.
+		- **Code touch:** `src/agents/research/tools/load_skill.py` — reference loading aligned; `deep_runner.py` minor wiring.
+		- **What it fixed:** Research stops over-searching and gives planner concrete, grounded file paths + reusable utilities.
 
-### 3.1 Run configuration
+		**Planner agent** (`skills/planner/planner.md` + `references/plan_schema.md`)
+		- **Before:** ~200 lines mixing schema, examples, and self-check in one file. Plans sometimes had vague EDIT instructions, no-op EDITs, or VERIFY markers that were prose instead of literal code tokens.
+		- **After — main skill slimmed:** Core skill is now a **decision flow** (Step 1 validate research → Step 2 map issues to files → Step 3 emit READ→EDIT→VERIFY blocks → Step 4 validate → Step 5 emit JSON). Heavy detail moved to `plan_schema.md`.
+		- **Instruction contract (every EDIT):** Must include (1) what to change, (2) what NOT to touch — e.g. "do not restructure control flow", (3) inline `Acceptance: (1)…(2)…(3)…` checklist, (4) **Before/After code blocks** from actual file content.
+		- **Semantic targeting required:** Every EDIT needs `target_type` + `target_name`; `caution_flag` when symbol appears multiple times (disambiguates without hard-failing — fixes G-14-style duplicate `this.searchValue` cases).
+		- **VERIFY `intent_marker` rule:** Must be a **literal code substring** (e.g. `os.environ`, `bcrypt.checkpw`) — not prose like "function now validates input". Stops G-04-style VERIFY-on-wrong-file failures.
+		- **Multi-file co-change:** Planner must emit EDIT steps for **both** files when fix spans component + template (G-14: `.ts` sanitizer + `.html` `[innerHTML]` sink).
+		- **Sync API preservation:** Instructions must say "preserve sync boolean return" when editing sync wrappers — fixes G-16 (`jwt.verify` async callback in sync function).
+		- **Minimal IDOR guard:** "Add ownership check, do not restructure braces/control flow" — fixes G-12 (WebGoat partial fix from full restructure).
+		- **Already-fixed tickets:** If research flags `ticket_mismatch_possible_already_fixed` → READ→VERIFY only, no invented EDITs.
+		- **Code touch:** `semantic_plan_runner.py` passes slimmer prompt; `plan_validation.py` unchanged in logic but plans now pass richer instructions.
+		- **What it fixed:** G-04, G-12, G-14, G-16 — planner produces precise, multi-file, API-aware instructions Cursor can follow.
 
-| Run folder | Cases | Experiment name | `run_id` in metadata |
-|------------|-------|-----------------|----------------------|
-| `mixed_15_afterSemanticANDValidationChanges` | G-01 … G-15 | `mixed-15-unit-ChangingValidationLayerAndSemanticInstructions` | `run_026` |
-| `mixed_3_afterSemanticANDVlidationChanges` | G-15 … G-18 | `mixed-18-unit-ChangingValidationLayerAndSemanticInstructions` | `run_025` |
+		**Executor agent** (`skills/executor/executor.md` + `references/validation_policy.md`)
+		- **Before:** Skill implied Python replays READ steps, then edits, then VERIFY — caused failures when READ targeted files only meant as Cursor context. Validator sometimes failed on brace-count false positives or out-of-scope issues.
+		- **After — role split (biggest change):**
+			| Phase | Who runs it | What it does |
+			|-------|-------------|--------------|
+			| Phase 1 Preflight | **Python** | HEAD snapshot check; every EDIT file must exist; capture pre-edit snippet; skip already-fixed steps |
+			| Phase 2 Batch edit | **Cursor** | One call for ALL EDITs; READ context is embedded in instructions, not replayed |
+			| Phase 2 Validation | **Python + LLM** | noop check → `ast.parse` (Python hard fail) → brace warning (TS/JS soft) → progressive LLM validation |
+			| Phase 3 VERIFY | **Python** | Pattern/`intent_marker` checks only; READ steps recorded as "delegated" |
+		- **New `validation_policy.md`:** Extracted from executor.md — progressive context (diff hunk → semantic parent → full-file fallback), Non-Errors list (equivalent implementations OK, `caution_flag` duplicates OK, brace false positives OK), strict out-of-scope rules (don't fail for vulns outside instruction).
+		- **READ delegation in code:** `agent.py` → `_execute_read_delegated()` logs "delegated to cursor batch context" instead of failing on missing READ paths; `_preflight_edit_targets()` catches phantom EDIT paths early.
+		- **Post-batch VERIFY rules:** If prior EDIT was a deletion → PASS when file absent; `intent_marker` → literal substring; grep patterns from `validate` field; no marker → defer to EDIT LLM validation.
+		- **Code touch:** `src/agents/executor/agent.py` (preflight + READ delegation + batch flow), `validation.py` (noop/progressive), `validation_context.py` (diff expansion).
+		- **What it fixed:** Stopped executor dying on READ steps; validator accepts equivalent fixes (env var styles, sync JWT patterns); G-18 YAML edits pass with soft warnings instead of hard fail.
 
-Pass 1 baseline: `run_007` (8 cases) + `run_010` (10 cases), experiment `mixed-10-unit`.  
-Pass 3 baseline: `run_030` (18 cases), experiment `Skills-adjustment-Test3`.
+		**Supporting infrastructure (not an agent, but required for skills to load correctly)**
+		- `src/core/skill_manager.py` — `PromptBuilder` loads main skill + references conditionally (planner gets `plan_schema.md`, executor gets `validation_policy.md`).
+		- `src/core/runner_utils.py` — shared prompt/context assembly for Cursor runners.
+		- `docs/project_structure.md` — **new** 641-line map so skill authors know where code lives.
 
-### 3.2 Per-case scorecard (all passes)
+		**Commit:** `d0b31d9` — "Skills improvements (From Human Layer skills) and did test 3"
+	c. Reason = HumanLayer teaches: **one agent, one job, short decision trees, details in references**. The Pass 2 architecture (semantic plan + LLM validation) was sound; Pass 3 skills taught each agent *how* to use it — Research finds the right files cheaply, Planner writes instructions Cursor can execute (multi-file, sync API, minimal guards), Executor validates security intent without replaying READs or failing on style differences. Result: 72.2% → **100%** on run_030.
 
-| Case | Pass 1 | Pass 2 | Pass 3 | Pass 2 failure mode | Notes |
-|------|--------|--------|--------|---------------------|-------|
-| G-01 | ✅ | ✅ | ✅ | — | Stable |
-| G-02 | ❌ | ✅ | ✅ | — | bcrypt complete |
-| G-03 | ❌ | ✅ | ✅ | — | `setup_jinja` resolved |
-| G-04 | ❌ | ❌ | ✅ | `BROKEN_SYNTAX` | **Recovered P3** — config-driven debug/log_level |
-| G-05 | ❌ | ✅ | ✅ | — | Selective POST-only auth |
-| G-06 | ✅ | ✅ | ✅ | — | Stable |
-| G-07 | ❌ | ✅ | ✅ | — | ORM fix accepted |
-| G-08 | ❌ | ✅ | ✅ | — | `SECRET_KEY` env-sourced |
-| G-09 | ❌ | ✅ | ✅ | — | Generic login error |
-| G-10 | ❌ | ✅ | ✅ | — | PreparedStatement |
-| G-11 | ❌ | ✅ | ✅ | — | JWT endpoint targeted |
-| G-12 | ❌ | ❌ | ✅ | `PARTIAL_FIX` | **Recovered P3** — minimal IDOR guard |
-| G-13 | ❌ | ✅ | ✅ | — | Path canonicalization |
-| G-14 | ❌ | ❌ | ✅ | `PARTIAL_FIX` | **Recovered P3** — component + template XSS |
-| G-15 | ❌ | ✅ | ✅ | — | Server-side `isAdmin` middleware |
-| G-16 | ❌ | ❌ | ✅ | `PARTIAL_FIX` | **Recovered P3** — sync `jwt.verify` RS256 |
-| G-17 | ❌ | ✅ | ✅ | — | Secret externalized |
-| G-18 | ✅ | ❌ | ✅ | `PARTIAL_FIX` | **Recovered P3** — plain Secret removed (E70) |
+**3. Pass 3 eval run — 18/18 (100%)**
+	a. Problem = After skills changes, needed a clean full-benchmark run to confirm improvements weren't cherry-picked or biased.
+	b. Changes = Ran all 18 golden cases as `evals/runs/run_030/` (experiment `Skills-adjustment-Test3`). Results: **18/18 pass**, planner judge mean **94.9**, executor judge mean **96.8**. Recovered all 5 Pass 2 failures: G-04, G-12, G-14, G-16, G-18.
+	c. Reason = Pass 2 proved the architecture works; Pass 3 proved the skills close the remaining quality gaps (+27.8 pp over Pass 2).
 
-### 3.3 Breakdown by dimension
+**4. Eval pipeline alignment check before Pass 3**
+	a. Problem = Skills and small code changes could bias eval results (wrong harness context, stale scoring imports, routing repo_path issues).
+	b. Changes = Reviewed `eval_commands.md` full pipeline command, harness targets, judge eval flow, preflight vs judge scoring paths. Fixed eval run issues (LangSmith sync, run folder naming). Verified harness passes `repo_path` for MICRO cases.
+	c. Reason = Experiments are only trustworthy if the harness mirrors production — you asked to confirm no bias before running all 18 cases.
 
-| Dimension | Pass 1 | Pass 2 | Pass 3 (`run_030`) |
-|-----------|--------|--------|---------------------|
-| **Overall** | 16.7% | 72.2% | **100%** |
-| **Python** | 22% (2/9) | 89% (8/9) | **100%** (9/9) |
-| **Java** | 0% (0/5) | 80% (4/5) | **100%** (5/5) |
-| **TypeScript** | 0% (0/3) | 33% (1/3) | **100%** (3/3) |
-| **YAML** | 100% (1/1) | 0% (0/1) | **100%** (1/1) |
-| **Injection** | 33% | 100% | **100%** |
-| **Hard tickets** | 0% | 100% (2/2) | **100%** (2/2) |
+**5. Updated all eval comparison documents for run_030**
+	a. Problem = Docs still showed Pass 2 (72.2%) as current baseline after Pass 3 completed.
+	b. Changes =
+		- `evals/baselines/current.json` — promoted to Pass 3 (100%)
+		- `evals/DOCS/failure-modes.md` — added Pass 3 section, cross-pass matrix, recovered-case analysis
+		- `evals/DOCS/checking_evals_result.md` — rewritten as Pass 3 quick reference
+		- `evals/README.md`, `evals/DOCS/eval_commands.md` — baseline tables updated
+		- `evals/runs/run_030/report.json` — generated scorecard
+		- `daily_dairy.md` (prior version) — Pass 3 metrics added
+	c. Reason = Single source of truth for "what's our current score" — avoids confusion when comparing runs or writing reports.
 
-### 3.4 mixed-15 vs mixed-3 split (executor judge only)
-
-| Run | Pass | Fail | Failed cases |
-|-----|------|------|--------------|
-| mixed_15 | 12/14 | 2 | G-04 (VERIFY_FAIL), G-14 |
-| mixed_3 | 1/3 | 2 | G-16, G-18 (G-17 passed) |
-
----
-
-## 4. Changes You Accepted — and Why
-
-### 4.1 Instruction-based planner (Cursor semantic plan)
-
-| | |
-|---|---|
-| **Problem** | Old planner used in-process LLM + injected file contents + exact `old_string`/`new_string` patches. Patches were brittle (whitespace, multi-file, TypeScript/Angular). Eval Pass 1: planner semantic validation rejected 6/18 cases before executor ran. |
-| **Changes** | `src/agents/planner/agent.py` rewritten: removed `build_planner_prompt`, `_affected_file_contents`, `MAX_VERIFICATION_CALLS`, planner tools loop. New path: single `run_semantic_plan()` / `mock_semantic_plan()` via `src/integrations/cursor/semantic_plan_runner.py`. EDIT steps use `instruction`, `intent_marker`, `target_type`, `target_name`, optional `approximate_line`, `caution_flag`. `prompt_version` → `planner-v2.0-semantic`. |
-| **Reason accepted** | Cursor explores the repo at plan time (better grounding than regex symbol resolution). Natural-language instructions survive formatting drift. Aligns with executor's new validation model. |
-
-### 4.2 Remove hard symbol resolution (`semantic_target.py` deleted)
-
-| | |
-|---|---|
-| **Problem** | `validate_semantic_edits()` in `semantic_target.py` (841 lines) raised `ValueError` on recoverable cases: duplicate `this.searchValue`, wrong `target_type` for methods, `__main__` as function, import ambiguity. **40% of Pass 1 failures were `NO_OUTPUT`.** |
-| **Changes** | Deleted `src/core/semantic_target.py` in `c60a004`. `src/core/plan_validation.py` now has `validate_instruction_edits()` — checks instruction + intent_marker + target_type/name present; rejects legacy `old_string`/`new_string`; **no AST/regex symbol resolution**. Added `src/core/edit_step.py` (`is_instruction_edit`). Triad/path checks remain as soft flags via `validate_execution_plan()`. |
-| **Reason accepted** | Soft-validation v3 (Jul 6) was still too complex; symbol resolver false-negatives blocked good plans. Instruction + `caution_flag` + executor LLM validation is simpler and empirically +55.5 pp. |
-
-### 4.3 Executor LLM semantic validation + progressive context
-
-| | |
-|---|---|
-| **Problem** | Old executor validated via exact `old_string` match and substring checks. Incomplete Cursor edits (truncated bcrypt, imports-only JWT) passed or failed arbitrarily. Per-file retry loop was inconsistent with batching. |
-| **Changes** | New modules: `src/agents/executor/validation.py` (643 lines), `validation_context.py` (452 lines), `structural_check.py` (89 lines). Flow: noop check → Python `ast.parse` hard fail → brace warnings (TS/JS) → LLM validator with diff-expanded semantic parent → full-file fallback → batch pass #2 repair. `skills/executor/executor.md` defines acceptance/rejection/non-error policy. `CURSOR_MAX_EDIT_ATTEMPTS=2` (whole-plan batch passes). |
-| **Reason accepted** | Validates **security property** in instruction scope, not patch shape. Reduces false fails on equivalent implementations (`${ENV}` vs `os.getenv`, etc.). Progressive context fixes "validator only saw declaration header" bug. |
-
-### 4.4 Executor always batch ALL edits (two-phase batch redesign)
-
-| | |
-|---|---|
-| **Problem** | `_independent_edits()` gated batching; chained same-file plans fell back to per-file loop. Retry budget uneven; batched repair bug (`skip_initial_cursor`) meant pass 2 often didn't re-call Cursor. |
-| **Changes** | Removed `_independent_edits`, `_execute_edit`, `_apply_edit_via_cursor`, `_accept_batched_edit`. `_run_edit_batch_phase()`: pass #1 all EDITs → validate all → pass #2 failed steps only. `_apply_batched_edits(steps, retry_notes, batch_pass)`. `FailedEditStep`, `EditStepOutcome` dataclasses. Aggregate failure message lists all failing steps. |
-| **Reason accepted** | Predictable Cursor budget (max 2 calls). Consistent behavior for multi-file plans. Repair actually re-invokes Cursor with `missing_requirements` from validator. |
-
-### 4.5 Planner skill: instruction contract + caution_flag
-
-| | |
-|---|---|
-| **Problem** | Vague planner instructions → incomplete Cursor edits on retry. Ambiguous symbols caused hard fails. |
-| **Changes** | `skills/planner/planner.md`: Instruction Contract (what to change / what NOT to touch / inline Acceptance checklist). Semantic Targeting (`target_type`, `target_name`). `caution_flag` for duplicate symbols (guidance, not error). VERIFY `intent_marker` must be literal code token. Anti-pattern: never target `__main__` as function. `skills/planner/references/plan_schema.md` updated with instruction-based examples. |
-| **Reason accepted** | Acceptance checklist in instruction gives Cursor self-verify targets. `caution_flag` disambiguates without blocking pipeline. |
-
-### 4.6 Eval framework redesign (LLM-as-Judge)
-
-| | |
-|---|---|
-| **Problem** | Old evals couldn't score semantic plans or instruction-based executor output. No artifact capture for debugging. |
-| **Changes** | `evals/artifacts/pipeline_result.py`, `evals/harness/artifact_capture.py`, `evals/evaluators/planner_judge.py`, `executor_judge.py`, `llm_judge_base.py`, `preflight.py`. `evals/runners/run_judge_eval.py`, `compare_runs.py`. `evals/DOCS/evaluator_architecture.md`, `failure-modes.md`. Fatal vs warning preflight (invalid JSON = skip judge; `match_count=0` = still judge with warning context). Tiered judge models. `evals/baselines/current.json` promoted from Pass 2. |
-| **Reason accepted** | Hybrid deterministic + LLM judge matches new architecture. Artifacts enable per-case debugging (frozen in `evals/runs/<run_id>/`). Your feedback incorporated: don't skip judge on resolver warnings; add RootCauseAnalysis + RegressionRisk criteria. |
-
-### 4.7 Orchestrator: locatability / risk_floor decoupling
-
-| | |
-|---|---|
-| **Problem** | Security labels (`auth`, `sqli`, etc.) forced **FULL** for all security tickets, including self-locating single-file fixes (G-04, G-06–G-09, G-17, G-18). |
-| **Changes** | `skills/orchestrator/orchestrator.md` Step 3: security labels set `risk_floor=HIGH` only, do NOT force route. Step 4: locatability check (file named in ticket?) gates MICRO vs FULL. Step 5b: orchestrator classifies `vulnerability_category` + `recommended_security_skill`. `RoutingDecision` schema extended. `apply_orchestrator_ticket_analysis()` writes classification back to ticket. |
-| **Reason accepted** | HIGH risk ≠ needs research. Many CVE fixes are one named file + bounded change. |
-
-### 4.8 Merge SKIP_RESEARCH → MICRO + Gate 2 on MICRO
-
-| | |
-|---|---|
-| **Problem** | `SKIP_RESEARCH` and `MICRO` both skipped research → planner; duplicate route confused evals and graph. MICRO path skipped Gate 2 (plan approval). |
-| **Changes** | `RoutingDecision` literal type: `FULL | MICRO | EXIT` only; `@field_validator` coerces `SKIP_RESEARCH` → `MICRO`. `src/core/graph.py`: MICRO → `planning_hag` (Gate 2), removed `micro_confirm`. `synthesize_micro_research_output()` in planner when no research on MICRO. `evals/evaluators/scoring.py` `_norm()` treats SKIP_RESEARCH ≡ MICRO. User-prompt route override: Step 3.5 in skill + `apply_user_route_override()` in Python. |
-| **Reason accepted** | You explicitly requested merge + Gate 2 on MICRO. Simpler mental model; plan still human-reviewed before executor. |
-
-### 4.9 MICRO routing harness fix (Jul 9)
-
-| | |
-|---|---|
-| **Problem** | Eval harness called `resolve_routing()` without `repo_path`. Orchestrator skill Step 4b: null `repo_path` → FULL hard stop. All 7 MICRO golden cases routed FULL despite correct LLM reasoning. |
-| **Changes** | `evals/harness/targets.py`: `_routing_repo_context()`, `_is_micro_expected_route()`. `src/pipeline/runner.py`: `resolve_routing(..., repo_path=, repo_profile=)`. Test: `test_routing_repo_context_only_for_micro_cases`. |
-| **Reason accepted** | Production `orchestrator_node` resolves repo before routing; evals must mirror that. LLM was correct; context was wrong. |
-
-### 4.10 Supporting infrastructure (accepted as part of the arc)
-
-| Area | Changes |
-|------|---------|
-| **skill_manager** | Replaced `skill_registry.py` + `skills_loader.py` with unified `src/core/skill_manager.py` (`PromptBuilder`). |
-| **file_paths** | `remap_cursor_path`, `repair_repo_from_cursor_temp_clone` for Cursor temp clone paths. |
-| **schemas** | `ExecutionStep`: `instruction`, `target_type`, `target_name`, `caution_flag`; legacy patch fields deprecated. `ExecutionResult.validation_failed_steps`. |
-| **config** | `cursor_max_edit_attempts`, `SEMANTIC_SOFT_VALIDATION_ENABLED`, `semantic_warning_density_threshold`. |
-| **tests** | `test_executor_validation.py`, `test_validation_context.py`, `test_executor_structural_validation.py`, `test_instruction_edits.py`, `test_executor_batch_flow.py`, expanded `test_planner.py` / `test_executor.py`. |
-| **docs** | `docs/AGENT_PIPELINE_GUIDE.md` (706 lines), `evals/DOCS/eval_commands.md`, repo testing docs for 12 vulnerable repos. |
-| **API** (`fb45b0f`) | `execution_events.py`, `pause_display.py`, `redis_store.py`, `API_GUIDE.md` — real-time pipeline visibility. |
+**6. Preflight vs judge score divergence explained**
+	a. Problem = Judge scores went up (Pass 2 → Pass 3) but preflight scores appeared to go down — unclear if pipeline was regressing.
+	b. Changes = Investigation only (no code). Clarified: **preflight** = deterministic checks (schema, file exists, triad shape, fatal JSON errors). **Judge** = LLM semantic quality score. As plans got richer (more steps, more VERIFY markers), preflight warns more (e.g. extra steps, soft flags) while judge rewards better fixes.
+	c. Reason = These measure different things — preflight is a gate, judge is quality. Rising judge + "lower" preflight is expected when plans get more detailed.
 
 ---
 
-## 5. Changes You Rejected or Deferred — and Why
+## Executor / Validation Understanding
 
-### 5.1 `null repo_path` → EXIT (rejected Jul 9)
+**7. Executor validation flow documented**
+	a. Problem = Unclear where LLM validation runs vs Python checks, and what `_run_edit_batch_phase` / `_validate_all_edits` / `_evaluate_post_edit` do.
+	b. Changes = Investigation and explanation (no major code change from this chat). Mapped flow:
+		```
+		run_executor()
+		  └── _run_edit_batch_phase()        ← after Cursor batch edits
+		        └── _validate_all_edits()    ← each EDIT step
+		              └── _evaluate_post_edit()
+		                    ├── validate_edit()         ← LLM (noop case)
+		                    └── validate_edit_progressive() ← LLM + diff context
+		```
+		Also documented: `structural_check.py` (ast.parse, brace warnings), preflight in `validation.py`, post-batch VERIFY pattern checks.
+	c. Reason = You needed to know validation cost (Cursor calls vs LLM calls) before changing the batch design.
 
-| | |
-|---|---|
-| **Proposal** | If `repository.repo_path` is null, orchestrator should EXIT and stop pipeline. |
-| **Decision** | **Rejected.** Null `repo_path` means "local checkout not resolved yet," not "invalid ticket." Tickets can have `repo_links` (GitHub URL) while checkout is pending → route **FULL** (repo bootstrap), not EXIT. EXIT is reserved for Done tickets, out-of-scope features, budget exhaustion. |
-| **What we did instead** | Fixed eval harness to pass `repo_path` for MICRO cases; kept FULL hard stop when `repo_path` is null (blocks MICRO only). |
+**8. READ/EDIT/VERIFY triad ownership clarified**
+	a. Problem = Confusion whether Python executor should replay READ steps during validation, or whether READ is only for Cursor's batch edit context. Validation was failing on READ steps for files that were only in the plan for Cursor context.
+	b. Changes = Skills update (item 2 above) made this explicit: READ steps are **delegated to Cursor batch**; Python does preflight + LLM validation + post-batch VERIFY only. Reverted an earlier agent edit that tried to replay READs in Python validation (you rejected that approach).
+	c. Reason = Your original Jul 4 design intent: one Cursor batch call for all edits; validation checks files directly, not via plan READ steps.
 
-### 5.2 Bounded planner re-plan on density valve (deferred to v2)
+**9. Executor validation failure on SPACE-129070 (WrongSecrets)**
+	a. Problem = Pipeline failed at executor READ step on `WrongSecretsConstants.java` — looked like validation bug after skills changes.
+	b. Changes = Investigation traced to plan containing READ for a file path that didn't match repo layout / prior eval mutations. Root cause: repo state dirty from eval runs + plan READ steps being executed by old executor path before skills fix.
+	c. Reason = Not a skills regression — combination of dirty checkout and READ-step execution policy (fixed by item 8).
 
-| | |
-|---|---|
-| **Proposal** | When >50% EDIT steps have unresolved semantic targets, re-invoke planner instead of hard stop. |
-| **Decision** | **Deferred.** v1 = intentional hard stop with instrumentation (`planner_semantic_density` event). Re-plan risks repeating same mistakes at extra cost. Flag `PLANNER_SEMANTIC_REPLAN_ENABLED` reserved for v2. |
-| **What happened later** | Entire `semantic_target.py` removed in `c60a004`, making density valve moot — replaced by instruction-only validation. |
-
-### 5.3 Executor as free-form skill runner (rejected Jul 8)
-
-| | |
-|---|---|
-| **Proposal** | Drop `docs/example_skill(Gaurav).md` into executor and have it raise MR via `glab` without Python orchestration. |
-| **Decision** | **Rejected.** Pipeline executor is a **deterministic plan runner**, not a ReAct agent. It only uses `skills/executor/executor.md` as validation policy. MR creation stays in `mr_create.py` / hardcoded git phase. |
-| **Reason** | Architecture separation: skills guide LLM reasoning; Python enforces step types, budgets, and gates. |
-
-### 5.4 Replace PromptBuilder with raw f-string skill injection (rejected Jul 8)
-
-| | |
-|---|---|
-| **Proposal** | Pass skill files directly as f-strings to Cursor instead of `PromptBuilder.build()`. |
-| **Decision** | **Rejected** (advised to keep PromptBuilder). `PromptBuilder` handles manifest, context JSON injection, domain skill formatting, reference loading consistently across orchestrator/research/planner/executor. |
-| **Reason** | Centralized assembly prevents drift; changing one agent's prompt pattern doesn't break others. |
-
-### 5.5 Raw Jira ticket to LLM without parsing layer (rejected / not adopted Jul 9)
-
-| | |
-|---|---|
-| **Proposal** | Give full Jira ticket to LLM and let it extract repo link, vuln class, files — skip Python parsing. |
-| **Decision** | **Not adopted.** Kept `build_orchestrator_routing_context()`, `jira.py` fetch, `ticket_repo.py` resolution. |
-| **Reason** | Deterministic integration gates (DONE status, repo bootstrap, eval reproducibility) need structured fields. LLM routing still runs on **compact JSON context**, not raw ticket blob. |
-
-### 5.6 Planner dependency graph in prompt (requested Jul 8 — not implemented)
-
-| | |
-|---|---|
-| **Proposal** | Add explicit dependency ordering in planner prompt for executor (e.g. "edit config schema before app.py"). |
-| **Decision** | **Analysis only; not implemented.** Current plan uses sequential `step_id` READ→EDIT→VERIFY blocks per hypothesis. Executor runs steps in order; no separate dependency graph structure. |
-| **Reason** | READ→EDIT→VERIFY triad per file already implies order. Cross-file deps could be a future planner skill addition when multi-file ordering failures appear in evals. |
-
-### 5.7 `user_prompt` as routing control before Jul 8 (implicit rejection)
-
-| | |
-|---|---|
-| **Problem** | User typed "MICRO route" in API `user_prompt`; pipeline still went FULL → research. |
-| **Decision** | Initially **not wired** — `user_prompt` only affected research search queries. **Fixed Jul 8** with explicit Step 3.5 + `apply_user_route_override()` after you requested it. |
-
-### 5.8 Keep `semantic_target.py` soft-validation path (superseded Jul 8)
-
-| | |
-|---|---|
-| **What happened** | Jul 6: implemented full soft-validation v3 with warnings, `resolve_effective_target`, density valve, instruction contract in executor. Jul 8 (`c60a004`): **removed entire module** in favor of instruction-only checks. |
-| **Reason for pivot** | Pass 2 eval proved instruction-based flow works without resolver. Maintaining 841-line regex resolver had high false-negative cost. Simpler `validate_instruction_edits()` + executor LLM validation achieved 72.2% without it. |
+**10. PR not raised on failed validation run**
+	a. Problem = A run stopped at GATE_2 / executor without raising PR; no `executor_validation_failure` in logs.
+	b. Changes = Traced job state: failure was on executor READ step (step 17), not validation LLM. PR generation only runs after edit batch completes. Item 1 (PR on validation LLM error) addresses a different failure mode.
+	c. Reason = Distinguish "failed before edits" vs "failed after edits" — PR policy differs.
 
 ---
 
-## 6. Planner Architecture — Deep Dive
+## Planner / Pipeline Debugging
 
-### 6.1 Old architecture (pre Jul 4)
+**11. Missing EDIT steps in planner output (SPACE-129068)**
+	a. Problem = Same ticket produced ~30-step plans with EDIT steps yesterday, but later runs showed mostly READ/VERIFY and zero or one EDIT — looked like a regression on `Skills_Hardening_Experiment` branch.
+	b. Changes = Full pipeline trace. Findings:
+		- **Primary cause:** eval runs modified repos locally (`.cache/eval_repos/`, worktrees) — planner/Cursor saw already-fixed code and produced verify-only plans.
+		- **Secondary:** Redis `failed:*` entries and retry context influenced planner on repeated ticket runs.
+		- **Not caused by:** skills changes alone (main branch with clean repo still produced detailed plans).
+		c. Recommended: reset eval repo checkouts / use fresh worktrees before demo runs.
+	c. Reason = "No EDIT steps" usually means the agent thinks the fix is already applied — dirty repo, not broken planner.
 
-```
-Research → Python LLM planner (tools: read, verify)
-         → inject AFFECTED FILE CONTENTS into prompt
-         → output old_string/new_string patches
-         → validate_edit_patches() + validate_semantic_edits()
-         → Executor applies exact patches
-```
+**12. OpenVPN / Sprinklr router 403 when orchestrator routes**
+	a. Problem = Orchestrator routing failed with `403 Forbidden` even with VPN on — looked like network issue.
+	b. Changes = Investigation only. Probed `qa6-intuitionx-llm-router-v2.sprinklr.com` — real error: **"Generative AI Feature is disabled"** for `client_identifier=backend-platform-dev`, not VPN failure. Documented in chat; `sprinklr_router.py` error message is misleading (says check VPN for all 403s).
+	c. Reason = VPN gets you to the router; entitlement (`client_identifier` + `partner_id`) gates the model. Fix = ask platform team to enable Generative AI or use approved identifier.
 
-### 6.2 New architecture (current)
+**13. LLM Router SDK vs current HTTP integration**
+	a. Problem = Asked if switching to official `llm_router` SDK would fix 403 and whether `client_identifier` is still needed.
+	b. Changes = Investigation only. Confirmed: SDK uses same router API; `client_identifier` + `partner_id` still required; SDK won't bypass feature-disable 403. Current `sprinklr_router.py` already matches SDK contract.
+	c. Reason = Avoid unnecessary refactor — the blocker is entitlement, not HTTP client choice.
 
-```
-Research (FULL) or synthesize_micro_research_output (MICRO)
-         → Cursor Ask: run_semantic_plan() — explores repo on disk
-         → Python: schema validate + validate_instruction_edits + triad/path flags
-         → normalize paths (remap_cursor_path, sync files_to_change)
-         → Gate 2 (human)
-         → Executor
-```
+**14. Orchestrator routing context — how Jira data reaches the LLM**
+	a. Problem = Unclear where `orchestrator.md` Step 2–3 happen in code — are we sending raw Jira ticket to the orchestrator LLM?
+	b. Changes = Investigation only. Traced: `fetch_jira_ticket()` → `build_orchestrator_routing_context()` → compact JSON (title, labels, status, description preview, repo links) → `PromptBuilder` → LLM. Not raw ticket blob.
+	c. Reason = Understand routing inputs before changing security-label → route logic.
 
-### 6.3 Key planner files changed
-
-| File | Change |
-|------|--------|
-| `src/agents/planner/agent.py` | 465 lines removed from old LLM loop; now thin: `run_semantic_plan` → validate → `_plan_to_output`. `planner_node` synthesizes research on MICRO. |
-| `src/integrations/cursor/semantic_plan_runner.py` | **New.** Builds prompt via `PromptBuilder`, calls `gateway.ask()`, parses `ExecutionPlan` JSON. |
-| `src/core/plan_validation.py` | `validate_instruction_edits()` replaces `validate_edit_patches` + `validate_semantic_edits`. `sync_files_to_change_from_edit_steps()`. |
-| `src/core/schemas.py` | `ExecutionStep` instruction fields; pydantic validator rejects legacy patches on EDIT. |
-| `skills/planner/planner.md` | Cursor explores repo; instruction contract; caution_flag; no old_string. |
-| `tests/test_planner.py` | Rewritten for semantic plan mocking; `test_synthesize_micro_research_output_extracts_paths`. |
-| `tests/test_planner_grounding.py` | **Deleted** (grounding now Cursor's job). |
-
-### 6.4 MICRO route planner behavior
-
-| | |
-|---|---|
-| **Problem** | MICRO skips research agent — planner had no `research_output`. |
-| **Changes** | `synthesize_micro_research_output(state)` builds minimal `ResearchOutput` from ticket title/problem + `extract_repo_file_paths_from_texts(..., repo_path)`. `planner_node` calls it when `route == MICRO` and research missing. |
-| **Reason** | Ticket is self-locating; stub gives planner/Cursor enough to start. Real exploration still happens in `run_semantic_plan`. Bug fix Jul 9: must pass `repo_path` into file extraction. |
+**15. Orchestrator Step 3 security keywords**
+	a. Problem = Step 3 lists keywords like `auth`, `security`, `cve` — seemed wrong if we only handle security tickets anyway.
+	b. Changes = Investigation only. Clarified: keywords set `risk_floor=HIGH`, they do **not** alone force FULL route (see item 25 from Jul 8 arc). Step 4 locatability gates MICRO vs FULL.
+	c. Reason = Security label = high risk, not "must run full research."
 
 ---
 
-## 7. Executor Validation Pattern — Deep Dive
+## Codebase Cleanup (M1.3)
 
-### 7.1 Validation stack (post-edit, per EDIT step)
+**16. Codebase maintainability audit (audit-only)**
+	a. Problem = Codebase grew sprawling — ~150 Python files, duplicate orchestration stacks, many zero-call-site functions. Hard to know what's safe to remove.
+	b. Changes = Created `docs/cleanup-audit.md` (audit only, no code changes). Catalogued:
+		- ~89 public zero-reference symbols in `src/`
+		- **Largest dead cluster:** M1.3 `PipelineOrchestrator` + sub-agents (~1,500+ lines, zero importers)
+		- Merge candidates: `preflight.py` + `preflight_scores.py`, `edit_step.py` inline, duplicate Jira clients
+		- Out-of-scope: LangGraph entry points, skills, eval harness, API routes
+	c. Reason = Need a evidence-based cleanup plan before deleting anything — you required proof of unreachable code.
 
-```
-1. capture_pre_edit (approximate_line or READ span)
-2. Cursor batch edit (pass 1 or 2)
-3. noop check (pre_hash == post_hash → LLM validates intent already satisfied)
-4. structural_check:
-   - Python: ast.parse → hard fail
-   - TS/JS: brace balance → warning only, passed to LLM
-5. build_validation_context (validation_context.py):
-   - Level 1: git-diff hunks → expand to semantic parent (method/class/function)
-   - Level 2: full-file fallback
-6. LLM semantic validation (validation.py):
-   - Loads executor skill as policy
-   - Scope: planner instruction only
-   - PASS: equivalent implementations, no-op OK if intent satisfied
-   - FAIL: security property missing in edited region
-   - observations don't affect pass boolean
-7. If any fail + pass 2 available → batch repair with retry_notes
-8. VERIFY steps: read + verify_intent_marker (literal substring, unchanged)
-```
+**17. Commented out dead M1.3 orchestration stack**
+	a. Problem = `PipelineOrchestrator`, `CursorResearchSubAgent`, `CursorPlanSubAgent`, `CursorImplementSubAgent`, and cursor runners (`plan_runner.py`, `research_runner.py`, `implement_runner.py`) had **zero importers** — parallel unused stack next to LangGraph pipeline.
+	b. Changes = Commented out (not deleted) per audit, with `# --- M1.3 commented out ---` markers in:
+		- `src/core/orchestrator_loop.py` (`PipelineOrchestrator`)
+		- `src/core/sub_agent.py`, `src/core/agent_context.py`
+		- `src/agents/research/sub_agent.py`, `src/agents/planner/sub_agent.py`, `src/agents/executor/sub_agent.py`
+		- `src/integrations/cursor/plan_runner.py`, `research_runner.py`, `implement_runner.py`
+		- Removed stale tests: `test_orchestrator_loop.py`, `test_m13_sub_agents.py`
+		- Deleted obsolete docs: `docs/Improvements.txt`, `evals/DOCS/LangSmith_2ndTest_Reasoning.txt` (content moved to other docs)
+	c. Reason = LangGraph + `src/pipeline/runner.py` is the live path. Keeping commented code allows quick rollback if something breaks.
 
-### 7.2 Key executor files changed
+**18. Commented out unused functions from cleanup-audit (lines 111–130)**
+	a. Problem = Audit listed 14 dead symbols still cluttering modules — zero call sites, confusing for maintainers.
+	b. Changes = Commented out (kept `raise_gitlab_mr` as requested):
+		- `format_micro_confirm` — `formatters.py`
+		- `fetch_ticket_by_key`, `fetch_tickets_from_jql` — `jira_client.py`
+		- `raw_to_legacy_fields` — `jira_schema.py`
+		- `rank_candidate_files` + helpers — `file_discovery.py`
+		- `validate_repository` — `git_worktree.py`
+		- `validate_execution_plan_strict` — `plan_validation.py`
+		- `log_edit_patch`, `old_string_in_file`, `file_git_diff` — `repo_snapshot.py`
+		- `search_structured` — `gateway.py`
+		- `FailedAttemptRecord` — `schemas.py`
+		- `SkillManager` class — `skill_manager.py`
+		- `scripts/add_docstrings.py` — entire file commented
+		- `evals/evaluators/legacy_scoring.py` — commented; imports redirected to `scoring.py`
+		- Fixed dead import in `tests/test_core.py`
+	c. Reason = Reduce noise without deleting — main pipeline path unchanged; 366 tests still pass after comment-out.
 
-| File | Change |
-|------|--------|
-| `src/agents/executor/agent.py` | Major rewrite (~1120 lines touched). Batch-only edit path. `_run_edit_batch_phase`, `_validate_all_edits`, `_evaluate_post_edit`. Removed per-file edit loop. |
-| `src/agents/executor/validation.py` | `ValidationResult`, `SemanticValidationResponse`, `validate_edit`, `validate_edit_progressive`, `build_retry_note`, `log_edit_outcome`. |
-| `src/agents/executor/validation_context.py` | **New.** `diff_changed_line_ranges`, `_python_semantic_scope`, `_expand_to_semantic_parent`, `warrants_context_expansion`, `ContextLevel` enum. |
-| `src/agents/executor/structural_check.py` | **New.** `check_file_structure`, `is_python_hard_fail`. |
-| `skills/executor/executor.md` | Full semantic validation policy, non-errors list, caution_flag handling, anti-patterns. |
-| `skills/executor/references/edit_patterns.md` | Edit pattern reference (existing, updated). |
-| `tests/test_executor_edit_validation.py` | Rewritten for batch + LLM validation flow. |
-| `tests/test_executor_batch_flow.py` | **New.** Asserts 2 batch passes, repair call count. |
+**19. Merged functions and deleted 7 files (cleanup commit)**
+	a. Problem = After comment-out pass, duplicate thin modules remained — `preflight_scores.py` duplicated `preflight.py`, `edit_step.py` was one function, `langchain_tools.py` / `run_context.py` / `planner/tools/builder.py` unused, `graph_outcome.py` orphaned, `api/auth.py` empty stub.
+	b. Changes = **Deleted 7 files:**
+		- `evals/evaluators/preflight_scores.py` → merged into `preflight.py`
+		- `src/core/edit_step.py` → `is_instruction_edit` inlined into `plan_validation.py`
+		- `src/agents/planner/tools/builder.py`
+		- `src/agents/research/tools/langchain_tools.py`
+		- `src/agents/research/run_context.py`
+		- `src/pipeline/graph_outcome.py` → logic moved to `graph_runner.py`
+		- `src/api/auth.py`
+		Also: `repo_profile.py` helpers consolidated; `jira.py` cleanup; `middleware.py` tweaks; `api/main.py` auth import removed.
+	c. Reason = Fewer files = easier navigation; merge related code that's always used together.
 
-### 7.3 Config / settings
+**20. `format_micro_confirm` analysis**
+	a. Problem = Considering removing `format_micro_confirm` — needed to know what it does and if safe.
+	b. Changes = Investigation: builds HITL "quick confirm" message for old MICRO-only gate. **Zero call sites** — graph uses `format_gate2_request` for all routes including MICRO. Stale references remain in `state.py`, `chainlit_app.py`, `pipeline_event_factory.py`.
+	c. Reason = Dead code from pre-Jul-8 graph when MICRO had its own confirm node. Safe to remove/comment (done in item 18).
 
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `CURSOR_MAX_EDIT_ATTEMPTS` | 2 | Max whole-plan Cursor batch passes |
-| `SEMANTIC_SOFT_VALIDATION_ENABLED` | true | Legacy flag from soft-validation v3 (harness only post-`c60a004`) |
-| `semantic_warning_density_threshold` | 0.5 | Legacy density valve threshold |
-
----
-
-## 8. Orchestrator — All Changes
-
-### 8.1 Skill (`skills/orchestrator/orchestrator.md`)
-
-| Change | Reason |
-|--------|--------|
-| Step 2: Feature/Enhancement EXIT for non-vuln tickets without repo | Pipeline scoped to defect/vuln remediation |
-| Step 3: `risk_floor` decoupled from route | Security label ≠ must run research |
-| Step 3.5: User prompt route override (highest priority except EXIT) | You requested explicit MICRO/FULL/EXIT in user_prompt |
-| Step 4: Locatability check + 4b FULL hard stops | File named → MICRO eligible; null repo_path / retries → FULL |
-| Removed `SKIP_RESEARCH` as output route | Merged into MICRO |
-| Step 5b: `vulnerability_category` + `recommended_security_skill` | Orchestrator owns classification for research skill loading |
-| Anti-pattern: never let security label alone force FULL | Prevents over-routing |
-
-### 8.2 Python (`src/agents/orchestrator/agent.py`)
-
-| Change | Reason |
-|--------|--------|
-| `run_orchestrator_routing(..., repo_path=, repo_profile=)` | Pass resolved checkout into context |
-| `apply_user_route_override(decision, user_prompt)` | Enforce user route after LLM |
-| `sanitize_routing_decision` + `normalize_routing_route` | Coerce SKIP_RESEARCH → MICRO |
-| `apply_orchestrator_ticket_analysis` | Write vuln category + skill stem to ticket |
-| Imports `skill_manager.PromptBuilder` (was `prompt_builder` / `skill_registry`) | Unified skill loading |
-
-### 8.3 Graph / pipeline
-
-| File | Change |
-|------|--------|
-| `src/core/graph.py` | `route_after_orchestrator`: MICRO → `planning_hag` (not `micro_confirm`) |
-| `src/core/schemas.py` | `RoutingDecision` fields: `vulnerability_category`, `recommended_security_skill` |
-| `src/core/orchestrator_context.py` | `build_orchestrator_routing_context`, `parse_explicit_user_route`, `apply_user_route_override` |
-| `src/pipeline/runner.py` | MICRO research synthesis; `resolve_routing` accepts repo_path |
+**21. Jira linked/dependent tickets — how we handle them**
+	a. Problem = Before commenting out `fetch_tickets_from_jql`, needed to know if pipeline fetches related tickets or only the input ticket.
+	b. Changes = Investigation only. Confirmed:
+		- Pipeline processes **one ticket ID** at a time.
+		- `fetch_jira_ticket()` reads `issuelinks` from the single Jira API response — embedded `outwardIssue`/`inwardIssue` give key + summary + status only (no second fetch).
+		- `JiraTicket.dependencies` is populated but **not passed** to orchestrator/planner/research prompts today.
+	c. Reason = Commenting out batch JQL fetch is safe — related-ticket context was never fully wired. Future work would need explicit linked-ticket fetch + prompt injection.
 
 ---
 
-## 9. Complete Change Inventory (by commit)
+## Prior Work Referenced (Jul 4–9 arc, still relevant)
 
-### Commit `2d0208f` — Jul 4 — "Tested orchestrator, research agent only..."
+**22. Instruction-based planner (Cursor semantic plan)**
+	a. Problem = Patch-based plans (`old_string`/`new_string`) were brittle — whitespace drift, multi-file, TypeScript. Pass 1: 40% failures were `NO_OUTPUT` from planner hard-stops.
+	b. Changes = Planner rewritten to `run_semantic_plan()` via Cursor Ask. `semantic_target.py` (841 lines) deleted; `validate_instruction_edits()` replaces symbol resolution.
+	c. Reason = Cursor explores repo at plan time; instructions survive formatting drift.
 
-**Planner**
-- Rewrote `agent.py`: Cursor semantic plan runner replaces in-process LLM planner
-- Added `semantic_plan_runner.py`
-- Added `plan_validation.py` instruction path (initial)
-- Added `semantic_target.py` (841 lines) — later removed
-- Updated `planner.md`, `plan_schema.md`
-- `tests/test_planner.py` major rewrite; deleted `test_planner_grounding.py`
+**23. Executor LLM semantic validation + two-phase batch**
+	a. Problem = Exact `old_string` match validation was arbitrary. Per-file retry loop wasted Cursor calls; batch repair often didn't re-call Cursor.
+	b. Changes = `validation.py`, `validation_context.py`, `structural_check.py`. Always 2 batch passes: all EDITs → validate all → repair failed only. `CURSOR_MAX_EDIT_ATTEMPTS=2`.
+	c. Reason = Validate security property in instruction scope, not patch shape. Predictable Cursor budget.
 
-**Executor**
-- Initial `validation.py`, instruction-based edit brief
-- `executor.md` skill updates for semantic validation
-- `tests/test_executor.py`, `test_executor_edit_validation.py` rewrites
+**24. Eval framework redesign (LLM-as-Judge)**
+	a. Problem = Old evals couldn't score semantic plans or instruction-based executor output.
+	b. Changes = `planner_judge.py`, `executor_judge.py`, `preflight.py`, artifact capture, `failure-modes.md`, baselines. Hybrid deterministic preflight + LLM judge.
+	c. Reason = Match eval architecture to new pipeline; artifacts enable per-case debugging.
 
-**Orchestrator**
-- `orchestrator.md`: locatability, risk_floor, security classification
-- `agent.py`: skill_manager migration
+**25. Fine-tuned orchestrator routing**
+	a. Problem = Security labeled tickets (auth, sqli, etc.) forced the FULL route unconditionally — even for self-locating, single-file fixes that didn't need a full Research pass.
+	b. Changes = `orchestrator.md` Step 3: security labels now set `risk_floor=HIGH` only, and no longer force the route by themselves. Step 4: added a locatability check (is the file named in the ticket?) that gates MICRO vs FULL independently of risk level. `RoutingDecision` schema extended accordingly.
+	c. Reason = HIGH risk doesn't imply "needs full research" — many CVE fixes are one named file with a bounded change; forcing FULL wasted Research-agent time and cost on cases that didn't need it.
 
-**Evals (new)**
-- Full harness: artifacts, judges, preflight, `run_judge_eval.py`
-- Golden unit tests: dvpwa, vampi, webgoat, juiceshop, wrongsecrets
-- `eval_commands.md`, baselines, scoring
+**26. Merge SKIP_RESEARCH → MICRO + Gate 2 on MICRO**
+	a. Problem = `SKIP_RESEARCH` and `MICRO` duplicated behavior; MICRO skipped human plan approval (Gate 2).
+	b. Changes = Route type: `FULL | MICRO | EXIT` only. MICRO → `planning_hag` (Gate 2). `synthesize_micro_research_output()` when no research. User-prompt route override (Step 3.5).
+	c. Reason = Simpler mental model; plan still human-reviewed before executor.
 
-**Infrastructure**
-- `skill_manager.py` replaces `skill_registry.py` + `skills_loader.py`
-- 12 `docs/Testing_repos_info/*.md` repo guides
-- `Makefile` eval targets
-- Removed `.env.local` from tracking
-
-### Commit `c60a004` — Jul 8 — "2nd Time Tested, Improved validation..."
-
-**Critical pivot**
-- **Deleted** `src/core/semantic_target.py` (−841 lines)
-- `plan_validation.py` simplified to `validate_instruction_edits` (no symbol resolution)
-- Added `validation_context.py` (+452), expanded `validation.py` (+379)
-- Added `structural_check.py` (+89)
-- Executor `agent.py` batch redesign finalized (+691/− lines)
-
-**Planner**
-- `planner.md`: instruction contract, caution_flag, VERIFY intent_marker rules
-- `semantic_plan_runner.py`: explicit no old_string in prompt
-- `agent.py`: `synthesize_micro_research_output` wiring
-
-**Evals**
-- `failure-modes.md` (+366): full Pass 1 vs Pass 2 analysis
-- `evaluator_architecture.md` (+979)
-- `executor_judge.py`, `planner_judge.py`, `llm_judge_base.py`
-- `artifact_capture.py` (+281)
-- `baselines/current.json` promoted to Pass 2 (72.2%) → later Pass 3 (100%, `run_030`)
-- `targets.py` harness extensions
-
-**Docs**
-- `AGENT_PIPELINE_GUIDE.md` (+706)
-
-**API cleanup**
-- Removed `src/api/jira_filter.py`, trimmed `auth.py`
-
-### Commit `fb45b0f` — Jul 8 — "Added communication endpoints"
-
-- `src/api/execution_events.py` (+147): SSE/streaming pipeline events
-- `src/api/pause_display.py` (+71): human gate pause UI
-- `src/api/redis_store.py` (+57): job state
-- `src/api/main.py`, `ticket_jobs.py` expanded
-- `evals/DOCS/LangSmith_2ndTest_Reasoning.txt` (+342): per-case judge reasoning
-- `evals/golden/eval_description_depthness.md` (+202)
-- `tests/test_api.py`, `test_execution_events.py`
-
-### Uncommitted / Jul 9 (post-commit, from chats)
-
-- `evals/harness/targets.py`: `_routing_repo_context` for MICRO evals
-- `src/pipeline/runner.py`: forward `repo_path` to `resolve_routing`
-- `tests/test_evals_harness.py`: routing repo context test
-- `src/agents/planner/agent.py`: `repo_path` fix in `synthesize_micro_research_output`
-- `tests/test_planner.py`: `test_synthesize_micro_research_output_extracts_paths`
-- `evals/evaluators/scoring.py`: SKIP_RESEARCH ≡ MICRO normalization
+**27. MICRO routing eval harness fix (Jul 9)**
+	a. Problem = Eval harness called `resolve_routing()` without `repo_path` — all 7 MICRO golden cases routed FULL despite correct LLM reasoning.
+	b. Changes = `evals/harness/targets.py`: `_routing_repo_context()`. `runner.py` forwards `repo_path` to routing.
+	c. Reason = Production resolves repo before routing; evals must mirror that.
 
 ---
 
-## 10. Problem → Changes → Reason (Quick Reference Index)
+## Production / Portability (Investigation)
 
-| # | Problem | Changes | Reason |
-|---|---------|---------|--------|
-| 1 | Patch-based plans brittle | Instruction + Cursor semantic plan | Survives formatting; Cursor grounds on disk |
-| 2 | 40% NO_OUTPUT from symbol resolver | Delete `semantic_target.py`; `validate_instruction_edits` only | False negatives blocked good plans |
-| 3 | Executor exact-match validation | LLM semantic validation + progressive context | Judge security property, not patch shape |
-| 4 | Inconsistent batching/retries | Always 2 batch passes; `_run_edit_batch_phase` | Predictable Cursor budget; real repair |
-| 5 | Incomplete Cursor edits | Inline Acceptance checklist in planner instruction | Retry needs concrete targets |
-| 6 | Ambiguous symbols hard-fail | `caution_flag` (planner) + executor policy | Disambiguate without aborting |
-| 7 | Security label → always FULL | `risk_floor` decoupled; locatability check | HIGH risk tickets can be MICRO |
-| 8 | SKIP_RESEARCH / MICRO duplicate | Merge to MICRO; Gate 2 on MICRO | Simpler routes; plan still reviewed |
-| 9 | Eval can't score semantic output | LLM judges + artifact capture + preflight | Hybrid eval matches new architecture |
-| 10 | Pass 1 baseline 16.7% | Above changes combined | Pass 2: 72.2% (+55.5 pp) |
-| 11 | MICRO evals route FULL | Pass `repo_path` in eval harness | Context bug, not LLM bug |
-| 12 | user_prompt ignored for routing | Step 3.5 + `apply_user_route_override` | Explicit user intent honored |
-| 13 | MICRO planner crash | `repo_path` in `synthesize_micro_research_output` | File extraction requires repo root |
-| 14 | TS/JS structural false positives | Brace check → warning; LLM decides | Template literals/JSX break counters |
-| 15 | G-18 regression (YAML corrupt) | Skills improvements (Pass 3) | **Resolved:** plain Secret removed |
-| 16 | G-14 partial (innerHTML remains) | Multi-file component+template planning | **Resolved:** template sink removed |
-| 17 | G-16 partial (async verify) | Sync API preservation in executor skill | **Resolved:** sync `jwt.verify` RS256 |
-| 18 | Pass 2 plateau at 72.2% | Planner/executor/research skill updates | Pass 3: **100%** (+27.8 pp) |
+**28. Portability & production-readiness audit (Jul 10)**
+	a. Problem = Pipeline only tested locally — need honest assessment of what blocks production deployment.
+	b. Changes = Investigation report (chat only). Key findings: Cursor CLI install is local-only blocker; Redis optional; Jira/GitHub credentials required; no K8s/Helm manifests yet; state in LangGraph checkpoints + Redis job store.
+	c. Reason = Understand gap between "works on my machine" and deployable service.
+
+**29. Cursor SDK install failure as portability blocker**
+	a. Problem = `cursor` CLI must be pre-installed locally — fails in clean environments. Question: is there a substitute?
+	b. Changes = Investigation only. Options: pre-bake Cursor in Docker image, remote Cursor gateway service, or fallback to dry-run/mock mode for CI. No code change yet.
+	c. Reason = Without headless Cursor in the image, the project can't run outside your laptop.
 
 ---
 
-## 11. Quality Caveats (Pass 3) — Non-blocking
+## Eval Scorecard Summary (for reference)
 
-> All 18 cases pass. Items below are quality improvements, not failures.
+| Pass | Run | Date | Pass Rate | Planner μ | Executor μ |
+|------|-----|------|-----------|-----------|------------|
+| Pass 1 | `run_007` + `run_010` | Jul 4 | 16.7% (3/18) | — | — |
+| Pass 2 | `mixed_15` + `mixed_3` | Jul 6 | 72.2% (13/18) | 77.4 | 75.9 |
+| **Pass 3** | **`run_030`** | **Jul 11** | **100% (18/18)** | **94.9** | **96.8** |
 
-| Case | Executor score | Caveat | Suggested follow-up |
-|------|----------------|--------|---------------------|
-| G-18 | 70 | `sealed-funnystuff.json` manifests not in diff; scripts depend on them | Ensure SealedSecret manifests are created and committed |
-| G-05 | 98 (planner 70) | Planner plan quality variance | Review planner skill for BAC auth-gating patterns |
+**Pass 3 recovered:** G-04 (misconfig), G-12 (IDOR), G-14 (XSS), G-16 (JWT sync), G-18 (YAML/SealedSecret).
 
-**Pass 3 result:** 18/18 = **100%** (exceeds prior projection of 94.4%).
-
----
-
-## 12. Chat Transcript Index
-
-| Topic | Transcript ID (link) |
-|-------|----------------------|
-| Eval framework redesign | [Eval redesign Jul 4](2c8b61db-6840-459c-bc9c-3ff44a9c94ca) |
-| Soft validation pipeline v1–v3 | [Soft validation Jul 6](27b3e693-d795-41d6-b787-71444872f6d6) |
-| Executor two-phase batch | [Executor batch Jul 6](678c30fe-637f-45b8-a80b-5d9740655616) |
-| Agent skill / Cursor architecture Q&A | [Agent architecture Jul 8](c63a7306-dbd5-4e28-b51b-c05b61b1a3ea) |
-| MICRO routing + SKIP_RESEARCH merge | [MICRO merge Jul 8](f444758c-29ca-4d19-ab4e-a3b7767fef42) |
-| MICRO harness repo_path fix | [MICRO routing fix Jul 9](80b39956-d8ee-4a32-8780-22a78ed6c278) |
+**Quality caveat (non-blocking):** G-18 passes with executor score 70 — `sealed-funnystuff.json` manifests not visible in diff.
 
 ---
 
-## 13. Key Artifacts to Review
+## Rejected / Deferred Decisions
 
-| Artifact | Path |
-|----------|------|
-| Pass 3 baseline | `evals/baselines/current.json` |
-| Failure taxonomy | `evals/DOCS/failure-modes.md` |
-| Eval results quick ref | `evals/DOCS/checking_evals_result.md` |
-| Per-case judge reasoning | `evals/DOCS/LangSmith_2ndTest_Reasoning.txt` |
-| Pipeline guide | `docs/AGENT_PIPELINE_GUIDE.md` |
-| Eval commands | `evals/DOCS/eval_commands.md` |
-| Run artifacts (Pass 3) | `evals/runs/run_030/` |
-| Run artifacts (Pass 2) | `evals/runs/mixed_15_afterSemanticANDValidationChanges/` |
-| Run artifacts (Pass 2) | `evals/runs/mixed_3_afterSemanticANDVlidationChanges/` |
+| # | Proposal | Decision | Why |
+|---|----------|----------|-----|
+| R1 | `null repo_path` → EXIT | **Rejected** | Null means checkout pending, not invalid ticket → route FULL for bootstrap |
+| R2 | Python replay of READ steps in validation | **Rejected** | READ is Cursor batch context; validation reads files directly |
+| R3 | Replace PromptBuilder with raw f-strings | **Rejected** | Centralized assembly prevents prompt drift across agents |
+| R4 | Executor as free-form skill runner (glab MR) | **Rejected** | Executor is deterministic plan runner; MR stays in `mr_create.py` |
+| R5 | Adopt `llm_router` SDK to fix 403 | **Not needed** | Same API; entitlement issue, not transport |
+| R6 | Planner re-plan on density valve | **Deferred** | `semantic_target.py` removal made it moot |
 
 ---
 
-*Generated: Jul 12, 2026 · Covers git commits `2d0208f`–`fb45b0f`, eval Pass 3 (`run_030`), and agent transcripts Jul 4–11.*
+## Chat Transcript Index (Jul 10–13)
+
+| Topic | Transcript |
+|-------|------------|
+| Portability audit | [Portability Jul 10](c4b856ae-eac1-40ca-815d-563dcdf432b0) |
+| Sprinklr 403 / LLM Router SDK | [Router 403 Jul 10](6fc17219-40e2-496c-8a5d-9b1b40fa1246) |
+| Orchestrator routing Q&A | [Orchestrator Jul 10](f50fe7dc-15d7-4d3e-ad0e-2c6aac1425ea) |
+| HumanLayer skills improvement | [Skills Jul 11](33e51199-cf96-47fc-8a61-bb3363d5dc61) |
+| Executor validation flow | [Validation Jul 11](7435d218-bbd4-46cb-baca-c8f0af2498a9) |
+| Pass 3 eval prep | [Eval prep Jul 11](7fb8f922-ef81-4319-b473-3c1ba2a1d5d0) |
+| Missing EDIT steps debug | [EDIT steps Jul 12](7ae9f670-277c-46b9-a354-0b6403060d4d) |
+| Eval docs update run_030 | [Eval docs Jul 12](8acb9a10-93a3-419a-984e-ef745f6f4663) |
+| Cleanup audit | [Audit Jul 12](e6cf42b9-b14d-4dea-a918-0d8bab73ab8f) |
+| Comment out dead code | [Cleanup Jul 13](71a8a311-7769-4eaf-b9a2-2f9288578787) |
+| Jira linked tickets | [Jira deps Jul 13](52bc925e-c565-4233-b543-90a7217ec3dd) |
+
+---
+
+*Generated: Jul 13, 2026 · Covers Jul 10–13 work + referenced Jul 4–9 arc items.*

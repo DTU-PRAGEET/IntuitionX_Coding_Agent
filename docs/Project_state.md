@@ -2,9 +2,13 @@
 
 **Purpose:** Session handoff document. Read this first in a new conversation — do not rely on chat history.
 
+**Current architecture:** LangGraph pipeline (`src/core/graph.py`), skills in `skills/` via `SkillRegistry`, Cursor SDK for search/plan/edit. See [docs/README.md](README.md) and [docs/skills-authoring.md](skills-authoring.md).
+
+**Milestone 3.3 (partial):** `java-dependency-vulns.md` reference skill + [`docs/skills-authoring.md`](skills-authoring.md). Sandboxed load-time validation and skill eval hooks were **not** implemented.
+
 **Not a duplicate of:** [`plan.md`](plan.md) (long-term architecture) or level implementation plans. This file tracks **what is done**, **what is next**, and **how to verify each level**.
 
-**Last updated:** June 2026 — after Level 2 (Research Deep Agent + Jira integration).
+**Last updated:** July 2026 — after Milestone 3.3 skills system hardening.
 
 ---
 

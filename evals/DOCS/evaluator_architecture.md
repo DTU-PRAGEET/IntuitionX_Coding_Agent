@@ -1,5 +1,7 @@
 # Evaluator Architecture
 
+> **Last updated:** 2026-07-13 — hybrid LLM judge evaluators for plan/implement.
+
 This document explains how the IntuitionX / Sprinklr Jira Solver evaluation framework works end-to-end: what each evaluator measures, why it exists, how scores are computed, and how to interpret failures before diving into individual case post-mortems.
 
 **Audience:** developers who have never touched `evals/` but need to debug agent regressions or extend the benchmark.

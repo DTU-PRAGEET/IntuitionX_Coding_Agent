@@ -1,5 +1,7 @@
 # Eval Results Quick Reference — `run_030` (Pass 3)
 
+> **Eval index:** [evals/README.md](../README.md) · **Commands:** [eval_commands.md](eval_commands.md)
+
 > **Run:** `evals/runs/run_030/`  
 > **Date:** 2026-07-11  
 > **Experiment:** `Skills-adjustment-Test3`  

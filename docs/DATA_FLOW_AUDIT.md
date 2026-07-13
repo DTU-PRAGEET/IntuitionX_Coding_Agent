@@ -1,5 +1,7 @@
 # IntuitionX Runtime Data Flow Audit
 
+> **Current architecture:** LangGraph `AgentState` in `src/core/state.py`, skills via `SkillRegistry` in `src/core/skill_manager.py`. Index: [docs/README.md](README.md).
+
 Exhaustive map of data flowing in and out of every agent and sub-agent at runtime.
 Source of truth: `src/core/state.py` (`AgentState`), `src/core/schemas.py` (Pydantic boundaries), LangGraph wiring in `src/core/graph.py`.
 

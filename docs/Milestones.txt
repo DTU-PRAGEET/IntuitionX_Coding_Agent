@@ -121,20 +121,13 @@ Registry rejects at load time with clear error
 
 Definition of done: All 5 adversarial scenarios have test cases in /evals/adversarial/ with defined pass criteria.
 
-Milestone 3.3 Skills system hardening
+Milestone 3.3 Skills system hardening [PARTIAL 2026-07-13]
 Deliverables:
-Skill validation at load time: malformed .md cannot crash the core agent (sandboxed loading)
-Skill-level eval hooks: each skill's test_cases run as part of the standard eval suite
-Third reference skill: java-dependency-vulns.md (stress-tests API surface)
-Skills authoring guide at /docs/skills-authoring.md — the primary artifact for teams wanting to extend the agent
-Skills authoring guide sections:
-Skill YAML schema reference
-Writing trigger_conditions (when does this skill activate?)
-Writing prompt_templates (how to override agent prompts)
-Declaring test_cases alongside your skill
-Allowed file globs (scope limiting per team)
-Publishing a skill (PR checklist)
-Definition of done: A developer unfamiliar with the codebase can write and test a new skill using only the authoring guide.
+Skill validation at load time: malformed .md cannot crash the core agent (sandboxed loading) — NOT IMPLEMENTED (removed)
+Skill-level eval hooks: each skill's test_cases run as part of the standard eval suite — NOT IMPLEMENTED (removed)
+Third reference skill: java-dependency-vulns.md (stress-tests API surface) — DONE
+Skills authoring guide at /docs/skills-authoring.md — DONE
+Definition of done (authoring guide only): A developer unfamiliar with the codebase can write a new skill using the authoring guide.
 
 Milestone 3.4 Expand dataset to 40 cases + full re-eval
 New case focus: skewed toward previously failing categories (edge cases, multi-file, hard difficulty)
