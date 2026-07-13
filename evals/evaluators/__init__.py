@@ -9,11 +9,12 @@ from evals.evaluators.base import EvalScore, EvaluatorSpec
 from evals.evaluators.executor_judge import executor_judge
 from evals.evaluators.planner_judge import planner_judge
 from evals.evaluators.preflight_scores import executor_preflight_score, planner_preflight_score
-from evals.evaluators.scoring import file_identification_f1, route_correctness
-from evals.evaluators.legacy_scoring import (
+from evals.evaluators.scoring import (
+    file_identification_f1,
     fix_type_match,
     patch_contains_excludes,
     plan_line_overlap,
+    route_correctness,
 )
 
 EVALUATORS: list[EvaluatorSpec] = [

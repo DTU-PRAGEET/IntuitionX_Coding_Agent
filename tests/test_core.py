@@ -10,7 +10,7 @@ import pytest
 
 from src.core.schemas import ExecutionPlan, ResearchReport, RoutingDecision, ToolResult
 from src.core.state import initial_state
-from src.agents.research.tools.file_discovery import extract_anchors, rank_candidate_files
+from src.agents.research.tools.file_discovery import extract_anchors
 from src.agents.orchestrator.tools.jira import JiraCredentialsError, fetch_jira_ticket, is_ticket_done
 from src.agents.research.tools.repo_profile import profile_repository
 from tests.helpers import make_bug_ticket

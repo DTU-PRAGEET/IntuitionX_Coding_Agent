@@ -415,18 +415,20 @@ class RoutingDecision(BaseModel):
         return "FULL"
 
 
-class FailedAttemptRecord(BaseModel):
-    """Self-healing failure record — phase, error summary, optional plan hash/snapshot.
-    Persisted via `memory/cache.save_failed_attempt` from executor and API CI/CD webhook.
-    Surfaced on retry through orchestrator context and `AgentState.previous_attempts`."""
-    attempt_id: str
-    ticket_id: str
-    phase_failed: Literal["IMPLEMENTATION", "CICD", "PLANNING_REJECTED", "RESEARCH", "ORCHESTRATOR"]
-    error_type: str = "unknown"
-    error_summary: str
-    plan_hash: Optional[str] = None
-    plan_used: Optional[dict[str, Any]] = None
-    timestamp: str
+# --- M1.3 commented out: FailedAttemptRecord (see docs/cleanup-audit.md) ---
+# class FailedAttemptRecord(BaseModel):
+#     """Self-healing failure record — phase, error summary, optional plan hash/snapshot.
+#     Persisted via `memory/cache.save_failed_attempt` from executor and API CI/CD webhook.
+#     Surfaced on retry through orchestrator context and `AgentState.previous_attempts`."""
+#     attempt_id: str
+#     ticket_id: str
+#     phase_failed: Literal["IMPLEMENTATION", "CICD", "PLANNING_REJECTED", "RESEARCH", "ORCHESTRATOR"]
+#     error_type: str = "unknown"
+#     error_summary: str
+#     plan_hash: Optional[str] = None
+#     plan_used: Optional[dict[str, Any]] = None
+#     timestamp: str
+# --- end M1.3: FailedAttemptRecord ---
 
 
 class ApprovalDecision(BaseModel):

@@ -62,14 +62,16 @@ def _run_git(args: list[str], cwd: str, check: bool = True) -> subprocess.Comple
     )
 
 
-def validate_repository(repo_path: str) -> tuple[bool, str]:
-    """Validate repository."""
-    p = Path(repo_path)
-    if not p.exists():
-        return False, f"Repository path does not exist: {repo_path}"
-    if not (p / ".git").exists() and not _run_git(["rev-parse", "--git-dir"], str(p), check=False).returncode == 0:
-        return False, f"Not a git repository: {repo_path}"
-    return True, "ok"
+# --- M1.3 commented out: validate_repository (see docs/cleanup-audit.md) ---
+# def validate_repository(repo_path: str) -> tuple[bool, str]:
+#     """Validate repository."""
+#     p = Path(repo_path)
+#     if not p.exists():
+#         return False, f"Repository path does not exist: {repo_path}"
+#     if not (p / ".git").exists() and not _run_git(["rev-parse", "--git-dir"], str(p), check=False).returncode == 0:
+#         return False, f"Not a git repository: {repo_path}"
+#     return True, "ok"
+# --- end M1.3: validate_repository ---
 
 
 def make_branch_name(ticket_id: str, prefix: str = "fix", description: str = "") -> str:

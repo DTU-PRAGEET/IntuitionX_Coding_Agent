@@ -246,12 +246,14 @@ class CursorGateway(ABC):
         """Execute a shell command in the repository via Cursor."""
         ...
 
-    def search_structured(self, query: str, *, path: str = ".") -> CursorSearchResponse:
-        """Convenience — search and return parsed structured hits."""
-        result = self.search(query, path=path)
-        if result.search_response is not None:
-            return result.search_response
-        return parse_search_response(result.text, query)
+    # --- M1.3 commented out: search_structured (see docs/cleanup-audit.md) ---
+    # def search_structured(self, query: str, *, path: str = ".") -> CursorSearchResponse:
+    #     """Convenience — search and return parsed structured hits."""
+    #     result = self.search(query, path=path)
+    #     if result.search_response is not None:
+    #         return result.search_response
+    #     return parse_search_response(result.text, query)
+    # --- end M1.3: search_structured ---
 
 
 class DryRunCursorGateway(CursorGateway):

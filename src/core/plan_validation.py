@@ -105,12 +105,14 @@ def validate_execution_plan(
     return validate_plan_triad(plan) + validate_plan_paths(plan, research, repo_path)
 
 
-def validate_execution_plan_strict(
-    plan: ExecutionPlan,
-    repo_path: str,
-    research: ResearchReport | None = None,
-) -> list[str]:
-    """All validation errors including hard instruction EDIT failures."""
-    triad_and_paths = validate_execution_plan(plan, repo_path, research)
-    hard, _soft = validate_instruction_edits(plan, repo_path)
-    return triad_and_paths + hard
+# --- M1.3 commented out: validate_execution_plan_strict (see docs/cleanup-audit.md) ---
+# def validate_execution_plan_strict(
+#     plan: ExecutionPlan,
+#     repo_path: str,
+#     research: ResearchReport | None = None,
+# ) -> list[str]:
+#     """All validation errors including hard instruction EDIT failures."""
+#     triad_and_paths = validate_execution_plan(plan, repo_path, research)
+#     hard, _soft = validate_instruction_edits(plan, repo_path)
+#     return triad_and_paths + hard
+# --- end M1.3: validate_execution_plan_strict ---

@@ -47,8 +47,13 @@ def get_langsmith_run_id() -> str:
 from evals.evaluators.executor_judge import executor_judge_from_artifact
 from evals.evaluators.planner_judge import planner_judge_from_artifact
 from evals.evaluators.preflight_scores import executor_preflight_score, planner_preflight_score
-from evals.evaluators.scoring import file_identification_f1, route_correctness
-from evals.evaluators.legacy_scoring import fix_type_match, patch_contains_excludes, plan_line_overlap
+from evals.evaluators.scoring import (
+    file_identification_f1,
+    fix_type_match,
+    patch_contains_excludes,
+    plan_line_overlap,
+    route_correctness,
+)
 from evals.harness.prediction import Prediction
 from evals.harness.targets import TARGETS
 from evals.schema.case import EvalCase, ExpectedLineRange, RepoSnapshot, TicketInput

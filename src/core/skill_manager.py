@@ -705,35 +705,37 @@ class PromptBuilder:
         manifest = load_skill_manifest(skills_dir)
         return load_skill_body(skills_dir), manifest
 
-class SkillManager:
-    """Single entry point for skill discovery, selection, and prompt assembly."""
-
-    @staticmethod
-    def build_prompt(
-        agent: str,
-        skills_dir: Path,
-        context: dict[str, Any],
-        *,
-        ticket: JiraTicket | None = None,
-        include_references: bool = True,
-        extra_instructions: str = "",
-    ) -> tuple[str, SkillManifest]:
-        """Build Prompt for SkillManager."""
-        return PromptBuilder.build(
-            agent,
-            skills_dir,
-            context,
-            ticket=ticket,
-            include_references=include_references,
-            extra_instructions=extra_instructions,
-        )
-
-    @staticmethod
-    def build_system_only(skills_dir: Path) -> tuple[str, SkillManifest]:
-        """Build System Only for SkillManager."""
-        return PromptBuilder.build_system_only(skills_dir)
-
-    @staticmethod
-    def registry(skills_root: Path | str | None = None) -> SkillRegistry:
-        """Registry for SkillManager."""
-        return get_skill_registry(skills_root)
+# --- M1.3 commented out: SkillManager (see docs/cleanup-audit.md) ---
+# class SkillManager:
+#     """Single entry point for skill discovery, selection, and prompt assembly."""
+#
+#     @staticmethod
+#     def build_prompt(
+#         agent: str,
+#         skills_dir: Path,
+#         context: dict[str, Any],
+#         *,
+#         ticket: JiraTicket | None = None,
+#         include_references: bool = True,
+#         extra_instructions: str = "",
+#     ) -> tuple[str, SkillManifest]:
+#         """Build Prompt for SkillManager."""
+#         return PromptBuilder.build(
+#             agent,
+#             skills_dir,
+#             context,
+#             ticket=ticket,
+#             include_references=include_references,
+#             extra_instructions=extra_instructions,
+#         )
+#
+#     @staticmethod
+#     def build_system_only(skills_dir: Path) -> tuple[str, SkillManifest]:
+#         """Build System Only for SkillManager."""
+#         return PromptBuilder.build_system_only(skills_dir)
+#
+#     @staticmethod
+#     def registry(skills_root: Path | str | None = None) -> SkillRegistry:
+#         """Registry for SkillManager."""
+#         return get_skill_registry(skills_root)
+# --- end M1.3: SkillManager ---

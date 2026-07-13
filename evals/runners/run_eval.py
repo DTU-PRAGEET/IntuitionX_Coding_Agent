@@ -25,7 +25,7 @@ from pathlib import Path
 
 from evals.evaluators import EVALUATORS
 from evals.evaluators.base import EvaluatorSpec
-from evals.evaluators.legacy_scoring import (
+from evals.evaluators.scoring import (
     fix_type_match,
     patch_contains_excludes,
     plan_line_overlap,

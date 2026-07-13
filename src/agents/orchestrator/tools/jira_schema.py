@@ -104,11 +104,13 @@ def enrich_security_ticket(raw: JiraTicketRaw) -> JiraEnrichment:
     )
 
 
-def raw_to_legacy_fields(raw: JiraTicketRaw, enrichment: JiraEnrichment) -> dict[str, Any]:
-    """Map raw + enrichment into legacy JiraTicket TypedDict-compatible fields."""
-    return {
-        "issue_id": raw.key,
-        "title": raw.summary or raw.key,
-        "problem_statement": raw.description or raw.summary,
-        "enrichment": enrichment.model_dump(),
-    }
+# --- M1.3 commented out: raw_to_legacy_fields (see docs/cleanup-audit.md) ---
+# def raw_to_legacy_fields(raw: JiraTicketRaw, enrichment: JiraEnrichment) -> dict[str, Any]:
+#     """Map raw + enrichment into legacy JiraTicket TypedDict-compatible fields."""
+#     return {
+#         "issue_id": raw.key,
+#         "title": raw.summary or raw.key,
+#         "problem_statement": raw.description or raw.summary,
+#         "enrichment": enrichment.model_dump(),
+#     }
+# --- end M1.3: raw_to_legacy_fields ---

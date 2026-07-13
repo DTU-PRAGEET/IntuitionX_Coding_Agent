@@ -70,30 +70,32 @@ def log_repo_snapshot(logger: Any, event: str, repo_path: str, **extra: Any) -> 
     return snap
 
 
-def log_edit_patch(
-    logger: Any,
-    *,
-    phase: str,
-    step_id: int,
-    file_path: str,
-    old_string: str | None,
-    new_string: str | None,
-    **extra: Any,
-) -> None:
-    """Log Edit Patch for this module."""
-    old_s = old_string or ""
-    new_s = new_string or ""
-    logger.info(
-        f"{phase}_edit_patch",
-        step_id=step_id,
-        file=file_path,
-        old_string_len=len(old_s),
-        new_string_len=len(new_s),
-        old_sha256=sha256_text(old_s),
-        new_sha256=sha256_text(new_s),
-        old_eq_new=old_s == new_s,
-        **extra,
-    )
+# --- M1.3 commented out: log_edit_patch (see docs/cleanup-audit.md) ---
+# def log_edit_patch(
+#     logger: Any,
+#     *,
+#     phase: str,
+#     step_id: int,
+#     file_path: str,
+#     old_string: str | None,
+#     new_string: str | None,
+#     **extra: Any,
+# ) -> None:
+#     """Log Edit Patch for this module."""
+#     old_s = old_string or ""
+#     new_s = new_string or ""
+#     logger.info(
+#         f"{phase}_edit_patch",
+#         step_id=step_id,
+#         file=file_path,
+#         old_string_len=len(old_s),
+#         new_string_len=len(new_s),
+#         old_sha256=sha256_text(old_s),
+#         new_sha256=sha256_text(new_s),
+#         old_eq_new=old_s == new_s,
+#         **extra,
+#     )
+# --- end M1.3: log_edit_patch ---
 
 
 def file_content_hash(repo_path: str, rel_path: str) -> str:
@@ -107,27 +109,29 @@ def file_content_hash(repo_path: str, rel_path: str) -> str:
         return ""
 
 
-def old_string_in_file(repo_path: str, rel_path: str, old_string: str) -> dict[str, Any]:
-    """Old String In File for this module."""
-    full = Path(repo_path) / rel_path
-    if not full.is_file():
-        return {"exists": False, "occurrence_count": 0, "file_sha256": ""}
-    try:
-        content = full.read_text(encoding="utf-8")
-    except OSError:
-        return {"exists": False, "occurrence_count": 0, "file_sha256": ""}
-    count = content.count(old_string) if old_string else 0
-    return {
-        "exists": count > 0,
-        "occurrence_count": count,
-        "file_sha256": sha256_text(content),
-    }
-
-
-def file_git_diff(repo_path: str, rel_path: str) -> str:
-    """File Git Diff for this module."""
-    result = _run_git(["diff", "--", rel_path], repo_path, check=False)
-    return (result.stdout or result.stderr or "").strip()
+# --- M1.3 commented out: old_string_in_file, file_git_diff (see docs/cleanup-audit.md) ---
+# def old_string_in_file(repo_path: str, rel_path: str, old_string: str) -> dict[str, Any]:
+#     """Old String In File for this module."""
+#     full = Path(repo_path) / rel_path
+#     if not full.is_file():
+#         return {"exists": False, "occurrence_count": 0, "file_sha256": ""}
+#     try:
+#         content = full.read_text(encoding="utf-8")
+#     except OSError:
+#         return {"exists": False, "occurrence_count": 0, "file_sha256": ""}
+#     count = content.count(old_string) if old_string else 0
+#     return {
+#         "exists": count > 0,
+#         "occurrence_count": count,
+#         "file_sha256": sha256_text(content),
+#     }
+#
+#
+# def file_git_diff(repo_path: str, rel_path: str) -> str:
+#     """File Git Diff for this module."""
+#     result = _run_git(["diff", "--", rel_path], repo_path, check=False)
+#     return (result.stdout or result.stderr or "").strip()
+# --- end M1.3: old_string_in_file, file_git_diff ---
 
 
 def snapshots_match(

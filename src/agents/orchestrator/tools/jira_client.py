@@ -7,7 +7,7 @@ from typing import Optional
 
 from jira import JIRA
 
-from src.agents.orchestrator.tools.jira_schema import JiraTicketRaw
+# from src.agents.orchestrator.tools.jira_schema import JiraTicketRaw  # M1.3: unused after fetch_* comment-out
 from src.core.config import settings
 from src.core.logging import get_logger
 
@@ -42,47 +42,49 @@ def credentials_configured() -> bool:
     return bool(settings.jira_server_url and settings.jira_email and settings.jira_api_token)
 
 
-def fetch_ticket_by_key(client: JIRA, issue_key: str) -> JiraTicketRaw:
-    """Fetch a single Jira ticket by key."""
-
-    def _fetch() -> JiraTicketRaw:
-        """Fetch for this module."""
-        issue = client.issue(issue_key, fields="summary,description,status,issuetype,priority,labels,components,comment")
-        return JiraTicketRaw(
-            key=issue.key,
-            summary=issue.fields.summary or "",
-            description=getattr(issue.fields, "description", "") or "",
-        )
-
-    try:
-        raw = _fetch()
-        _log.info("fetched", issue_key=issue_key)
-        return raw
-    except Exception as e:
-        raise RuntimeError(f"Jira fetch failed for issue_key={issue_key!r}: {e}") from e
-
-
-def fetch_tickets_from_jql(client: JIRA, jql: str, max_results: int = 50) -> list[JiraTicketRaw]:
-    """Run JQL and return minimal ticket payloads."""
-
-    def _fetch() -> list[JiraTicketRaw]:
-        """Fetch for this module."""
-        issues = client.search_issues(jql, maxResults=max_results, fields="summary,description")
-        return [
-            JiraTicketRaw(
-                key=issue.key,
-                summary=issue.fields.summary or "",
-                description=getattr(issue.fields, "description", "") or "",
-            )
-            for issue in issues
-        ]
-
-    try:
-        tickets = _fetch()
-        _log.info("jql_fetched", count=len(tickets), jql=jql[:120])
-        return tickets
-    except Exception as e:
-        raise RuntimeError(f"Jira JQL fetch failed for jql={jql!r}: {e}") from e
+# --- M1.3 commented out: fetch_ticket_by_key, fetch_tickets_from_jql (see docs/cleanup-audit.md) ---
+# def fetch_ticket_by_key(client: JIRA, issue_key: str) -> JiraTicketRaw:
+#     """Fetch a single Jira ticket by key."""
+#
+#     def _fetch() -> JiraTicketRaw:
+#         """Fetch for this module."""
+#         issue = client.issue(issue_key, fields="summary,description,status,issuetype,priority,labels,components,comment")
+#         return JiraTicketRaw(
+#             key=issue.key,
+#             summary=issue.fields.summary or "",
+#             description=getattr(issue.fields, "description", "") or "",
+#         )
+#
+#     try:
+#         raw = _fetch()
+#         _log.info("fetched", issue_key=issue_key)
+#         return raw
+#     except Exception as e:
+#         raise RuntimeError(f"Jira fetch failed for issue_key={issue_key!r}: {e}") from e
+#
+#
+# def fetch_tickets_from_jql(client: JIRA, jql: str, max_results: int = 50) -> list[JiraTicketRaw]:
+#     """Run JQL and return minimal ticket payloads."""
+#
+#     def _fetch() -> list[JiraTicketRaw]:
+#         """Fetch for this module."""
+#         issues = client.search_issues(jql, maxResults=max_results, fields="summary,description")
+#         return [
+#             JiraTicketRaw(
+#                 key=issue.key,
+#                 summary=issue.fields.summary or "",
+#                 description=getattr(issue.fields, "description", "") or "",
+#             )
+#             for issue in issues
+#         ]
+#
+#     try:
+#         tickets = _fetch()
+#         _log.info("jql_fetched", count=len(tickets), jql=jql[:120])
+#         return tickets
+#     except Exception as e:
+#         raise RuntimeError(f"Jira JQL fetch failed for jql={jql!r}: {e}") from e
+# --- end M1.3: fetch_ticket_by_key, fetch_tickets_from_jql ---
 
 
 def extract_ticket_id_from_url(url: str) -> Optional[str]:
