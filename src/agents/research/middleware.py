@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 
-from src.agents.research.run_context import ResearchRunContext
 from src.core.logging import get_logger
+
+
+@dataclass
+class ResearchRunContext:
+    """Tracks skills loaded during one research agent invocation."""
+
+    loaded_skills: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def has_loaded_skills(self) -> bool:
+        """Has Loaded Skills for ResearchRunContext."""
+        return bool(self.loaded_skills)
 
 _log = get_logger("research_middleware")
 

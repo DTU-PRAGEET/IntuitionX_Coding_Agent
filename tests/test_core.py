@@ -43,7 +43,7 @@ def test_fetch_jira_raises_without_credentials():
     """Test Fetch Jira Raises Without Credentials for this module."""
     saved = _without_jira_env()
     try:
-        with patch("src.agents.orchestrator.tools.jira.credentials_configured", return_value=False):
+        with patch("src.integrations.jira.client.credentials_configured", return_value=False):
             with pytest.raises(JiraCredentialsError, match="Jira credentials not configured"):
                 fetch_jira_ticket("PLAT-9999")
     finally:

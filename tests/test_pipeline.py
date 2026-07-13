@@ -42,7 +42,7 @@ def test_get_allowed_tools_planner_executor():
 def test_builders_respect_permissions(tmp_path):
     """Test Builders Respect Permissions for this module."""
     from src.agents.executor.tools.builder import build_executor_tools
-    from src.agents.planner.tools.builder import build_planner_tools
+    from src.agents.planner.agent import build_planner_tools
     from src.agents.research.tools.builder import build_research_tool_registry
     from src.integrations.cursor.gateway import DryRunCursorGateway
 

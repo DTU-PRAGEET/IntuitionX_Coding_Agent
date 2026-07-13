@@ -6,7 +6,7 @@ from langchain_core.tools import StructuredTool
 
 from src.agents.research.tools.load_skill import make_load_skill_tool
 from src.agents.research.tools.cursor_search import make_cursor_search_tool
-from src.agents.research.tools.langchain_tools import make_repo_profile_tool
+from src.agents.research.tools.repo_profile import make_repo_profile_tool
 from src.agents.research.tools.web_search import web_search
 from src.core.logging import get_logger
 from src.core.tool_permissions import get_allowed_tools

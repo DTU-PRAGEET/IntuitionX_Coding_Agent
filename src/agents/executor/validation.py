@@ -12,7 +12,6 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.core.edit_step import is_instruction_edit
 from src.core.logging import get_logger
 from src.core.runner_utils import invoke_tracked, llm_content, parse_llm_json
 from src.core.schemas import ExecutionPlan

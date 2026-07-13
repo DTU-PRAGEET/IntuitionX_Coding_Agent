@@ -46,7 +46,7 @@ def get_langsmith_run_id() -> str:
 
 from evals.evaluators.executor_judge import executor_judge_from_artifact
 from evals.evaluators.planner_judge import planner_judge_from_artifact
-from evals.evaluators.preflight_scores import executor_preflight_score, planner_preflight_score
+from evals.evaluators.preflight import executor_preflight_score, planner_preflight_score
 from evals.evaluators.scoring import (
     file_identification_f1,
     fix_type_match,

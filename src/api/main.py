@@ -9,7 +9,6 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import PlainTextResponse, StreamingResponse
 
-from src.api.auth import verify_job_access
 from src.api.execution_events import TERMINAL_EVENT_TYPES, event_store
 from src.api.pause_display import pause_display_message, pause_display_with_actions
 from src.api.schemas import (
@@ -29,6 +28,21 @@ from src.api.ticket_jobs import (
     ticket_job_store,
 )
 from src.core.schemas import ApprovalDecision
+
+
+def verify_job_access(job_id: str) -> TicketJob:
+    """Verify the caller may read events for this job.
+
+    Phase 1: existence check only (404 if unknown).
+    Phase 2: enforce API key or user-scoped ownership.
+    """
+    job = ticket_job_store.get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No job found for this job id",
+        )
+    return job
 
 
 @asynccontextmanager

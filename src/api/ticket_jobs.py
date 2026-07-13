@@ -30,7 +30,7 @@ from src.api.redis_store import (
 from src.api.schemas import TicketJobStatus, TicketStatusResponse
 from src.core.config import settings
 from src.core.logging import get_logger
-from src.pipeline.graph_outcome import GraphRunOutcome
+from src.pipeline.graph_runner import GraphRunOutcome
 from src.pipeline.pipeline_event_factory import PipelineEventFactory
 
 _log = get_logger("ticket_jobs")

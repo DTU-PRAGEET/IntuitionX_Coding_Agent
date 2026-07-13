@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from langgraph.types import Command
 
@@ -12,8 +13,21 @@ from src.core.graph import build_graph
 from src.core.logging import get_logger
 from src.core.state import AgentState, initial_state
 from src.core.token_usage import start_pipeline_tracking, stop_pipeline_tracking
-from src.pipeline.graph_outcome import GraphRunOutcome
 from src.pipeline.pipeline_event_factory import PipelineEventFactory
+
+RunKind = Literal["completed", "paused", "failed"]
+
+
+@dataclass
+class GraphRunOutcome:
+    """Graph Run Outcome.
+    Encapsulates related behavior for the Graph Run Outcome component.
+    """
+    kind: RunKind
+    state: dict[str, Any]
+    gate: str | None = None
+    error: str | None = None
+    interrupt_payload: dict[str, Any] | None = None
 
 _log = get_logger("graph_runner")
 

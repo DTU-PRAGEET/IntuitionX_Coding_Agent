@@ -18,7 +18,7 @@ from src.agents.planner.agent import (
     run_planner,
     synthesize_micro_research_output,
 )
-from src.agents.planner.tools.builder import build_planner_tools
+from src.agents.planner.agent import build_planner_tools
 from src.core.tool_permissions import get_allowed_tools
 from src.core.schemas import ExecutionPlan, ExecutionStep, ResearchReport
 from src.core.plan_validation import validate_instruction_edits

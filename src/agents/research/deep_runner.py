@@ -15,7 +15,7 @@ from src.agents.research.middleware import (
     ProgressiveSkillMiddleware,
     ResearchToolFilterMiddleware,
 )
-from src.agents.research.run_context import ResearchRunContext
+from src.agents.research.middleware import ResearchRunContext
 from src.agents.research.tools.builder import build_research_tool_registry
 from src.agents.research.tools.repo_profile import bootstrap_repo_context
 from src.core.logging import configure_logging, get_logger

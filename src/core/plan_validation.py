@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
-from src.core.schemas import ExecutionPlan, ResearchReport
+from src.core.schemas import ExecutionPlan, ExecutionStep, ResearchReport
+
+
+def is_instruction_edit(step: ExecutionStep | dict[str, Any]) -> bool:
+    """True when step uses an instruction-based EDIT (not legacy patches)."""
+    if isinstance(step, ExecutionStep):
+        return bool((step.instruction or "").strip())
+    return bool((step.get("instruction") or "").strip())
 
 
 def sync_files_to_change_from_edit_steps(plan: ExecutionPlan) -> ExecutionPlan:

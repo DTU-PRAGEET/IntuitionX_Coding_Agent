@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+from langchain_core.tools import tool
 
 from src.core.state import RepoProfile
 
@@ -93,3 +96,15 @@ def profile_repository(repo_path: str) -> RepoProfile:
         modules=modules,
         package_roots=package_roots,
     )
+
+
+def make_repo_profile_tool(repo_path: str):
+    """Factory — bind repo path for repo_profile tool."""
+
+    @tool
+    def repo_profile() -> str:
+        """Return repo layout JSON (type, modules, package roots). No arguments."""
+        profile = profile_repository(repo_path)
+        return json.dumps(dict(profile), indent=2)
+
+    return repo_profile

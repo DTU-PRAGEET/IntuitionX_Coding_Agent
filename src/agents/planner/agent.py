@@ -13,6 +13,8 @@ from langsmith import traceable
 from pydantic import ValidationError
 
 from src.core.logging import configure_logging, get_logger
+from src.core.tool_permissions import get_allowed_tools
+from src.tools.registry import ToolRegistry
 from src.core.plan_validation import (
     sync_files_to_change_from_edit_steps,
     validate_execution_plan,
@@ -368,3 +370,15 @@ def planner_node(state: AgentState) -> AgentState:
 def plan_hash(plan: PlanOutput) -> str:
     """Plan Hash for this module."""
     return hashlib.sha256(json.dumps(plan, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def build_planner_tools(repo_path: str) -> tuple[ToolRegistry, list[str]]:
+    """Return (ToolRegistry, allowed tool names) for Planner verification."""
+    allowed = get_allowed_tools("planner")
+    registry = ToolRegistry(repo_path)
+    for name in allowed:
+        if registry.get(name) is None:
+            registry.dispose()
+            raise RuntimeError(f"Planner tool {name!r} missing from ToolRegistry")
+    _log.info("built", repo_path=repo_path, tools=allowed)
+    return registry, allowed

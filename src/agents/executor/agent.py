@@ -29,7 +29,7 @@ from src.agents.executor.validation import (
     validate_edit,
     validate_edit_progressive,
 )
-from src.core.edit_step import is_instruction_edit
+from src.core.plan_validation import is_instruction_edit, sync_files_to_change_from_edit_steps
 from src.core.llm import TaskComplexity, get_llm
 from src.core.logging import configure_logging, get_logger
 from src.core.file_paths import repair_repo_from_cursor_temp_clone, remap_cursor_path
@@ -41,7 +41,6 @@ from src.core.repo_snapshot import (
 )
 from src.core.skill_scripts.run_tests import run_tests_for_file
 from src.core.skill_scripts.verify_edit import verify_intent_marker
-from src.core.plan_validation import sync_files_to_change_from_edit_steps
 from src.core.schemas import ExecutionPlan, ToolResult
 from src.core.state import AgentState, ExecutionOutput
 from src.core.config import settings

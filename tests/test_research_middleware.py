@@ -22,7 +22,7 @@ from src.agents.research.middleware import (
     _cursor_search_completed,
     _visible_research_tools,
 )
-from src.agents.research.run_context import ResearchRunContext
+from src.agents.research.middleware import ResearchRunContext
 from src.agents.research.tools.builder import build_research_tool_registry
 from src.agents.research.tools.load_skill import make_load_skill_tool
 from src.agents.research.memory import InMemoryResearchMemory

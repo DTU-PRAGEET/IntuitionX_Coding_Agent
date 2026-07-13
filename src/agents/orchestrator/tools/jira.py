@@ -345,13 +345,9 @@ def _issue_to_jira_ticket(issue: Any, client: Any) -> JiraTicket:
 
 def fetch_jira_ticket(ticket_id: str) -> JiraTicket:
     """Fetch and normalize Jira issue — Tier 1 + Tier 2 + security enrichment."""
-    if not credentials_configured():
-        raise JiraCredentialsError(
-            "Jira credentials not configured — set JIRA_SERVER_URL, JIRA_EMAIL, JIRA_API_TOKEN"
-        )
-    client = create_jira_client()
-    issue = client.issue(ticket_id, expand="changelog")
-    return _issue_to_jira_ticket(issue, client)
+    from src.integrations.jira.client import fetch_jira_ticket as _fetch_jira_ticket
+
+    return _fetch_jira_ticket(ticket_id)
 
 
 def is_ticket_done(ticket: JiraTicket) -> bool:

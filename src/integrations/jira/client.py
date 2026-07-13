@@ -15,6 +15,7 @@ from src.agents.orchestrator.tools.jira import (
     _issue_to_jira_ticket,
 )
 from src.agents.orchestrator.tools.jira_client import (
+    JiraCredentialsError,
     create_jira_client,
     credentials_configured,
 )
@@ -108,3 +109,14 @@ def fetch_ticket_by_id(ticket_id: str) -> tuple[JiraTicket, dict[str, Any], Pars
         parsed=parsed.model_dump(),
     )
     return ticket, raw_payload, parsed
+
+
+def fetch_jira_ticket(ticket_id: str) -> JiraTicket:
+    """Fetch and normalize Jira issue — Tier 1 + Tier 2 + security enrichment."""
+    if not credentials_configured():
+        raise JiraCredentialsError(
+            "Jira credentials not configured — set JIRA_SERVER_URL, JIRA_EMAIL, JIRA_API_TOKEN"
+        )
+    client = create_jira_client()
+    issue = client.issue(ticket_id, expand="changelog")
+    return _issue_to_jira_ticket(issue, client)
