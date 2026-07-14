@@ -141,7 +141,7 @@ class HumanApprovalGate(TypedDict):
 
 class FailedAttempt(TypedDict):
     """Prior failure row on AgentState.previous_attempts for self-healing retries.
-    Loaded from Redis/Mongo cache; summarized in orchestrator routing context."""
+    Loaded from MongoDB (per ticket_id, no TTL); summarized in orchestrator routing context."""
     attempt_id: str
     ticket_id: str
     phase_failed: str

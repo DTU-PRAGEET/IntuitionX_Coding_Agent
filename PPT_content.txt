@@ -1,0 +1,488 @@
+# IntuitionX Final Presentation — Slide Content
+# Generated: 2026-07-13 | Source: repo code, evals/runs/, docs/, git history
+# Author: Prageet Mishra (git: Prageet_Mishra) | Team: IntuitionX / Backend Platform Dev (README.md SPRINKLR_LLM_CLIENT_IDENTIFIER)
+
+---
+
+### Slide 1 — IntuitionX
+**Says (bullets, ≤5, ≤8 words each):**
+- IntuitionX — security tickets to PRs
+- Autonomous Jira-to-GitHub workflow
+- Prageet Mishra · Backend Platform Dev
+- Sprinklr intern project · July 2026
+
+**Visual needed:** Title card — product name, one-line tagline, your name/team logo.
+
+**Evidence:** `README.md:1-4` (Sprinklr Jira Solver / autonomous coding platform); `src/integrations/llm/sprinklr_router.py:1` (IntuitionX LLM router); `git log -1` author Prageet_Mishra.
+
+**Speaker notes:** IntuitionX is our internal name for an agent that takes a Jira security ticket and produces a reviewed pull request. I built it as an intern on Backend Platform Dev. Tonight I'll show the problem, how it works, and measured eval results—not a slide-deck demo of agent theory.
+
+**Flag:** Official team/org chart name not in repo—confirm with mentor before presenting.
+
+---
+
+### Slide 2 — The Problem
+**Says (bullets, ≤5, ≤8 words each):**
+- Today: Cycode opens security tickets
+- Most sit unresolved in backlog
+- Devs deprioritize repetitive vuln fixes
+- IntuitionX: ticket in → PR out
+
+**Visual needed:** Split panel — left: Jira backlog screenshot (Cycode-labeled tickets, aged >30d); right: IntuitionX flow one-liner with arrow to GitHub PR.
+
+**Evidence:** `README.md:3` (Jira ticket → MR goal); `docs/plan.md:14-22` (autonomous platform accepts Jira ticket, returns MR). **No Cycode backlog stats, ticket ages, or Jira query exports exist in this repo.**
+
+**Speaker notes:** Security scanners like Cycode create a steady stream of fixable tickets. In practice those tickets compete with feature work and often age in the backlog. IntuitionX doesn't replace the developer—it clears the smaller, well-scoped security fixes while humans focus on harder work.
+
+**Flag:** **REQUIRED — grab live Jira/Cycode screenshot.** Run something like `project = X AND labels = cycode AND status != Done ORDER BY created ASC` and capture count + oldest ticket age. Without this, cut the backlog-age bullet or label it illustrative.
+
+---
+
+### Slide 3 — Why Security Tickets, Phase 1
+**Says (bullets, ≤5, ≤8 words each):**
+- Today: broad bug/feature scope deferred
+- Phase 1: security-only, bounded fixes
+- Skills encode repeatable remediation patterns
+- Git worktree isolates every change
+- Tests/Gradle explicitly out of scope
+
+**Visual needed:** Two-column — "Phase 1 IN" (security, CVE, OWASP skills) vs "Phase 1 OUT" (features, Gradle, RAG, automated CI webhooks) from plan.md §11.
+
+**Evidence:** `docs/plan.md:24-34` (Phase 1 demo scenarios—all security/routing); `docs/plan.md:59` (Tests/Gradle deferred); `docs/plan.md:1187-1208` (Phase 2: RAG, AST, Gradle, CI webhooks); `skills/security/README.md:7-18` (OWASP-aligned fix-pattern skills); `src/agents/executor/tools/git_worktree.py:186-261` (isolated worktree per ticket). **PRD v2.0 scoping rationale is referenced at `docs/plan.md:8` but the PRD file is outside this repo** (`file:///Users/prageet.mishra/Documents/Project%20Material/PRD/...`).
+
+**Speaker notes:** We narrowed Phase 1 to security because fixes follow known patterns—parameterize SQL, remove secret literals, enforce JWT algorithms—and skills can teach those patterns without rewriting core Python. Each run edits only an isolated git worktree, so blast radius stays small. We deliberately deferred running Gradle or full test suites to ship the pipeline first.
+
+**Flag:** PRD v2.0 Cycode-volume rationale not readable from repo—quote from PRD PDF if reviewers ask "why security first."
+
+---
+
+### Slide 4 — What I Borrowed and Changed
+**Says (bullets, ≤5, ≤8 words each):**
+- Borrowed: Pi skills-as-config, thin runners
+- Borrowed: HumanLayer one-job-per-agent trees
+- Changed: Gate 0–3 routing decision tree
+- Changed: instruction plans, not patch strings
+- Changed: net-flat skill token budget
+
+**Visual needed:** Venn diagram — Pi (skills in markdown, L1 tools) ∩ HumanLayer (short decision trees) → IntuitionX deltas (orchestrator Steps 2–6, semantic ExecutionPlan).
+
+**Evidence:** `docs/Implementation_plan.md:12-13` (Skills-as-Config; Pi-Style Iterative Build); `docs/plan.md:43` (100% orchestration intelligence in skills markdown); `daily_dairy.md:15-17` (studied HumanLayer skill style—short, decision-tree, one job per agent); `skills/orchestrator/orchestrator.md:22-176` (Steps 2–6 EXIT → locatability → MICRO/FULL tree + mandatory `reasoning`); `daily_dairy.md:227-230` (deleted `semantic_target.py` 841 lines; instruction-based planner replaces symbol resolver); `docs/Solved_errors.md:640-645` (research call-1 tokens ~7,587 → ~2,500 after progressive tool disclosure).
+
+**Speaker notes:** Pi taught us to put agent intelligence in markdown skills with thin Python runners. HumanLayer taught us one agent, one job, short decision trees. I didn't copy either wholesale—I replaced vague trivial/non-trivial routing with an auditable Gate 0–3 tree, replaced brittle old_string/new_string plans with semantic instructions Cursor can apply, and capped research prompt bloat with progressive tool loading.
+
+**Flag:** "Net-flat instruction count" is evidenced by token reduction in `docs/Solved_errors.md:642-645`, not a single enforced constant in code—phrase as measured outcome, not a hard limiter name.
+
+---
+
+### Slide 5 — Feature Teaser (4 Cards)
+**Says (bullets, ≤5, ≤8 words each):**
+- Smart routing — FULL / MICRO / EXIT
+- Self-healing executor — two batch passes
+- Skills plugins — teams add markdown only
+- Measured quality — 18-case golden benchmark
+
+**Visual needed:** Four icon cards in a row, each one line; no detail yet.
+
+**Evidence:** `skills/orchestrator/orchestrator.md:163-168` (routing_route FULL|MICRO|EXIT); `src/agents/executor/agent.py:912-1016` (`_run_edit_batch_phase`, max 2 passes); `docs/skills-authoring.md:26-45` (skill = markdown under skills/); `evals/baselines/current.json:4-15` (run_030, 18/18 pass rate).
+
+**Speaker notes:** These four cards preview the rest of the deck: routing decides how much work a ticket needs, the executor repairs its own failed edits, teams extend behavior via skill files, and we prove quality with a frozen golden benchmark—not gut feel.
+
+**Flag:** None.
+
+---
+
+## SECTION 2a — Workflow
+
+### Slide 6 — Ticket In → PR Out
+**Says (bullets, ≤5, ≤8 words each):**
+- Cycode/Jira ticket triggers webhook
+- Orchestrator — route only, no code
+- Research — maps repo (FULL only)
+- Planner — semantic fix plan
+- Executor — worktree, edit, open PR
+
+**Visual needed:** Left-to-right swimlane: Jira → Orchestrator → (Research if FULL) → Planner → [Gate 1/2 HITL] → Executor → GitHub PR. Label MICRO path skipping Research.
+
+**Evidence:** `README.md:32-36` (agent chain); `src/core/graph.py:45,62` (Gate 1 research_hag, Gate 2 planning_hag); `skills/orchestrator/orchestrator.md:14-15` (orchestrator does NOT read repo); `src/agents/executor/agent.py:1232-1315` (executor_node: worktree → edits → PR).
+
+**Speaker notes:** A ticket enters through Jira or our API. The orchestrator—think of it as the triage nurse—only decides the route. FULL tickets get a research pass to find files; MICRO tickets skip straight to planning because the ticket already names the file. The executor works in an isolated git worktree and opens the PR.
+
+**Flag:** Production Cycode webhook wiring not verified in repo—`src/api/main.py` exposes FastAPI `/run`; Cycode integration is INFERRED from problem statement.
+
+---
+
+### Slide 7 — Why This Architecture
+**Says (bullets, ≤5, ≤8 words each):**
+- Today: duplicate M1.3 stack, zero callers
+- LangGraph pipeline is sole live path
+- Multi-agent = separate audit trails
+- Redis semaphore caps parallel cost
+- Monolith hid routing in Python
+
+**Visual needed:** Before/after — dead `PipelineOrchestrator` box (crossed out) vs live `src/core/graph.py` + `src/pipeline/graph_runner.py`.
+
+**Evidence:** `daily_dairy.md:168-177` (M1.3 PipelineOrchestrator + sub-agents ~1,500+ lines, zero importers; LangGraph + `src/pipeline/runner.py` is live path); `docs/plan.md:42-44` (multi-agent for PRD phases + separate audit trails; routing intelligence 100% in skills not graph Python); `src/api/ticket_jobs.py:175` (`asyncio.Semaphore(settings.api_max_concurrency)`); `src/core/config.py:90` (default `API_MAX_CONCURRENCY=2`).
+
+**Speaker notes:** We actually had two orchestration stacks. The older M1.3 monolithic orchestrator had no callers—dead weight next to the LangGraph pipeline. Splitting into four agents gives us separate LangSmith traces per phase and lets us cap concurrency at two jobs so Cursor and LLM costs don't spike when multiple tickets arrive.
+
+**Flag:** None for architecture choice; Cycode trigger path still unverified in code.
+
+---
+
+## SECTION 2b — Architecture
+
+### Slide 8 — Full Architecture Diagram
+**Says (bullets, ≤5, ≤8 words each):**
+- LangGraph — phase state machine
+- AgentState — single workflow memory
+- Cursor via Python cursor-sdk bridge
+- Headless Agent.create, not IDE SDK
+- FastAPI or Chainlit human gates
+
+**Visual needed:** Layered diagram: UI/API → LangGraph (`src/core/graph.py`) → 4 agents → CursorGateway → `cursor_sdk.Agent.create` subprocess bridge → git worktree.
+
+**Evidence:** `docs/plan.md:67` (AgentState canonical workflow state); `src/core/graph.py` (HITL interrupt nodes); `src/integrations/cursor/gateway.py:1,16` (CursorGateway isolates Cursor; uses `run_local_agent`); `src/integrations/cursor/client.py:109-151` (`from cursor_sdk import Agent, LocalAgentOptions` — headless local agent, NOT TypeScript `@cursor/sdk`); `README.md:20-24` (FastAPI + Chainlit entrypoints).
+
+**Speaker notes:** LangGraph is the conductor—it holds workflow state and pauses for human approval. All code editing goes through CursorGateway, which calls the Python cursor-sdk package to run a headless local agent in the repo directory. That's a subprocess-style bridge, not the Cursor IDE extension and not the TypeScript Cursor SDK.
+
+**Flag:** Confirm with mentor whether to say "Cursor CLI" vs "cursor-sdk bridge"—code path is `cursor_sdk.Agent.create`, docstring says "local agent prompts (milestone 1.3)" (`client.py:1`).
+
+---
+
+### Slide 9 — USP: Engineering Decisions
+**Says (bullets, ≤5, ≤8 words each):**
+- Sequential Gate 0–3 routing tree
+- Pattern-mirroring tiebreak for MICRO
+- Mandatory auditable `reasoning` field
+- Pre/post SHA hash validation
+- Semantic LLM validation, not diff match
+
+**Visual needed:** Decision-tree thumbnail from orchestrator.md Step 4 + side callout: `pre_hash == post_hash` noop guard in executor.
+
+**Evidence:** `skills/orchestrator/orchestrator.md:66-127` (4a locatability → 4b FULL stops → 4c MICRO + pattern-mirroring test); `skills/orchestrator/orchestrator.md:161-176` (mandatory `reasoning` cites ticket evidence + locatability + pattern-mirroring); `src/agents/executor/agent.py:794-813` (`pre_hash == post_hash` noop check before LLM validation); `src/agents/executor/agent.py:933-936` (capture pre-edit hash per step); `docs/Solved_errors.md:256-266` (SHA-match/delta short-circuit replaces fragile line matching); `daily_dairy.md:232-235` (validate security property, not patch shape).
+
+**Speaker notes:** Three decisions matter for reliability. Routing follows a strict ordered tree—not vibes—with a pattern-mirroring test so MICRO routes are defensible in the `reasoning` field. The executor captures a SHA-256 hash of each file before and after Cursor edits; if the hash didn't change, we don't pretend the fix worked. Validation asks an LLM whether the security property holds in the edited region—not whether strings match byte-for-byte.
+
+**Flag:** None.
+
+---
+
+### Slide 10 — Cost Optimization
+**Says (bullets, ≤5, ≤8 words each):**
+- Today: bloated deepagents tool schemas
+- In-process read/grep/bash — not Cursor
+- Research call-1: 7587 → 2500 tokens
+- Tool schemas: 4814 → ~450–900 tokens
+- Cursor budgeted: 2 searches, 2 edit passes
+
+**Visual needed:** Bar chart — before/after token counts for research call-1 (two bars); caption listing hardcoded L1 tools vs Cursor-only search/edit.
+
+**Evidence:** `docs/plan.md:47` (in-process hardened tools, not MCP—for latency); `src/tools/` L1 tools per `docs/Project_state.md:50`; `docs/Solved_errors.md:610-645` (measured: call-1 input ~7,587 → ~2,500 tokens; tool-schema cost 4,814 → ~450–900); `skills/research/research.md` + `daily_dairy.md:21` (max 2 `cursor_search`, max 8 primitives); `src/core/config.py:73-75` (`CURSOR_MAX_EDIT_ATTEMPTS=2`). `evals/DOCS/eval_commands.md:385-432` lists Cursor *request counts* per eval mode, not dollar costs.
+
+**Speaker notes:** Cursor calls are expensive, so we use cheap in-process tools for reading and grepping. After progressive disclosure—unlocking tools and skills only when needed—first research LLM call dropped from about 7,600 tokens to 2,500. Cursor itself is budgeted: at most two repo searches in research and two whole-plan edit batches in the executor.
+
+**Flag:** **No dollar/token cost comparison vs "Cursor built-in tools only" end-to-end run exists.** To generate: run `run_030` with `TOKEN_USAGE` logging enabled and compare a branch with primitives disabled—see `docs/Solved_errors.md:550-551` for token_usage wiring. OpenRouter 429 incidents documented (`docs/Solved_errors.md:660`) but not quantified before/after recursion fix.
+
+---
+
+### Slide 11 — Self-Healing Executor
+**Says (bullets, ≤5, ≤8 words each):**
+- Batch pass 1 — all EDIT steps
+- LLM validates every edit step
+- Batch pass 2 — failed steps only
+- Re-validate; hard exit if still failing
+- `CURSOR_MAX_EDIT_ATTEMPTS` default = 2
+
+**Visual needed:** Flowchart exactly: EDIT batch 1 → validate all → (failures?) → EDIT batch 2 repair → validate → RuntimeError if still failed. Annotate real G-06 `retry_count: 1`.
+
+**Evidence:** `src/agents/executor/agent.py:912-1014` (`_run_edit_batch_phase`: pass 1 apply → validate → pass 2 repair → re-validate → `raise RuntimeError`); `src/core/config.py:73-75`; `skills/executor/executor.md:35-38` (never more than `cursor_max_edit_attempts` batch passes); `evals/runs/Test3-after-Skills-adjustment/artifacts/G-06.json:214-271` (batch pass 2 repair, `retry_count: 1`, deviation `"step 2: edit required batch pass 2 repair"`).
+
+**Speaker notes:** The executor contract is deliberately rigid. It batches every edit into one Cursor call, validates each step with structural checks plus an LLM judge, and only if something fails does it make a second batched repair call for those steps alone. Case G-06 in our benchmark needed exactly that—pass one didn't stick, pass two did. A third pass doesn't exist; we fail loud.
+
+**Flag:** `MAX_BATCH_PASSES` symbol not in codebase—actual setting is `settings.cursor_max_edit_attempts` / env `CURSOR_MAX_EDIT_ATTEMPTS`.
+
+---
+
+### Slide 12 — Skills Progressive Disclosure
+**Says (bullets, ≤5, ≤8 words each):**
+- Level 1 — YAML frontmatter in catalog
+- Level 2 — skill body on agent trigger
+- Level 3 — references via `load_skill`
+- Research: middleware injects body once
+- Teams add `skills/security/*.md` only
+
+**Visual needed:** Three-tier stack diagram mapping to directory layout `skills/<module>/<skill>.md` + `skills/research/references/`.
+
+**Evidence:** `docs/skills-authoring.md:28-45,51-70` (frontmatter + body structure); `src/core/skill_manager.py:676-706` (`PromptBuilder.build` / `build_system_only` — manifest vs full body); `src/agents/research/tools/load_skill.py:1-80` (`load_skill` progressive loader; `load_skill_body`); `docs/Solved_errors.md:613-619` (ProgressiveSkillMiddleware: inject body to system prompt, compact ToolMessage ack); `skills/README.md:21` (research calls `load_skill` on demand). **Note: brief cited `_load_skill_text()` in `gateway.py`—that function does not exist; actual loaders are `load_skill_body()` in `skill_manager.py` and `load_skill` tool.**
+
+**Speaker notes:** Skills use progressive disclosure so we don't stuff every fix pattern into every prompt. Frontmatter metadata is always cheaply available; the full skill body loads when an agent needs it; deep reference docs load only on explicit `load_skill` calls. Research middleware injects the loaded skill into the system prompt once instead of replaying thousands of tokens in chat history.
+
+**Flag:** `implementation_skills.md` referenced in brief not found—use `docs/skills-authoring.md` instead.
+
+---
+
+### Slide 13 — Concurrency Handling
+**Says (bullets, ≤5, ≤8 words each):**
+- FastAPI + asyncio worker pool
+- Redis `Semaphore(2)` bounds workers
+- Duplicate in-flight ticket → HTTP 409
+- Job status + events stored in Redis
+- Worktree per ticket id directory
+
+**Visual needed:** Sequence diagram: POST /run → Redis enqueue → semaphore acquire → graph run → GET /tickets/{id} status; 409 branch for duplicate ticket.
+
+**Evidence:** `src/api/ticket_jobs.py:164-175` (Redis job store + `asyncio.Semaphore(settings.api_max_concurrency)`); `src/core/config.py:90` (default concurrency 2); `src/api/main.py:81-91` (HTTP 409 on `TicketJobConflict`); `src/api/API_GUIDE.md:255-303` (409 conflict documentation); `src/agents/executor/tools/git_worktree.py:202` (`worktree_path = worktree_base / ticket_id.lower().replace("-", "_")`). **Brief claimed `{ticket_id}_{job_id}` naming—that pattern is NOT in code; worktrees are keyed by ticket id only.**
+
+**Speaker notes:** The API is FastAPI with an asyncio worker pool capped at two concurrent pipeline runs—configurable via `API_MAX_CONCURRENCY`. If the same ticket is already running, we return HTTP 409 Conflict with the existing job id so callers don't spawn duplicates. Job state lives in Redis. Each ticket gets its own git worktree directory named from the ticket id.
+
+**Flag:** Worktree naming mismatch vs brief—code uses ticket id only, not ticket+job id. Concurrent runs on *different* tickets can share worktree path if same ticket id retried after completion (worktree reset logic in `git_worktree.py:208-217`).
+
+---
+
+### Slide 14 — Demo (Recording Link)
+**Says (bullets, ≤5, ≤8 words each):**
+- Linked recording only — no live demo
+- Show G-06 MICRO end-to-end
+- Show G-11 FULL end-to-end
+- Include Gate 2 approval pause
+- End on real GitHub PR URL
+
+**Visual needed:** QR/link placeholder + two-case caption: "G-06 MICRO (VAmPI IDOR)" / "G-11 FULL (WebGoat JWT)".
+
+**Evidence:** `evals/golden/unit_test/vampi.json` G-06 `expected_route: MICRO`; `evals/golden/unit_test/webgoat.json` G-11 `expected_route: FULL`; `evals/runs/run_030/artifacts/G-06.json` and `G-11.json` (successful e2e artifacts). Recording not in repo.
+
+**Speaker notes:** Rather than live-demo risk, the deck links to a screen recording. Show one MICRO case—G-06, single-file IDOR fix in VAmPI—and one FULL case—G-11, JWT alg:none across WebGoat where research had to find the file. Pause at Gate 2 so reviewers see human plan approval, then land on the PR.
+
+**Flag:** **You must record this**—no demo video exists in repo.
+
+---
+
+## SECTION 3 — Results
+
+### Slide 15 — Eval Dataset
+**Says (bullets, ≤5, ≤8 words each):**
+- LangSmith dataset: IntuitionX-Golden-20-v1
+- Repo today: 26 golden cases
+- Benchmark core: G-01–G-18 (18 cases)
+- Target: 40 cases (Milestone 3.4)
+- OWASP coverage — see table
+
+**Visual needed:** OWASP/API coverage table (rows = categories, cols = covered Y/N + case ids):
+
+| OWASP / API | Covered? | Cases |
+|-------------|----------|-------|
+| A01 Broken Access Control | Yes | G-05,12,13,15 |
+| A02 Cryptographic Failures | Yes | G-02 |
+| A03 Injection | Yes | G-01,03,10,14 |
+| A04 Insecure Design | **No golden case** | skill only: `insecure-design.md` |
+| A05 Security Misconfiguration | Yes | G-04,17,18 |
+| A06 Vulnerable Components | **Deferred** | skill: `java-dependency-vulns.md`; no G-case |
+| A07 Auth Failures | Yes | G-11,16 |
+| A08 Data Integrity | **Deferred** | skill: `data-integrity-failures.md`; no G-case |
+| A09 Logging Failures | **Deferred** | skill: `security-logging-failures.md`; no G-case |
+| A10 SSRF | **Deferred** | no skill or case |
+| API1 BOLA | Yes | G-06 |
+| API2 Broken Auth | Yes | G-08,09 |
+| API8 Misconfiguration | Yes | G-07 |
+
+**Evidence:** `evals/sync_langsmith.py:9,85` (dataset `IntuitionX-Golden-20-v1`); repo count 26 cases (`G-00`–`G-20` + `I-01`–`I-05` via `evals/golden/`); `evals/README.md:115` (security benchmark G-01–G-18); `docs/Milestones.txt:132-148` (expand to 40 cases); OWASP table from `evals/golden/unit_test/*.json` + `skills/security/README.md:7-18`. Deferred rationale: `docs/plan.md:59,1199-1208` (Phase 1 scope cut; Phase 2 adds AST/Gradle/RAG).
+
+**Speaker notes:** Our golden dataset is the source of truth in git and syncs to LangSmith. The production benchmark is 18 security cases across five vulnerable repos. We're at 26 cases total today, targeting 40 per Milestone 3.4. We cover injection, auth, access control, and misconfig well; vulnerable-components, data-integrity, logging, and SSRF are deferred to Phase 2—skills exist but we don't benchmark them yet.
+
+**Flag:** Dataset name says "20" but sync loads all `unit_test` JSONs (21 unit cases). "~40" is a target, not current count.
+
+---
+
+### Slide 16 — Evaluators
+**Says (bullets, ≤5, ≤8 words each):**
+- `file_f1` — research file identification
+- `route_correct` — FULL/MICRO/EXIT match
+- LLM judges — planner + executor quality
+- One case flows all three stages
+- Pass = executor judge `passed: true`
+
+**Visual needed:** Pipeline diagram: Golden case → routing eval → research `file_f1` → planner judge → executor judge → PASS/FAIL taxonomy code.
+
+**Evidence:** `evals/evaluators/scoring.py:14-62` (`route_correctness`, `file_identification_f1`); `evals/evaluators/__init__.py:21-27` (registry thresholds); `evals/evaluators/planner_judge.py`, `executor_judge.py`; `evals/DOCS/failure-modes.md:8,41` (pass criterion); `evals/DOCS/evaluator_architecture.md:13-94` (flow diagram).
+
+**Speaker notes:** We score three things: did research find the right files (F1), did the orchestrator pick the right route, and did the planner and executor outputs actually fix the vulnerability (LLM-as-judge with frozen artifacts). A case only passes if the executor judge approves the final patch and the pipeline didn't abort early.
+
+**Flag:** Integration benchmark `run_030` reports planner/executor judge means (`94.9` / `96.8`) but does not aggregate `file_f1` in `report.json`—file F1 is research-stage metric (`evals/reports/gate-check.json` shows 1.0 on smoke subset).
+
+---
+
+### Slide 17 — Timeline of Milestone Tests
+**Says (bullets, ≤5, ≤8 words each):**
+- (a) Symbol resolver out → 16.7%→72.2%
+- (b) SHA validation → G-14 two-file PR
+- (c) Recursion fix — qualitative only
+- Pass 3 skills → 100% (18/18)
+- Dates: Jul 4 → Jul 11
+
+**Visual needed:** Three-row timeline chart with measured bars where data exists; dashed bar for (c).
+
+| Milestone | Before (measured) | After (measured) | Evidence |
+|-----------|-------------------|------------------|----------|
+| (a) Remove Python symbol resolver; trust Cursor semantic plans | Pass 1: **3/18 (16.7%)** `run_007`+`run_010` | Pass 2: **13/18 (72.2%)** `mixed_15`+`mixed_3` | `evals/DOCS/failure-modes.md:24-31`; `daily_dairy.md:227-230` (`semantic_target.py` deleted) |
+| (b) Executor SHA-delta validation | Pass 2 partial failures on G-04,12,14,16,18 | Pass 3: **18/18 (100%)**; G-14 **2 files**, 2 EDIT steps, 0 retries | `evals/baselines/current.json:57-62`; `evals/runs/run_030/artifacts/G-14.json` git_diff (`.ts` + `.html`); Pass 2 G-14 `PARTIAL_FIX` in `failure-modes.md:83-84` |
+| (c) Recursion-limit formula fix | `GraphRecursionError` documented | Fix: `max(iterations*8,40)` — **no incident count log** | `docs/Solved_errors.md:390-400`; `src/agents/research/research_agent.py:225` |
+
+**Evidence:** Pass rates: `evals/DOCS/checking_evals_result.md:14-18`; `evals/baselines/current.json`. G-06 repair cycle (pass 2): `evals/runs/Test3-after-Skills-adjustment/artifacts/G-06.json:268-271`. Routing harness fix (related): `evals/reports/routing.json` route_correct **0.619** pre-fix vs `evals/reports/routing_test.json` **0.8** on 5-case post-harness subset (`daily_dairy.md:252-255`).
+
+**Speaker notes:** Milestone A is the biggest jump: deleting the 841-line symbol resolver and moving to Cursor semantic plans took us from 17% to 72% pass rate—that's measured on the same 18 cases. Milestone B added SHA-based validation and two-batch repair; the payoff shows in cases like G-14 where we must touch both TypeScript and HTML. Milestone C fixed recursion-limit crashes—I can show the code change and error docs, but I don't have a counted before/after rate-limit incident log, so I won't quote a number.
+
+**Flag:** (a) bundles semantic planner + validation layer changes—cannot isolate symbol-resolver removal alone. (c) Cut numeric claim unless you export LangSmith error counts pre/post `55b40e47`.
+
+---
+
+### Slide 18 — LangSmith Trace Screenshots
+**Says (bullets, ≤5, ≤8 words each):**
+- Project: sprinklr-jira-solver-dev
+- Experiment: Skills-adjustment-Test3
+- Screenshot G-06 failure-then-repair
+- Screenshot G-11 multi-step FULL run
+- Screenshot Pass 1 NO_OUTPUT failure
+
+**Visual needed:** Three LangSmith trace screenshots (navigator + span detail + evaluator score).
+
+**Suggested captures (filter LangSmith UI by experiment + metadata.case_id):**
+1. **G-06 / run_030** — executor span showing `batch pass 2 repair` (artifact evidence: `evals/runs/Test3-after-Skills-adjustment/artifacts/G-06.json:268-271`)
+2. **G-11 / run_030** — FULL route with research → planner → executor (`evals/runs/Test3-after-Skills-adjustment/artifacts/G-11.json`, route FULL)
+3. **G-04 / run_010 or mixed_15** — Pass 1/2 `BROKEN_SYNTAX` or `NO_OUTPUT` failure (`evals/DOCS/failure-modes.md:76`, G-04 recovered in Pass 3)
+
+**Evidence:** `src/core/config.py:84` (`LANGCHAIN_PROJECT` default `sprinklr-jira-solver-dev`); `evals/runs/Test3-after-Skills-adjustment/metadata.json:10` (experiment `Skills-adjustment-Test3`). **No LangSmith run UUIDs stored in repo artifacts**—must screenshot from live LangSmith project.
+
+**Speaker notes:** These aren't mockups—pull them from our LangSmith project filtered by experiment name. The most convincing trace is G-06 where batch pass one failed validation and pass two repaired it. Contrast with a Pass 1 trace where the planner aborted with NO_OUTPUT to show how far we came.
+
+**Flag:** **REQUIRED — export trace URLs or screenshots from LangSmith UI.** Repo stores local `run_id` (e.g. `run_030`) but not LangSmith trace IDs.
+
+---
+
+## SECTION 4 — Impact
+
+### Slide 19 — Real Scenario (Parallel Work)
+**Says (bullets, ≤5, ≤8 words each):**
+- Dev works I-01 hard bundle
+- IntuitionX runs G-06 MICRO parallel
+- Different repos, semaphore allows two
+- Illustrative — not timed measurement
+- Based on real golden cases
+
+**Visual needed:** Split screen mock — left: developer on I-01 (4-file DVPWA bundle, FULL route); right: IntuitionX on G-06 (single-file VAmPI IDOR, MICRO).
+
+**Evidence:** `evals/golden/integration_test/integration.json` I-01 (FULL, 4 files, hard); `evals/golden/unit_test/vampi.json` G-06 (MICRO, 1 file); `src/core/config.py:90` (concurrency 2 enables parallel different tickets). **No recorded pairing of a human session + simultaneous IntuitionX run exists in repo.**
+
+**Speaker notes:** Imagine a developer grinding through a hard multi-finding ticket like I-01—a four-file FULL-route bundle. Meanwhile IntuitionX can take G-06, a MICRO ticket that names `api_views/users.py` directly, and produce a PR in parallel because our semaphore allows two concurrent jobs. This scenario is built from real benchmark cases but we haven't timed a live paired run—it's illustrative.
+
+**Flag:** Label slide **ILLUSTRATIVE — not measured.** No developer productivity A/B test in repo.
+
+---
+
+### Slide 20 — Quantified Impact
+**Says (bullets, ≤5, ≤8 words each):**
+- **Measured:** 16.7% → 100% benchmark pass
+- **Measured:** 5 failing cases recovered Pass 3
+- **Measured:** Planner μ 94.9, Executor μ 96.8
+- **Estimated:** hours/ticket — **no data**
+- **Estimated:** weekly throughput — **no data**
+
+**Visual needed:** Bar chart — Pass 1 / Pass 2 / Pass 3 pass rates (16.7%, 72.2%, 100%) with n=18 labeled; separate "TBD" box for hours saved.
+
+**Evidence (measured):** `evals/DOCS/failure-modes.md:24-28`; `evals/baselines/current.json:13-15,57-62` (recovered G-04,12,14,16,18). **No hours-per-ticket, weekly clearance, or Cycode backlog reduction measurements exist in repo.**
+
+**Speaker notes:** What I can defend with numbers: on our 18-case security benchmark, pass rate went from 17% before validation to 100% after the latest skills pass, with planner and executor judge averages of 95 and 97. I cannot quote hours saved per week—that needs a pilot on real Cycode tickets with timestamps. Happy to outline that study; won't invent the hours.
+
+**Flag:** **Do not present hours saved without a pilot.** Suggested measurement: track `created_at`→`mr_url` in `TicketJob` Redis records (`src/api/ticket_jobs.py:76-93`) for N production tickets.
+
+---
+
+## SECTION 5 — Future Improvements
+
+### Slide 21 — Extensibility
+**Says (bullets, ≤5, ≤8 words each):**
+- Today: new types need Python changes
+- Target: drop `skills/security/foo.md`
+- SkillRegistry auto-discovers on restart
+- Pipeline owns graph, tools, evals
+- Team owns skill markdown only
+
+**Visual needed:** Boundary diagram — inner box "platform owns" (`src/core/`, `src/agents/`, `src/pipeline/`) vs outer box "team owns" (`skills/<team>/*.md`).
+
+**Evidence:** `docs/skills-authoring.md:26-45,7-19` (add skill file, no core Python); `src/core/skill_manager.py` (`SkillRegistry` discovery); `skills/security/README.md:34-42` (adding skill checklist); `skills/orchestrator/orchestrator.md:149-151` (`recommended_security_skill` from `security_skills` list in context).
+
+**Speaker notes:** Extensibility is the main sell for other teams. To handle a new vulnerability class, you add a markdown skill under `skills/security/` with frontmatter triggers—no changes to LangGraph or the executor loop. The platform owns orchestration, tools, and eval harness; your team owns the domain instructions and allowed file globs.
+
+**Flag:** Sandboxed skill load-time validation (`docs/Milestones.txt:126`) NOT implemented—malformed skills log warning and skip (`docs/skills-authoring.md:36`).
+
+---
+
+### Slide 22 — Roadmap Card Grid
+**Says (bullets, ≤5, ≤8 words each):**
+- M3.4 — expand golden set to 40
+- ExecutionStep schema collapse (deferred)
+- Wire M1.3 stack decision — stay LangGraph
+- Cursor in Docker image (portability)
+- Phase 2: Gradle verify + RAG
+
+**Visual needed:** 2×2 card grid with milestone ids.
+
+**Evidence:** `docs/Milestones.txt:132-148` (40 cases, production thresholds); `docs/Project_state.md:269,498` (`ExecutionStep` canonical field migration `where/what/why/validate` — Level 4a, not done); `daily_dairy.md:168-177` (M1.3 stack commented out; LangGraph is live—decision effectively made); `daily_dairy.md:266-269` (Cursor CLI pre-install blocker for Docker); `docs/plan.md:1198-1208` (Phase 2: RAG, AST, Gradle, CI webhooks); `docs/Solved_errors.md:647-651` (open: history compression, prompt caching).
+
+**Speaker notes:** Concrete next steps, not a wish list. Expand the benchmark to 40 cases with harder multi-file tickets. Collapse the ExecutionStep schema so planner and executor share canonical fields. Bake Cursor into Docker so we're not laptop-only. Phase 2 adds compile verification and RAG—we explicitly deferred those in Phase 1.
+
+**Flag:** None—in all items trace to documented deferrals.
+
+---
+
+### Slide 23 — Thank You / Questions
+**Says (bullets, ≤5, ≤8 words each):**
+- IntuitionX — measured, not aspirational
+- Benchmark: 18/18 on golden suite
+- Pilot Cycode backlog next step
+- Questions welcome
+
+**Visual needed:** Simple closing slide — contact/email, link to repo README, QR to eval scorecard (`evals/baselines/current.json`).
+
+**Evidence:** `evals/baselines/current.json:13-15`; `README.md`.
+
+**Speaker notes:** Thank you. The story I'd like you to remember: we went from 17% to 100% on a frozen 18-case security benchmark with engineering decisions we can explain under scrutiny. What's next is a real Cycode pilot with backlog timestamps—not more slide claims.
+
+**Flag:** None.
+
+---
+
+## Final Checklist (pre-present)
+
+| Check | Status |
+|-------|--------|
+| Existing → improved on every slide? | Yes — each slide states "today/Pass 1" before improvement |
+| Every number traceable? | Yes, except flagged TBD items (hours saved, Cycode backlog, LangSmith UUIDs, recursion incident count) |
+| Zero LangGraph background needed? | Glosses included on slides 6, 8, 16 |
+| Two real ticket examples? | G-06 (MICRO) + G-11 (FULL) used in slides 14, 17, 18, 19 |
+| Slides to cut if challenged? | Slide 2 backlog stats (no data); Slide 20 hours (no data); Slide 17 row (c) numeric claim |
+
+## Real Ticket Examples (quick reference)
+
+**MICRO — G-06** (`evals/golden/unit_test/vampi.json`)
+- Ticket names `api_views/users.py`; IDOR password reset trusts URL username
+- `run_030` route MICRO; 1 file changed; batch pass 2 repair (`artifacts/G-06.json`)
+
+**FULL — G-11** (`evals/golden/unit_test/webgoat.json`)
+- No file named; JWT alg:none in WebGoat refresh flow
+- `run_030` route FULL; research finds `JWTRefreshEndpoint.java`; multi-step plan
+
+## Commands to generate missing numbers
+
+```bash
+# LangSmith sync (needs LANGCHAIN_API_KEY)
+python -m evals.sync_langsmith --dataset IntuitionX-Golden-20-v1
+
+# Reproduce Pass 3 scorecard
+python -m evals.runners.run_judge_eval --run-id run_030
+
+# Full 18-case integration benchmark (~18 Cursor requests)
+make evals
+
+# Routing-only regression
+python -m evals.runners.run_eval --mode routing --cases evals/golden/unit_test
+```

@@ -7,7 +7,7 @@ This directory stores **prior pipeline failures** so the orchestrator and planne
 ## What it does
 
 ```
-Executor fails → save_failed_attempt() → Redis
+Executor fails → save_failed_attempt() → MongoDB
 Next run       → get_failed_attempts(ticket_id) → previous_attempts on AgentState
                                               → orchestrator + planner read retry summary
 ```
@@ -16,7 +16,7 @@ Next run       → get_failed_attempts(ticket_id) → previous_attempts on Agent
 
 | File | Role |
 |------|------|
-| `cache.py` | `save_failed_attempt()`, `get_failed_attempts()` — Redis-backed store |
+| `cache.py` | `save_failed_attempt()`, `get_failed_attempts()` — MongoDB-backed store |
 | `__init__.py` | Re-exports cache helpers |
 
 ## Data model
@@ -25,13 +25,15 @@ Failures are stored as `FailedAttempt` typed dicts (defined in [`src/core/state.
 
 | Field | Meaning |
 |-------|---------|
+| `attempt_id` | Session id for the failed run |
 | `ticket_id` | Jira key, e.g. `SEC-4421` |
-| `stage` | Where it failed: `executor`, `planner`, etc. |
-| `error` | Error message or validation failure summary |
-| `plan_summary` | Snapshot of the plan that failed |
+| `phase_failed` | Where it failed (e.g. `IMPLEMENTATION`) |
+| `error_type` | Error class (e.g. `execution_error`) |
+| `error_summary` | Error message or validation failure summary |
+| `plan_hash` / `plan_used` | Snapshot of the plan that failed |
 | `timestamp` | When the failure occurred |
 
-Redis key: `failed:{ticket_id}` — JSON array of attempts, 30-day TTL.
+MongoDB: database `coding_agent` (override with `MONGO_FAILED_ATTEMPTS_DB`), collection `failed_attempts`. One document per attempt, indexed by `(ticket_id, timestamp)`. **No TTL** — history survives beyond 30 days so retries months later still see prior failures. Planner uses the last 3 via `previous_attempts[-3:]`.
 
 ## How to read / interpret
 
@@ -45,10 +47,10 @@ Redis key: `failed:{ticket_id}` — JSON array of attempts, 30-day TTL.
 
 ## Requirements
 
-- **Redis** must be running (`REDIS_URL`, default `redis://localhost:6379`)
-- Same Redis instance as [`src/api/redis_store.py`](../api/redis_store.py)
+- **MongoDB** must be reachable (`MONGO_URL`, default `mongodb://localhost:27017`)
+- Same Mongo instance used for LangGraph checkpointing when available
 
-If Redis is unavailable, `save_failed_attempt()` and `get_failed_attempts()` fail silently (return `[]`) — the pipeline continues without retry memory.
+If MongoDB is unavailable, `save_failed_attempt()` and `get_failed_attempts()` fail silently (return `[]`) — the pipeline continues without retry memory.
 
 ## Related documentation
 
