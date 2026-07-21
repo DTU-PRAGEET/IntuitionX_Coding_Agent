@@ -19,12 +19,15 @@ Docker runs this by default (`docker/Dockerfile`).
 3. Streams progress events via Redis
 4. Pauses at Gate 1 / Gate 2 / micro-confirm and waits for `POST /approve/{thread_id}`
 5. Returns final execution output (MR URL, diff) on completion
+6. Exposes admin observability at `/dashboard/*` (token usage, run stats, HAG decisions, job health)
 
 ## File layout
 
 | File | Role |
 |------|------|
-| `main.py` | FastAPI app: routes (`/health`, `/run`, `/approve`, `/jobs`, `/tickets`) |
+| `main.py` | FastAPI app: routes (`/health`, `/run`, `/approve`, `/jobs`, `/tickets`, `/dashboard`) |
+| `dashboard.py` | Admin observability router (`/dashboard/tokens`, `/runs`, `/hag`, `/health`) |
+| `metrics_store.py` | Redis daily counters + period aggregation for the dashboard |
 | `ticket_jobs.py` | Job queue: enqueue, run graph, resume after approval |
 | `graph_runner.py` | *(imported from `src/pipeline/`)* — `run_graph_until_pause()`, `resume_graph_until_pause()` |
 | `redis_store.py` | Redis-backed job state, event pub/sub |
@@ -85,10 +88,28 @@ Events are published to Redis and exposed via `/jobs/{job_id}/events`. Each even
 
 `pause_display.py` formats gate requests for terminal/curl clients. Gate message text is built from [`src/core/formatters.py`](../core/formatters.py).
 
+## Admin dashboard
+
+Protected JSON endpoints for ops observability (see [`API_GUIDE.md`](API_GUIDE.md) for full curl examples):
+
+| Method | Path | Returns |
+|--------|------|---------|
+| `GET` | `/dashboard/tokens` | LLM tokens (total + by agent) and Cursor request counts |
+| `GET` | `/dashboard/runs` | Runs started/completed/failed and success rate |
+| `GET` | `/dashboard/hag` | Research/planning gate approved/rejected/revised counts |
+| `GET` | `/dashboard/health` | In-flight jobs and stuck jobs |
+
+**Auth:** set `DASHBOARD_API_KEY` in env, then send `X-API-Key: <same value>` on every request. Empty key → all dashboard calls return 401.
+
+**Query params** (tokens/runs/hag): `period=day|week|month` and optional `date=YYYY-MM-DD` (UTC).
+
+Optional: `DASHBOARD_STUCK_JOB_MINUTES` (default `30`) for `/dashboard/health`.
+
 ## Requirements
 
 - **Redis** running (`REDIS_URL` in `.env`, default `redis://localhost:6379`)
 - Same env vars as the main app: Jira credentials, `CURSOR_API_KEY`, LLM provider keys (see [`src/core/config.py`](../core/config.py))
+- For dashboard routes: `DASHBOARD_API_KEY` (required to unlock `/dashboard/*`)
 
 ## Related documentation
 

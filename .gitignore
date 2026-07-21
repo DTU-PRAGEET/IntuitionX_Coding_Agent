@@ -17,9 +17,6 @@ evals/reports/
 evals/runs/
 .cache/eval_repos/
 
-HUMAN_LAYER_CODEBASE/
-docs/Anthropic_talk.txt
-docs/cleanup-audit.md
 
 
 

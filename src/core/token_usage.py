@@ -298,6 +298,10 @@ def record_llm_response(agent: str, response: Any) -> None:
         return
     prompt, completion, total = extract_token_usage(response)
     tracker.record(agent, prompt, completion, total)
+    if total > 0:
+        from src.api.metrics_store import record_token_usage
+
+        record_token_usage(agent, total)
 
 
 def record_messages_usage(agent: str, messages: list[Any]) -> None:

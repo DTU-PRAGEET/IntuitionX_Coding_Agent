@@ -32,13 +32,17 @@ def _record_gate(
         status = "REVISE"
     elif status == "REVISE":
         status = "REVISE"
-    return HumanApprovalGate(
+    gate = HumanApprovalGate(
         gate_id=f"{gate_type}_{state['session_id']}_{len(state.get('human_gates', []))}",
         gate_type=gate_type,  # type: ignore
         status=status,  # type: ignore
         feedback=feedback,
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
+    from src.api.metrics_store import record_hag_decision
+
+    record_hag_decision(gate_type, status)
+    return gate
 
 
 def research_hag_node(state: AgentState) -> AgentState:

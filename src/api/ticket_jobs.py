@@ -13,6 +13,11 @@ from src.api.execution_events import (
     RedisEventSink,
     event_store,
 )
+from src.api.metrics_store import (
+    record_run_completed,
+    record_run_failed,
+    record_run_started,
+)
 from src.api.pause_display import pause_display_message
 from src.api.redis_store import (
     ACTIVE_TTL_SECONDS,
@@ -185,6 +190,10 @@ class TicketJobStore:
         """Emit a job lifecycle event through the job's sink."""
         event_type, event_payload = PipelineEventFactory.lifecycle(event_type, payload)
         self._make_sink(job).emit(event_type, event_payload)
+        if event_type == "execution_completed":
+            record_run_completed()
+        elif event_type == "execution_failed":
+            record_run_failed()
 
     def _save_job(self, job: TicketJob) -> None:
         """Persist job to Redis."""
@@ -329,6 +338,7 @@ class TicketJobStore:
         self._redis.set(thread_key(thread_id), job_id, ex=ACTIVE_TTL_SECONDS)
         self._redis.rpush(QUEUE_KEY, job_id)
         self._emit_lifecycle(job, "job_queued", {"ticket_id": ticket_id})
+        record_run_started()
         _log.info("ticket_enqueued", job_id=job_id, ticket_id=ticket_id)
         return job
 

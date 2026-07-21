@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import PlainTextResponse, StreamingResponse
 
+from src.api.dashboard import router as dashboard_router
 from src.api.execution_events import TERMINAL_EVENT_TYPES, event_store
 from src.api.pause_display import pause_display_message, pause_display_with_actions
 from src.api.schemas import (
@@ -54,6 +55,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Sprinklr Jira Solver API", lifespan=lifespan)
+app.include_router(dashboard_router)
 
 
 @app.get("/health")

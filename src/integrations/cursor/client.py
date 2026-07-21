@@ -140,6 +140,9 @@ def run_local_agent(
         data={"cwd": str(resolved), "model": model, "has_api_key": bool(api_key)},
     )
     _log.info("cursor_agent_start", cwd=str(resolved), model=model)
+    from src.api.metrics_store import record_cursor_request
+
+    record_cursor_request()
     try:
         with Agent.create(
             model=model,

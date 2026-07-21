@@ -233,6 +233,136 @@ When `status` is `completed`:
 | `GET` | `/jobs/{job_id}/events` | Poll ordered events (JSON) |
 | `GET` | `/jobs/{job_id}/events/stream` | SSE event stream |
 | `POST` | `/approve/{thread_id}` | Resume after HITL gate |
+| `GET` | `/dashboard/tokens` | Token usage + Cursor request counts (API key) |
+| `GET` | `/dashboard/runs` | Pipeline run started/completed/failed + success rate (API key) |
+| `GET` | `/dashboard/hag` | HAG approve/reject/revise counts (API key) |
+| `GET` | `/dashboard/health` | In-flight and stuck jobs (API key) |
+
+---
+
+## Admin dashboard (observability)
+
+JSON-only admin metrics backed by Redis daily counters (90-day TTL). All four routes require the `X-API-Key` header.
+
+### Setup
+
+1. Set a secret in `.env` / `.env.local` / `.env.production` (you invent this value — it is not issued by any service):
+
+```bash
+DASHBOARD_API_KEY=your-long-random-secret
+DASHBOARD_STUCK_JOB_MINUTES=30   # optional; default 30
+```
+
+Generate one if needed:
+
+```bash
+openssl rand -hex 32
+```
+
+2. Restart the API so settings reload.
+
+3. Call with the header:
+
+```bash
+curl -s -H "X-API-Key: $DASHBOARD_API_KEY" \
+  "http://localhost:8000/dashboard/tokens?period=day" | python3 -m json.tool
+```
+
+If `DASHBOARD_API_KEY` is empty or the header is missing/wrong → **401**.
+
+### Query parameters (tokens / runs / hag)
+
+| Param | Values | Default |
+|-------|--------|---------|
+| `period` | `day` \| `week` \| `month` | `day` |
+| `date` | `YYYY-MM-DD` (UTC anchor) | today (UTC) |
+
+- **day** — that calendar date
+- **week** — Monday–Sunday containing `date`
+- **month** — calendar month containing `date`
+
+### `GET /dashboard/tokens`
+
+LLM token totals (by agent) and Cursor CLI **request** counts (Cursor has no token numbers).
+
+```bash
+curl -s -H "X-API-Key: $DASHBOARD_API_KEY" \
+  "http://localhost:8000/dashboard/tokens?period=week&date=2026-07-21" | python3 -m json.tool
+```
+
+Example response:
+
+```json
+{
+  "period": "week",
+  "start_date": "2026-07-20",
+  "end_date": "2026-07-26",
+  "total_tokens": 12500,
+  "by_agent": {
+    "orchestrator": 800,
+    "research": 6000,
+    "planner": 3200,
+    "executor": 2500
+  },
+  "cursor_requests": 14
+}
+```
+
+### `GET /dashboard/runs`
+
+```bash
+curl -s -H "X-API-Key: $DASHBOARD_API_KEY" \
+  "http://localhost:8000/dashboard/runs?period=month" | python3 -m json.tool
+```
+
+Example response:
+
+```json
+{
+  "period": "month",
+  "start_date": "2026-07-01",
+  "end_date": "2026-07-31",
+  "started": 40,
+  "completed": 28,
+  "failed": 7,
+  "success_rate": 0.8,
+  "note": "Cancelled runs are excluded from failed counts and success_rate."
+}
+```
+
+`success_rate = completed / (completed + failed)`. Cancelled jobs are **not** counted as failed (intentional v1 blind spot).
+
+### `GET /dashboard/hag`
+
+Human approval gate decisions for research and planning: `approved`, `rejected`, `revised`.
+
+```bash
+curl -s -H "X-API-Key: $DASHBOARD_API_KEY" \
+  "http://localhost:8000/dashboard/hag?period=day" | python3 -m json.tool
+```
+
+Example response:
+
+```json
+{
+  "period": "day",
+  "start_date": "2026-07-21",
+  "end_date": "2026-07-21",
+  "gates": {
+    "research": {"approved": 3, "rejected": 0, "revised": 1},
+    "planning": {"approved": 2, "rejected": 1, "revised": 0}
+  }
+}
+```
+
+### `GET /dashboard/health`
+
+In-flight jobs (`queued` / `running` / `paused`) and stuck jobs (`queued` / `running` older than `DASHBOARD_STUCK_JOB_MINUTES`). Paused jobs waiting on a human are **not** treated as stuck.
+
+```bash
+curl -s -H "X-API-Key: $DASHBOARD_API_KEY" \
+  "http://localhost:8000/dashboard/health" | python3 -m json.tool
+```
 
 ---
 
@@ -320,6 +450,25 @@ The 409 response includes `thread_id` and `job_id` so you can continue or cancel
 
 ---
 
+### 401 on `/dashboard/*`
+
+**Cause:** Missing `X-API-Key` header, wrong key, or `DASHBOARD_API_KEY` not set in the server env.
+
+**Fix:**
+
+```bash
+# In .env / .env.local
+DASHBOARD_API_KEY=your-long-random-secret
+
+# Then:
+curl -H "X-API-Key: your-long-random-secret" \
+  "http://localhost:8000/dashboard/tokens?period=day"
+```
+
+Restart uvicorn after changing env vars.
+
+---
+
 ## Cancel or restart a run
 
 Cancel an active job (`queued`, `paused`, or stale `running`) so you can `POST /run` again:
@@ -402,5 +551,9 @@ curl "http://localhost:8000/tickets/SPACE-129070" | python3 -m json.tool
 | Approve / revise / reject | `POST /approve/{thread_id}` |
 | Live progress | `GET /jobs/{job_id}/events/stream` |
 | Final MR link | `GET /tickets/{id}` → `mr_url` |
+| Token / Cursor usage | `GET /dashboard/tokens` (`X-API-Key`) |
+| Run success rate | `GET /dashboard/runs` (`X-API-Key`) |
+| HAG decisions | `GET /dashboard/hag` (`X-API-Key`) |
+| Stuck / in-flight jobs | `GET /dashboard/health` (`X-API-Key`) |
 
 The API does not push to your terminal automatically — you poll `/pause`, stream events, or check status while the worker runs in the background.

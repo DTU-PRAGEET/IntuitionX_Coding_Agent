@@ -89,5 +89,8 @@ class Settings:
 
     api_max_concurrency: int = int(os.getenv("API_MAX_CONCURRENCY", "2"))
 
+    dashboard_api_key: str = os.getenv("DASHBOARD_API_KEY", "")
+    dashboard_stuck_job_minutes: int = int(os.getenv("DASHBOARD_STUCK_JOB_MINUTES", "30"))
+
 
 settings = Settings()

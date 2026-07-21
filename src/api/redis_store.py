@@ -91,8 +91,20 @@ class RedisCommands(Protocol):
         """Increment a counter and return the new value."""
         ...
 
+    def incrby(self, name: str, amount: int) -> int:
+        """Increment a counter by amount and return the new value."""
+        ...
+
     def expire(self, name: str, time: int) -> bool:
         """Set a TTL in seconds on a key."""
+        ...
+
+    def mget(self, keys: list[str]) -> list[str | None]:
+        """Return values for multiple keys (None for missing)."""
+        ...
+
+    def keys(self, pattern: str) -> list[str]:
+        """Return keys matching pattern (glob-style * supported)."""
         ...
 
 
@@ -185,10 +197,30 @@ class DictRedisClient:
         self._kv[name] = str(self._counters[name])
         return self._counters[name]
 
+    def incrby(self, name: str, amount: int) -> int:
+        """Incrby on DictRedisClient."""
+        self._counters[name] = self._counters.get(name, 0) + amount
+        self._kv[name] = str(self._counters[name])
+        return self._counters[name]
+
     def expire(self, name: str, time: int) -> bool:
         """Expire on DictRedisClient (records TTL for test introspection)."""
         self._ttl[name] = time
         return True
+
+    def mget(self, keys: list[str]) -> list[str | None]:
+        """Mget on DictRedisClient."""
+        return [self._kv.get(key) for key in keys]
+
+    def keys(self, pattern: str) -> list[str]:
+        """Keys on DictRedisClient (simple glob with trailing *)."""
+        all_keys = set(self._kv) | set(self._lists) | set(self._counters)
+        if pattern == "*":
+            return sorted(all_keys)
+        if pattern.endswith("*"):
+            prefix = pattern[:-1]
+            return sorted(key for key in all_keys if key.startswith(prefix))
+        return sorted(key for key in all_keys if key == pattern)
 
 
 def create_redis_client(url: str | None = None) -> RedisCommands:
