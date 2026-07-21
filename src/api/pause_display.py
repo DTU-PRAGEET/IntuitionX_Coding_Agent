@@ -1,4 +1,4 @@
-"""Human-readable HITL pause text for API clients (same as Chainlit gate messages)."""
+"""Human-readable HITL pause text for API clients."""
 
 from __future__ import annotations
 

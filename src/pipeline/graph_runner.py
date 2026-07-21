@@ -1,4 +1,4 @@
-"""Shared LangGraph runner — pauses at HITL gates (same semantics as Chainlit)."""
+"""Shared LangGraph runner — pauses at HITL gates for API clients."""
 
 from __future__ import annotations
 

@@ -84,7 +84,7 @@ When the job pauses for approval:
 curl "http://localhost:8000/tickets/SPACE-129070/pause"
 ```
 
-Returns **human-readable text** (same format as Chainlit): hypothesis, affected files, and approve instructions.
+Returns **human-readable text**: hypothesis, affected files, and approve instructions.
 
 #### Option B — SSE event stream (real-time)
 
@@ -394,13 +394,13 @@ curl "http://localhost:8000/tickets/SPACE-129070" | python3 -m json.tool
 
 ---
 
-## Chainlit vs API
+## Progress vs status
 
-| Chainlit | API equivalent |
-|----------|----------------|
-| Chat message with gate text | `GET /tickets/{id}/pause` or `display_message` |
-| User types APPROVE | `POST /approve/{thread_id}` |
-| Live progress in UI | `GET /jobs/{job_id}/events/stream` |
+| Need | Endpoint |
+|------|----------|
+| Gate text to review | `GET /tickets/{id}/pause` or `display_message` |
+| Approve / revise / reject | `POST /approve/{thread_id}` |
+| Live progress | `GET /jobs/{job_id}/events/stream` |
 | Final MR link | `GET /tickets/{id}` → `mr_url` |
 
 The API does not push to your terminal automatically — you poll `/pause`, stream events, or check status while the worker runs in the background.

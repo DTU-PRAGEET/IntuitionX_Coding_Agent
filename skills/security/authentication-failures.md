@@ -35,7 +35,7 @@ Classify when the code **implements or configures authentication** and matches A
 
 ## Negative Indicators (does NOT qualify)
 
-Do **not** classify as Authentication Failure when:
+Do **not** classify as Authentication Failure when:≠≠≠≠≠
 
 | Condition | Why excluded |
 |-----------|--------------|

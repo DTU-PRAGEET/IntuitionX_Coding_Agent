@@ -92,11 +92,54 @@ def _is_git_checkout(path: str) -> bool:
     return bool(git_repo_snapshot(path).get("is_git"))
 
 
+def _git_common_dir(repo_path: str) -> str | None:
+    """Resolved git-common-dir for a checkout, or None if unavailable."""
+    result = _run_git(["rev-parse", "--git-common-dir"], repo_path, check=False)
+    if result.returncode != 0:
+        return None
+    raw = (result.stdout or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = Path(repo_path) / path
+    try:
+        return str(path.resolve())
+    except OSError:
+        return None
+
+
+def _worktree_belongs_to_source(worktree_path: str, source_repo_path: str) -> bool:
+    """True when the worktree shares the source repo's object database."""
+    worktree_common = _git_common_dir(worktree_path)
+    source_common = _git_common_dir(source_repo_path)
+    if not worktree_common or not source_common:
+        return False
+    return worktree_common == source_common
+
+
 def _remove_worktree_dir(worktree_path: Path, source_repo_path: str) -> None:
     """Unregister a worktree from git and delete its directory."""
     if not worktree_path.exists():
         return
     _log.warning("worktree_remove", worktree_path=str(worktree_path))
+    # Prefer the worktree's real owner — stale ticket dirs may belong to a
+    # different ticket_repos cache than the current source_repo_path.
+    owner_common = _git_common_dir(str(worktree_path))
+    source_common = _git_common_dir(source_repo_path)
+    if owner_common and owner_common != source_common:
+        subprocess.run(
+            ["git", "--git-dir", owner_common, "worktree", "remove", "--force", str(worktree_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        subprocess.run(
+            ["git", "--git-dir", owner_common, "worktree", "prune"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     _run_git(
         ["worktree", "remove", "--force", str(worktree_path)],
         source_repo_path,
@@ -113,11 +156,21 @@ def _worktree_is_dirty(worktree_path: str) -> bool:
     return bool((status.stdout or "").strip())
 
 
-def _reset_worktree(worktree_path: str, target_ref: str) -> None:
-    """Reset Worktree for this module."""
+def _reset_worktree(worktree_path: str, target_ref: str) -> bool:
+    """Hard-reset worktree to target_ref. Returns False when reset fails."""
     _log.info("worktree_reset", worktree_path=worktree_path, target_ref=target_ref)
-    _run_git(["reset", "--hard", target_ref], worktree_path, check=False)
+    reset = _run_git(["reset", "--hard", target_ref], worktree_path, check=False)
+    if reset.returncode != 0:
+        detail = (reset.stderr or reset.stdout or "reset failed").strip()
+        _log.warning(
+            "worktree_reset_failed",
+            worktree_path=worktree_path,
+            target_ref=target_ref,
+            detail=detail,
+        )
+        return False
     _run_git(["clean", "-fd"], worktree_path, check=False)
+    return True
 
 
 def _start_ref(
@@ -140,10 +193,25 @@ def _sync_worktree_to_snapshot(
     source_repo_path: str,
     base_branch: str,
 ) -> str:
-    """Ensure worktree matches planner snapshot; return status token."""
+    """Ensure worktree matches planner snapshot; return status token.
+
+    Status tokens:
+    - ``reused`` / ``reset`` — safe to keep this directory
+    - ``invalid`` / ``wrong_source`` / ``reset_failed`` — caller must recreate
+    """
     snap = git_repo_snapshot(worktree_path)
     if not snap["is_git"]:
         return "invalid"
+
+    if not _worktree_belongs_to_source(worktree_path, source_repo_path):
+        _log.warning(
+            "worktree_source_mismatch",
+            worktree_path=worktree_path,
+            source_repo_path=source_repo_path,
+            worktree_common=_git_common_dir(worktree_path),
+            source_common=_git_common_dir(source_repo_path),
+        )
+        return "wrong_source"
 
     dirty = _worktree_is_dirty(worktree_path)
     head_mismatch = bool(planner_head and snap["head"] and snap["head"] != planner_head)
@@ -158,7 +226,9 @@ def _sync_worktree_to_snapshot(
         base_branch=base_branch,
     )
 
-    _reset_worktree(worktree_path, target)
+    if not _reset_worktree(worktree_path, target):
+        return "reset_failed"
+
     after = git_repo_snapshot(worktree_path)
     log_repo_snapshot(
         _log,
@@ -175,6 +245,7 @@ def _sync_worktree_to_snapshot(
             expected=planner_head,
             actual=after["head"],
         )
+        return "reset_failed"
     return "reset"
 
 
@@ -201,6 +272,8 @@ def create_worktree(
     worktree_base.mkdir(parents=True, exist_ok=True)
     worktree_path = worktree_base / ticket_id.lower().replace("-", "_")
 
+    _RECREATE_STATUSES = frozenset({"invalid", "wrong_source", "reset_failed"})
+
     if worktree_path.exists():
         if not _is_git_checkout(str(worktree_path)):
             _remove_worktree_dir(worktree_path, repo_path)
@@ -211,7 +284,13 @@ def create_worktree(
                 source_repo_path=repo_path,
                 base_branch=base,
             )
-            if status == "invalid":
+            if status in _RECREATE_STATUSES:
+                _log.warning(
+                    "worktree_recreate",
+                    worktree_path=str(worktree_path),
+                    reason=status,
+                    source_repo_path=repo_path,
+                )
                 _remove_worktree_dir(worktree_path, repo_path)
             else:
                 _checkout_new_branch(str(worktree_path), branch_name)

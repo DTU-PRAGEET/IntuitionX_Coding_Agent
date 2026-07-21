@@ -143,7 +143,7 @@ async def cancel_ticket_job(ticket_or_job_id: str):
 
 @app.get("/tickets/{ticket_or_job_id}/pause", response_class=PlainTextResponse)
 async def get_pause_display(ticket_or_job_id: str):
-    """Human-readable HITL gate message (plain text, same as Chainlit shows)."""
+    """Human-readable HITL gate message (plain text)."""
     job = ticket_job_store.resolve(ticket_or_job_id)
     if job is None:
         raise HTTPException(

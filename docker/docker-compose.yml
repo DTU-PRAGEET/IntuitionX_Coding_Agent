@@ -11,32 +11,12 @@ services:
       - "8000:8000"
     volumes:
       - ../src:/app/src
-      - ../chainlit_app.py:/app/chainlit_app.py
     depends_on:
       - redis
       - mongo
     environment:
       - REDIS_URL=redis://redis:6379
       - MONGO_URL=mongodb://mongo:27017
-
-  chainlit:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    env_file:
-      - ../.env.local
-    ports:
-      - "8080:8080"
-    volumes:
-      - ../src:/app/src
-      - ../chainlit_app.py:/app/chainlit_app.py
-    depends_on:
-      - redis
-      - mongo
-    environment:
-      - REDIS_URL=redis://redis:6379
-      - MONGO_URL=mongodb://mongo:27017
-    command: ["chainlit", "run", "chainlit_app.py", "--host", "0.0.0.0", "--port", "8080"]
 
   ollama:
     image: ollama/ollama

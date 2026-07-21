@@ -89,33 +89,3 @@ def format_gate2_request(state: AgentState) -> str:
 
     lines.extend(["", "Please respond with: APPROVE / REJECT / REVISE [notes]", "---"])
     return "\n".join(lines)
-
-
-# --- M1.3 commented out: format_micro_confirm (see docs/cleanup-audit.md) ---
-# def format_micro_confirm(state: AgentState) -> str:
-#     """Format micro confirm."""
-#     plan: PlanOutput | None = state.get("plan_output")
-#     ticket_id = state["jira_ticket_id"]
-#
-#     if not plan:
-#         return f"--- QUICK CONFIRM ---\nTicket: {ticket_id}\nNo micro-plan available."
-#
-#     lines = [
-#         "--- QUICK CONFIRM (MICRO ROUTE) ---",
-#         f"Ticket: {ticket_id}",
-#         "",
-#         "Proposed micro-fix:",
-#         plan.get("root_hypothesis", ""),
-#         "",
-#         "Files:",
-#     ]
-#     for f in plan.get("files_to_change", []):
-#         lines.append(f"- {f}")
-#
-#     lines.extend(["", "Steps:"])
-#     for step in plan.get("execution_steps", []):
-#         lines.append(f"  {step.get('step_id')}. {step.get('action')} {step.get('file')}")
-#
-#     lines.extend(["", "Confirm to proceed? APPROVE / REJECT / REVISE [notes]", "---"])
-#     return "\n".join(lines)
-# --- end M1.3: format_micro_confirm ---

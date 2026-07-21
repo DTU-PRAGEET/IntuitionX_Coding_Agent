@@ -6,10 +6,6 @@
 ---
 
 
-**4. Eval pipeline alignment check before Pass 3**
-	a. Problem = Skills and small code changes could bias eval results (wrong harness context, stale scoring imports, routing repo_path issues).
-	b. Changes = Reviewed `eval_commands.md` full pipeline command, harness targets, judge eval flow, preflight vs judge scoring paths. Fixed eval run issues (LangSmith sync, run folder naming). Verified harness passes `repo_path` for MICRO cases.
-	c. Reason = Experiments are only trustworthy if the harness mirrors production — you asked to confirm no bias before running all 18 cases.
 
 **5. Updated all eval comparison documents for run_030**
 	a. Problem = Docs still showed Pass 2 (72.2%) as current baseline after Pass 3 completed.
@@ -210,50 +206,3 @@
 	c. Reason = Without headless Cursor in the image, the project can't run outside your laptop.
 
 ---
-
-## Eval Scorecard Summary (for reference)
-
-| Pass | Run | Date | Pass Rate | Planner μ | Executor μ |
-|------|-----|------|-----------|-----------|------------|
-| Pass 1 | `run_007` + `run_010` | Jul 4 | 16.7% (3/18) | — | — |
-| Pass 2 | `mixed_15` + `mixed_3` | Jul 6 | 72.2% (13/18) | 77.4 | 75.9 |
-| **Pass 3** | **`run_030`** | **Jul 11** | **100% (18/18)** | **94.9** | **96.8** |
-
-**Pass 3 recovered:** G-04 (misconfig), G-12 (IDOR), G-14 (XSS), G-16 (JWT sync), G-18 (YAML/SealedSecret).
-
-**Quality caveat (non-blocking):** G-18 passes with executor score 70 — `sealed-funnystuff.json` manifests not visible in diff.
-
----
-
-## Rejected / Deferred Decisions
-
-| # | Proposal | Decision | Why |
-|---|----------|----------|-----|
-| R1 | `null repo_path` → EXIT | **Rejected** | Null means checkout pending, not invalid ticket → route FULL for bootstrap |
-| R2 | Python replay of READ steps in validation | **Rejected** | READ is Cursor batch context; validation reads files directly |
-| R3 | Replace PromptBuilder with raw f-strings | **Rejected** | Centralized assembly prevents prompt drift across agents |
-| R4 | Executor as free-form skill runner (glab MR) | **Rejected** | Executor is deterministic plan runner; MR stays in `mr_create.py` |
-| R5 | Adopt `llm_router` SDK to fix 403 | **Not needed** | Same API; entitlement issue, not transport |
-| R6 | Planner re-plan on density valve | **Deferred** | `semantic_target.py` removal made it moot |
-
----
-
-## Chat Transcript Index (Jul 10–13)
-
-| Topic | Transcript |
-|-------|------------|
-| Portability audit | [Portability Jul 10](c4b856ae-eac1-40ca-815d-563dcdf432b0) |
-| Sprinklr 403 / LLM Router SDK | [Router 403 Jul 10](6fc17219-40e2-496c-8a5d-9b1b40fa1246) |
-| Orchestrator routing Q&A | [Orchestrator Jul 10](f50fe7dc-15d7-4d3e-ad0e-2c6aac1425ea) |
-| HumanLayer skills improvement | [Skills Jul 11](33e51199-cf96-47fc-8a61-bb3363d5dc61) |
-| Executor validation flow | [Validation Jul 11](7435d218-bbd4-46cb-baca-c8f0af2498a9) |
-| Pass 3 eval prep | [Eval prep Jul 11](7fb8f922-ef81-4319-b473-3c1ba2a1d5d0) |
-| Missing EDIT steps debug | [EDIT steps Jul 12](7ae9f670-277c-46b9-a354-0b6403060d4d) |
-| Eval docs update run_030 | [Eval docs Jul 12](8acb9a10-93a3-419a-984e-ef745f6f4663) |
-| Cleanup audit | [Audit Jul 12](e6cf42b9-b14d-4dea-a918-0d8bab73ab8f) |
-| Comment out dead code | [Cleanup Jul 13](71a8a311-7769-4eaf-b9a2-2f9288578787) |
-| Jira linked tickets | [Jira deps Jul 13](52bc925e-c565-4233-b543-90a7217ec3dd) |
-
----
-
-*Generated: Jul 13, 2026 · Covers Jul 10–13 work + referenced Jul 4–9 arc items.*

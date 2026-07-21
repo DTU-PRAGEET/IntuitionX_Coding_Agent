@@ -58,7 +58,7 @@ class TicketStatusResponse(BaseModel):
     latest_event_seq: int | None = None
     display_message: str | None = Field(
         default=None,
-        description="Human-readable gate message when status is paused (same as Chainlit)",
+        description="Human-readable gate message when status is paused",
     )
 
 

@@ -77,13 +77,9 @@ The **Orchestrator** runs first and only decides the route (`FULL`, `SKIP_RESEAR
    - it **pauses** at a human gate (`interrupt()` in Gate 1 / Gate 2 / micro-confirm).
 4. To continue after a pause, client calls `POST /approve/{thread_id}` with `{ "status": "APPROVE" | "REVISE" | "REJECT", "feedback": "..." }`, which calls `resume_graph_until_pause()`.
 
-### Chainlit UI path
-
-Same graph (`build_graph()`), but the UI in `src/ui/chainlit_app.py` drives streaming and gate prompts interactively.
-
 ### Mock / linear path (no gates)
 
-If input starts with `mock`, `src/pipeline/runner.py` runs a simpler linear pipeline without LangGraph gates. This doc focuses on the **production graph path**.
+`src/pipeline/runner.py` runs a simpler linear pipeline without LangGraph gates (CLI / tests). This doc focuses on the **production graph path**.
 
 ---
 

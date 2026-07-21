@@ -1,6 +1,6 @@
 # Sprinklr Jira Solver
 
-Autonomous coding platform for Sprinklr developers — Jira ticket to GitLab MR with LangGraph orchestration and Chainlit HITL.
+Autonomous coding platform for Sprinklr developers — Jira ticket to GitLab MR with LangGraph orchestration and FastAPI HITL.
 
 ## Quick Start
 
@@ -17,11 +17,8 @@ SPRINKLR_LLM_PARTNER_ID=66006006
 SPRINKLR_LLM_TRACKING_FEATURE=SPRINKLR_JIRA_SOLVER
 # SPRINKLR_LLM_TRACKING_PARAMS={"feature":"CUSTOM_FEATURE"}  # optional JSON override
 
-# API (CI/CD webhook)
+# FastAPI (CI/CD webhook + HITL)
 uvicorn src.api.main:app --reload --port 8000
-
-# Chainlit UI
-chainlit run src/ui/chainlit_app.py --port 8080
 
 # Docker
 docker compose -f docker/docker-compose.yml up
@@ -33,7 +30,7 @@ docker compose -f docker/docker-compose.yml up
 - **Research** — Deep agent loop + Cursor `cursor_search`
 - **Planner** — Cursor Ask → `ExecutionPlan` JSON
 - **Executor** — Git worktree + Cursor edits + LLM validation → GitHub PR
-- **HITL** — Chainlit UI or REST API `POST /approve/{thread_id}`
+- **HITL** — REST API `POST /approve/{thread_id}`
 - **Skills** — Markdown plugins in `skills/`; see [docs/skills-authoring.md](docs/skills-authoring.md)
 
 ## Architecture
@@ -42,6 +39,6 @@ docker compose -f docker/docker-compose.yml up
 - **Thin Python runners** in `src/agents/*/agent.py`
 - **Hardened tools** via `ToolRegistry` (`read`, `write`, `edit`, `bash`, `find`, `grep`, `ls`)
 - **LangGraph** for phase topology + HITL interrupts (`src/core/graph.py`)
-- **Chainlit** UI (`src/ui/chainlit_app.py`) or **FastAPI** (`src/api/main.py`)
+- **FastAPI** entry point (`src/api/main.py`)
 
 See [docs/README.md](docs/README.md), [AGENTS.md](AGENTS.md), and [docs/AGENT_PIPELINE_GUIDE.md](docs/AGENT_PIPELINE_GUIDE.md).

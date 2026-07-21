@@ -62,7 +62,7 @@ All methods call `run_local_agent()` in `client.py` with model **`CURSOR_MODEL`*
 
 ## `jira/`
 
-**Job:** Fetch and preview Jira tickets for the Chainlit UI.
+**Job:** Fetch and preview Jira tickets for the API / pipeline.
 
 | File | Role |
 |------|------|

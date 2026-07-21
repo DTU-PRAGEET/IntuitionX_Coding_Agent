@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This directory exposes the Jira Solver pipeline over **HTTP** for CI/CD integration, webhook-driven runs, and programmatic HITL (Human-in-the-Loop) approval. It is an alternate entry point to the Chainlit UI in [`src/ui/`](../ui/).
+This directory exposes the Jira Solver pipeline over **HTTP** for CI/CD integration, webhook-driven runs, and programmatic HITL (Human-in-the-Loop) approval. It is the primary entry point for the pipeline.
 
 **Start the server:**
 
@@ -83,7 +83,7 @@ Events are published to Redis and exposed via `/jobs/{job_id}/events`. Each even
 
 ### Pause display
 
-`pause_display.py` formats gate requests for terminal/curl clients. For Chainlit, the UI uses [`src/core/formatters.py`](../core/formatters.py) instead.
+`pause_display.py` formats gate requests for terminal/curl clients. Gate message text is built from [`src/core/formatters.py`](../core/formatters.py).
 
 ## Requirements
 
@@ -98,4 +98,3 @@ Events are published to Redis and exposed via `/jobs/{job_id}/events`. Each even
 | [`docs/AGENT_PIPELINE_GUIDE.md`](../../docs/AGENT_PIPELINE_GUIDE.md) | What each pipeline stage does |
 | [`docs/jira_webhook_setup.md`](../../docs/jira_webhook_setup.md) | Jira webhook → API integration |
 | [`src/pipeline/README.md`](../pipeline/README.md) | Graph runner that powers API jobs |
-| [`src/ui/README.md`](../ui/README.md) | Chainlit UI — same graph, interactive gates |

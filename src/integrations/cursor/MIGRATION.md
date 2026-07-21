@@ -56,7 +56,7 @@ L1 primitive tool files are **not deleted**; Cursor uses them internally during 
 
 1. **Done** — `ResearchAgent` unified entry; `cursor_search` tool; structured `CursorSearchResponse`
 2. **Done (M1.4)** — `CursorImplementSubAgent` calls `gateway.edit()`; returns `PatchResult`
-3. **Late** — Optional LangGraph `EXECUTOR_MODE=cursor` bridge for Chainlit path
+3. **Late** — Optional LangGraph `EXECUTOR_MODE=cursor` bridge for API path
 
 ## M1.4 Implement Agent Migration
 
@@ -82,7 +82,7 @@ L1 primitive tool files are **not deleted**; Cursor uses them internally during 
 
 ### Preserve (LangGraph path)
 
-- `src/agents/executor/agent.py` — L1 edit/write tools remain for Chainlit/HITL pipeline
+- `src/agents/executor/agent.py` — L1 edit/write tools remain for HITL pipeline
 - `EXECUTOR_MODE=legacy` (default) — no change to production LangGraph executor
 - L1 primitive tools under `src/tools/` — Cursor uses them internally during prompts
 

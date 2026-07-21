@@ -24,7 +24,7 @@ Executor uses `RestrictedToolRegistry` with an allowlist from [`src/core/tool_pe
 | File | Tool | Used by |
 |------|------|---------|
 | `registry.py` | `ToolRegistry` — registers all L1 tools for a workspace | Research, Planner, Executor |
-| `base.py` | `ToolDefinition` ABC, audit wrapper, event emitter (Chainlit hooks) | All tools |
+| `base.py` | `ToolDefinition` ABC, audit wrapper, event emitter | All tools |
 | `read_tool.py` | Read file with line range + truncation | Research, Planner, Executor |
 | `write_tool.py` | Write file (create/overwrite) | Executor |
 | `edit_tool.py` | Search-and-replace edit | Executor |

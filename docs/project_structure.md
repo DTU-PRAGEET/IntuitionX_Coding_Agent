@@ -23,7 +23,7 @@
 
 ## 1. Pipeline overview
 
-Entry points: `build_graph()` in `src/core/graph.py`, driven by API (`src/pipeline/graph_runner.py`) or Chainlit UI.
+Entry points: `build_graph()` in `src/core/graph.py`, driven by the FastAPI server (`src/pipeline/graph_runner.py`).
 
 ```
 build_graph()
@@ -573,7 +573,7 @@ planning_hag_node(state)                          ← HITL Gate 2
 
 ## 7. Alternate sub-agent paths (M1.3)
 
-Not wired to Chainlit production graph; used by `src/core/orchestrator_loop.py` and tests.
+Not wired to the production graph; used by `src/core/orchestrator_loop.py` and tests.
 
 ### Research sub-agent
 
@@ -639,3 +639,60 @@ CursorImplementSubAgent.run(context)
 - [AGENT_PIPELINE_GUIDE.md](./AGENT_PIPELINE_GUIDE.md) — plain-language pipeline walkthrough
 - [CODEBASE_MAP.md](./CODEBASE_MAP.md) — file-by-file codebase classification
 - [DATA_FLOW_AUDIT.md](./DATA_FLOW_AUDIT.md) — state field handoffs between agents
+
+
+
+
+
+
+skills/
+│
+│  ┌─────────────────────────────────────────────────────────────────┐
+│  │  PROGRESSIVE LOAD (per agent skill)                             │
+│  │                                                                 │
+│  │  L1  frontmatter only     →  load_skill_manifest()              │
+│  │      (name, budget, agents, triggers)                           │
+│  │           │                                                     │
+│  │           ▼                                                     │
+│  │  L2  markdown body        →  load_skill_body()                  │
+│  │      (workflow / prompts / guidance)                            │
+│  │           │                                                     │
+│  │           ▼                                                     │
+│  │  L3  references/*.md      →  load_reference(ref_name)           │
+│  │      (schemas, patterns — on demand)                            │
+│  └─────────────────────────────────────────────────────────────────┘
+│
+├── orchestrator/
+│   └── orchestrator.md .................... L1+L2 at routing time
+│
+├── research/
+│   ├── research.md ........................ L1 at start; L2 via load_skill
+│   └── references/
+│       ├── general_patterns.md ............ L3 (On demand)
+│       └── security_patterns.md ........... L3 (On demand)
+│
+├── planner/
+│   ├── planner.md ......................... L1+L2 (+ CONTEXT) → Cursor Ask
+│   └── references/
+│       └── plan_schema.md ................. L3
+│
+├── executor/
+│   ├── executor.md ........................ L1+L2 → validation policy
+│   └── references/
+│       ├── validation_policy.md ........... L3
+│       └── edit_patterns.md ............... L3
+│
+└── security/   ← Domain skills; NOT dumped into every prompt
+    ├── injection.md
+    ├── broken-access-control.md
+    ├── authentication-failures.md
+    ├── cryptographic-failures.md
+    ├── security-misconfiguration.md
+    ├── insecure-design.md
+    ├── data-integrity-failures.md
+    ├── supply-chain-failures.md
+    ├── security-logging-failures.md
+    ├── exceptional-conditions.md
+    ├── java-sast-fixes.md
+    ├── java-sca-fixes.md
+    └── java-dependency-vulns.md

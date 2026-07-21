@@ -31,7 +31,7 @@ Then branch into agent-specific context builders as needed.
 | `graph.py` | `build_graph()` — LangGraph `StateGraph`: orchestrator → research → gates → planner → executor |
 | `state.py` | `AgentState`, `initial_state()`, typed dicts for all pipeline artifacts |
 | `schemas.py` | Pydantic models for plans, reports, routing, tool I/O |
-| `orchestrator_loop.py` | M1.3 alternate orchestrator (tests only — not Chainlit) |
+| `orchestrator_loop.py` | M1.3 alternate orchestrator (tests only — not production graph) |
 | `sub_agent.py` | `SubAgent` ABC for M1.3 sub-agents |
 
 ### Context builders (prompt assembly)
