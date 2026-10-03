@@ -13,8 +13,8 @@ htmlcov/
 .env.production
 .cursor/debug-*.log
 
-evals/reports/
-evals/runs/
+# evals/reports/
+# evals/runs/
 .cache/eval_repos/
 
 
